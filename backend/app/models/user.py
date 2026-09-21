@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -15,6 +15,11 @@ class User(Base, TimestampMixin, OrganisationScopedMixin):
     docs/audit/AUTHENTICATION_AUDIT.md #6-7 for why that boundary matters)."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        # The query the directory endpoints actually run ("active users in
+        # my organisation") -- docs/modules/users.md #9.
+        Index("ix_users_organisation_id_is_active", "organisation_id", "is_active"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)

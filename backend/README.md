@@ -47,6 +47,19 @@ new.
   Every future organisation-owned table (customers, products, ...) mixes
   in `OrganisationScopedMixin` (`app/models/mixins.py`) instead of
   redeclaring the FK + index.
+- **Users** (`app/api/users.py`) — an organisation-scoped user directory:
+  `GET /api/users` (paginated, active-only by default) and `GET
+  /api/users/{id}`, both scoped to the caller's own organisation (a
+  cross-organisation lookup returns 404, never confirming another
+  organisation's user exists). Matches
+  [`../docs/modules/users.md`](../docs/modules/users.md). Deliberately
+  **excludes** create/edit/deactivate/assign-role endpoints — same reason
+  as organisation's admin API: they need an "authorised administrator,"
+  which only RBAC can define, and gating them with anything less (e.g. an
+  `is_admin` flag on `User`) would put permission logic on the User
+  record itself, which the spec explicitly forbids. `UserOut`
+  (`app/schemas/user.py`) is now the one public-safe user shape, shared
+  between `/api/auth/me` and the directory endpoints.
 
 Every gap the audit found has a fix in this implementation:
 

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.organisations import router as organisations_router
+from app.api.users import router as users_router
 from app.core.config import settings
 
 app = FastAPI(title="JDK ERP API")
@@ -17,6 +18,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(organisations_router)
+app.include_router(users_router)
 
 
 @app.get("/health")

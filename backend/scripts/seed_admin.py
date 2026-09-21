@@ -1,7 +1,12 @@
-"""Create the first organisation and its first user.
+"""Create an organisation (if it doesn't already exist) and a user in it.
 
 Usage:
     python -m scripts.seed_admin
+
+Entering an organisation name that already exists adds a new user to that
+organisation instead of creating a second one -- this is also how you add
+more users today, since there's no user-management API yet (RBAC hasn't
+defined who's allowed to call one; see docs/modules/users.md).
 
 The password is always prompted interactively -- never accepted as a CLI
 argument -- so it never lands in shell history or a process listing.
@@ -15,6 +20,8 @@ import sys
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import SessionLocal
 from app.core.security import hash_password
@@ -74,7 +81,12 @@ def main() -> None:
             is_active=True,
         )
         db.add(user)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            print(f"A user with email '{email}' or username '{username}' already exists.")
+            return
         print(f"Created user '{username}' in organisation '{organisation.name}'.")
     finally:
         db.close()

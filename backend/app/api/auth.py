@@ -5,7 +5,8 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.errors import AuthError
 from app.models.user import User
-from app.schemas.auth import ChangePasswordRequest, LoginRequest, MeOut, RefreshRequest, TokenResponse
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, RefreshRequest, TokenResponse
+from app.schemas.user import UserOut
 from app.services import auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -33,7 +34,7 @@ def logout(payload: RefreshRequest, db: Session = Depends(get_db)) -> None:
     auth_service.logout(db, payload.refresh_token)
 
 
-@router.get("/me", response_model=MeOut)
+@router.get("/me", response_model=UserOut)
 def me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
