@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
+from app.api.audit_events import router as audit_events_router
 from app.api.auth import router as auth_router
 from app.api.organisations import router as organisations_router
 from app.api.permissions import router as permissions_router
@@ -30,6 +31,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+app.include_router(audit_events_router)
 app.include_router(auth_router)
 app.include_router(organisations_router)
 app.include_router(permissions_router)

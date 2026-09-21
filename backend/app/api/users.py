@@ -1,13 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.models.auth_event import AuthEventType
+from app.models.audit_event import ROLE_CHANGED, SECURITY_MODULE
 from app.models.user import User
 from app.models.user_team import UserTeam
 from app.schemas.user import RoleChangeRequest, UserOut
-from app.services import auth_service, user_service
+from app.services import audit_service, auth_service, user_service
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -61,6 +61,7 @@ def get_user(
 def change_user_role(
     user_id: int,
     payload: RoleChangeRequest,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -69,7 +70,7 @@ def change_user_role(
     Organisation B's users, and a user can never change their own role
     (there's no self-service path here at all). Also revokes the user's
     sessions and records who made the change
-    (docs/modules/session_security.md #8/#14)."""
+    (docs/modules/session_security.md #8/#14, docs/modules/audit_trail.md)."""
     user = db.query(User).filter(User.id == user_id, User.organisation_id == admin.organisation_id).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
@@ -78,5 +79,17 @@ def change_user_role(
     user.role = payload.role
     db.add(user)
     auth_service.revoke_all_sessions(db, user.id)
-    auth_service.log_role_changed(db, user_id=user.id, actor_user_id=admin.id, old_role=old_role, new_role=payload.role)
+    audit_service.log_event(
+        db,
+        action=ROLE_CHANGED,
+        module=SECURITY_MODULE,
+        organisation_id=admin.organisation_id,
+        user_id=user.id,
+        actor_user_id=admin.id,
+        entity_type="user",
+        entity_id=user.id,
+        result="success",
+        details=f"role: {old_role} -> {payload.role}",
+        ip_address=request.client.host if request.client else None,
+    )
     db.commit()

@@ -1,14 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.models.auth_event import AuthEventType
+from app.models.audit_event import SECURITY_MODULE, TEAM_ADDED, TEAM_REMOVED
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
 from app.schemas.team import TeamMemberIn, TeamOut
-from app.services import auth_service
+from app.services import audit_service
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -46,6 +46,7 @@ def get_team(team_id: int, current_user: User = Depends(get_current_user), db: S
 def add_team_member(
     team_id: int,
     payload: TeamMemberIn,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -67,8 +68,18 @@ def add_team_member(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User is already a member of this team.")
 
     db.add(UserTeam(user_id=user.id, team_id=team.id))
-    auth_service.log_team_membership_changed(
-        db, event_type=AuthEventType.TEAM_ADDED, user_id=user.id, actor_user_id=admin.id, team_id=team.id
+    audit_service.log_event(
+        db,
+        action=TEAM_ADDED,
+        module=SECURITY_MODULE,
+        organisation_id=admin.organisation_id,
+        user_id=user.id,
+        actor_user_id=admin.id,
+        entity_type="user",
+        entity_id=user.id,
+        result="success",
+        details=f"team: {team.name} (id={team.id})",
+        ip_address=request.client.host if request.client else None,
     )
     db.commit()
 
@@ -77,6 +88,7 @@ def add_team_member(
 def remove_team_member(
     team_id: int,
     user_id: int,
+    request: Request,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -88,7 +100,17 @@ def remove_team_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found.")
 
     db.delete(membership)
-    auth_service.log_team_membership_changed(
-        db, event_type=AuthEventType.TEAM_REMOVED, user_id=user_id, actor_user_id=admin.id, team_id=team.id
+    audit_service.log_event(
+        db,
+        action=TEAM_REMOVED,
+        module=SECURITY_MODULE,
+        organisation_id=admin.organisation_id,
+        user_id=user_id,
+        actor_user_id=admin.id,
+        entity_type="user",
+        entity_id=user_id,
+        result="success",
+        details=f"team: {team.name} (id={team.id})",
+        ip_address=request.client.host if request.client else None,
     )
     db.commit()

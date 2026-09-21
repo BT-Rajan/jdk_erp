@@ -6,8 +6,7 @@ queries) is already covered by test_auth.py -- see
 docs/audit/SESSION_SECURITY_AUDIT.md's section-by-section table."""
 from datetime import datetime, timedelta
 
-from app.core.roles import ADMIN
-from app.models.auth_event import AuthEvent, AuthEventType
+from app.models.audit_event import LOGIN_SUCCESS, LOGOUT, ROLE_CHANGED, TEAM_ADDED, TEAM_REMOVED, AuditEvent
 from app.models.refresh_token import RefreshToken
 from app.models.team import Team
 from app.models.user_team import UserTeam
@@ -99,13 +98,15 @@ def test_role_change_is_logged_with_actor(client, admin_user, active_user, db_se
     client.patch(f"/api/users/{active_user.id}/role", json={"role": "manager"}, headers=admin_headers)
 
     event = (
-        db_session.query(AuthEvent)
-        .filter(AuthEvent.event_type == AuthEventType.ROLE_CHANGED.value, AuthEvent.user_id == active_user.id)
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == ROLE_CHANGED, AuditEvent.user_id == active_user.id)
         .first()
     )
     assert event is not None
     assert event.actor_user_id == admin_user.id
-    assert event.reason == "team_member->manager"
+    assert event.entity_type == "user"
+    assert event.entity_id == active_user.id
+    assert event.details == "role: team_member -> manager"
 
 
 # --- team membership audit trail ------------------------------------------
@@ -122,20 +123,22 @@ def test_team_membership_changes_are_logged_with_actor(client, admin_user, activ
     assert add_response.status_code == 204
 
     added_event = (
-        db_session.query(AuthEvent)
-        .filter(AuthEvent.event_type == AuthEventType.TEAM_ADDED.value, AuthEvent.user_id == active_user.id)
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == TEAM_ADDED, AuditEvent.user_id == active_user.id)
         .first()
     )
     assert added_event is not None
     assert added_event.actor_user_id == admin_user.id
-    assert added_event.reason == f"team_id:{team.id}"
+    assert added_event.entity_type == "user"
+    assert added_event.entity_id == active_user.id
+    assert added_event.details == f"team: {team.name} (id={team.id})"
 
     remove_response = client.delete(f"/api/teams/{team.id}/members/{active_user.id}", headers=admin_headers)
     assert remove_response.status_code == 204
 
     removed_event = (
-        db_session.query(AuthEvent)
-        .filter(AuthEvent.event_type == AuthEventType.TEAM_REMOVED.value, AuthEvent.user_id == active_user.id)
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == TEAM_REMOVED, AuditEvent.user_id == active_user.id)
         .first()
     )
     assert removed_event is not None
@@ -147,17 +150,17 @@ def test_login_and_logout_record_actor(client, active_user, db_session):
     refresh_token = login.json()["refresh_token"]
 
     login_event = (
-        db_session.query(AuthEvent)
-        .filter(AuthEvent.event_type == AuthEventType.LOGIN_SUCCESS.value, AuthEvent.user_id == active_user.id)
-        .order_by(AuthEvent.id.desc())
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == LOGIN_SUCCESS, AuditEvent.user_id == active_user.id)
+        .order_by(AuditEvent.id.desc())
         .first()
     )
     assert login_event.actor_user_id == active_user.id
 
     client.post("/api/auth/logout", json={"refresh_token": refresh_token})
     logout_event = (
-        db_session.query(AuthEvent)
-        .filter(AuthEvent.event_type == AuthEventType.LOGOUT.value, AuthEvent.user_id == active_user.id)
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == LOGOUT, AuditEvent.user_id == active_user.id)
         .first()
     )
     assert logout_event.actor_user_id == active_user.id

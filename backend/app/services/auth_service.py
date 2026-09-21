@@ -11,42 +11,28 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models.auth_event import AuthEvent, AuthEventType
+from app.models.audit_event import (
+    LOGIN_FAILURE,
+    LOGIN_SUCCESS,
+    LOGOUT,
+    PASSWORD_CHANGE,
+    SECURITY_MODULE,
+)
+from app.models.audit_event import AuditEvent
 from app.models.organisation import Organisation
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.auth import TokenResponse
+from app.services import audit_service
 
 # One message for every login failure -- wrong password, unknown username
 # and a deactivated account all look identical to the caller, so none of
 # them can be used to enumerate valid usernames or account state
 # (docs/audit/AUTHENTICATION_AUDIT.md #3). The real reason is still
-# recorded server-side via _log_event for audit/lockout purposes.
+# recorded server-side via audit_service.log_event for audit/lockout
+# purposes.
 GENERIC_LOGIN_ERROR = "Invalid username or password."
 LOCKOUT_ERROR = "Too many failed login attempts. Please try again later."
-
-
-def _log_event(
-    db: Session,
-    event_type: AuthEventType,
-    *,
-    user_id: int | None = None,
-    actor_user_id: int | None = None,
-    username_attempted: str | None = None,
-    ip_address: str | None = None,
-    reason: str | None = None,
-) -> None:
-    db.add(
-        AuthEvent(
-            event_type=event_type.value,
-            user_id=user_id,
-            actor_user_id=actor_user_id,
-            username_attempted=username_attempted,
-            ip_address=ip_address,
-            reason=reason,
-        )
-    )
-    db.commit()
 
 
 def revoke_all_sessions(db: Session, user_id: int) -> None:
@@ -55,22 +41,6 @@ def revoke_all_sessions(db: Session, user_id: int) -> None:
     db.query(RefreshToken).filter(RefreshToken.user_id == user_id, RefreshToken.revoked.is_(False)).update(
         {"revoked": True}
     )
-
-
-def log_role_changed(db: Session, *, user_id: int, actor_user_id: int, old_role: str, new_role: str) -> None:
-    _log_event(
-        db,
-        AuthEventType.ROLE_CHANGED,
-        user_id=user_id,
-        actor_user_id=actor_user_id,
-        reason=f"{old_role}->{new_role}",
-    )
-
-
-def log_team_membership_changed(
-    db: Session, *, event_type: AuthEventType, user_id: int, actor_user_id: int, team_id: int
-) -> None:
-    _log_event(db, event_type, user_id=user_id, actor_user_id=actor_user_id, reason=f"team_id:{team_id}")
 
 
 def _issue_tokens(db: Session, user: User) -> TokenResponse:
@@ -84,18 +54,25 @@ def _issue_tokens(db: Session, user: User) -> TokenResponse:
 def login(db: Session, username: str, password: str, ip_address: str | None) -> TokenResponse:
     window_start = datetime.utcnow() - timedelta(minutes=settings.LOGIN_LOCKOUT_WINDOW_MINUTES)
     recent_failures = (
-        db.query(AuthEvent)
+        db.query(AuditEvent)
         .filter(
-            AuthEvent.event_type == AuthEventType.LOGIN_FAILURE.value,
-            AuthEvent.username_attempted == username,
-            AuthEvent.created_at >= window_start,
+            AuditEvent.action == LOGIN_FAILURE,
+            AuditEvent.username_attempted == username,
+            AuditEvent.created_at >= window_start,
         )
         .count()
     )
     if recent_failures >= settings.LOGIN_LOCKOUT_THRESHOLD:
-        _log_event(
-            db, AuthEventType.LOGIN_FAILURE, username_attempted=username, ip_address=ip_address, reason="locked_out"
+        audit_service.log_event(
+            db,
+            action=LOGIN_FAILURE,
+            module=SECURITY_MODULE,
+            username_attempted=username,
+            ip_address=ip_address,
+            reason="locked_out",
+            result="failure",
         )
+        db.commit()
         raise AuthError(LOCKOUT_ERROR)
 
     user = db.query(User).filter(User.username == username).first()
@@ -115,26 +92,34 @@ def login(db: Session, username: str, password: str, ip_address: str | None) -> 
             reason = "inactive"
         else:
             reason = "organisation_inactive"
-        _log_event(
+        audit_service.log_event(
             db,
-            AuthEventType.LOGIN_FAILURE,
+            action=LOGIN_FAILURE,
+            module=SECURITY_MODULE,
+            organisation_id=organisation.id if organisation else None,
             user_id=user.id if user else None,
             username_attempted=username,
             ip_address=ip_address,
             reason=reason,
+            result="failure",
         )
+        db.commit()
         raise AuthError(GENERIC_LOGIN_ERROR)
 
     user.last_login_at = datetime.utcnow()
     db.add(user)
-    _log_event(
+    audit_service.log_event(
         db,
-        AuthEventType.LOGIN_SUCCESS,
+        action=LOGIN_SUCCESS,
+        module=SECURITY_MODULE,
+        organisation_id=user.organisation_id,
         user_id=user.id,
         actor_user_id=user.id,
         username_attempted=username,
         ip_address=ip_address,
+        result="success",
     )
+    db.commit()
 
     return _issue_tokens(db, user)
 
@@ -192,7 +177,10 @@ def logout(db: Session, refresh_token: str) -> None:
         db.add(record)
 
     user_id = int(payload["sub"]) if payload.get("sub") else None
-    _log_event(db, AuthEventType.LOGOUT, user_id=user_id, actor_user_id=user_id)
+    audit_service.log_event(
+        db, action=LOGOUT, module=SECURITY_MODULE, user_id=user_id, actor_user_id=user_id, result="success"
+    )
+    db.commit()
 
 
 def change_password(db: Session, user: User, current_password: str, new_password: str) -> None:
@@ -208,4 +196,13 @@ def change_password(db: Session, user: User, current_password: str, new_password
     # every session, not just the one that changed it.
     revoke_all_sessions(db, user.id)
 
-    _log_event(db, AuthEventType.PASSWORD_CHANGE, user_id=user.id, actor_user_id=user.id)
+    audit_service.log_event(
+        db,
+        action=PASSWORD_CHANGE,
+        module=SECURITY_MODULE,
+        organisation_id=user.organisation_id,
+        user_id=user.id,
+        actor_user_id=user.id,
+        result="success",
+    )
+    db.commit()

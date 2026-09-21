@@ -1,0 +1,64 @@
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.core.database import Base
+
+# Known security actions/module -- plain constants, not an enum. Business
+# modules introduce their own free-form action/module strings the same
+# way permissions' module_key/action are free-form
+# (docs/modules/audit_trail.md #2, docs/modules/permissions.md #2) -- a
+# new one is a data value written by a future module, not a Python
+# constant this file has to grow.
+LOGIN_SUCCESS = "login_success"
+LOGIN_FAILURE = "login_failure"
+LOGOUT = "logout"
+PASSWORD_CHANGE = "password_change"
+ROLE_CHANGED = "role_changed"
+TEAM_ADDED = "team_added"
+TEAM_REMOVED = "team_removed"
+
+SECURITY_MODULE = "security"
+
+
+class AuditEvent(Base):
+    """The one audit trail for both security and business events
+    (docs/modules/audit_trail.md) -- generalized from the security-only
+    AuthEvent built during the session/security phase, rather than kept
+    as a second, parallel table (see docs/audit/AUDIT_TRAIL_AUDIT.md).
+    One row per event, not per changed field (unlike jdk_clean's
+    audit_log) -- details holds whatever field-level change matters as a
+    compact string. Doubles as the login-lockout counter -- see
+    app/services/auth_service.py -- so lockout state has exactly one
+    source of truth instead of a second table to keep in sync."""
+
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_events_entity_type_entity_id", "entity_type", "entity_id"),
+        Index("ix_audit_events_module_created_at", "module", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Nullable: an unresolvable login attempt (unknown username) has no
+    # organisation to attribute the event to.
+    organisation_id: Mapped[int | None] = mapped_column(ForeignKey("organisations.id"), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    module: Mapped[str] = mapped_column(String(30), nullable=False)
+    # The user this event is *about* (e.g. whose role changed).
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # Who *performed* the action, when different from user_id (an admin
+    # changing someone else's role). None for a not-yet-resolved actor
+    # (an unknown-username login attempt) or a system-initiated action.
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    entity_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Short machine-oriented code (e.g. "bad_password", "locked_out") --
+    # kept distinct from `details`, which is the longer human-readable
+    # before/after narrative docs/modules/audit_trail.md #5 shows.
+    reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    username_attempted: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)

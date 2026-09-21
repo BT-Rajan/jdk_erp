@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.roles import VALID_ROLES
-from app.core.validation import validate_permission_key
+from app.core.validation import validate_key
 from app.models.role_permission import RolePermission
 from app.models.user import User
 from app.models.user_permission import UserPermission
@@ -23,8 +23,8 @@ def _validate_role(role: str) -> None:
 
 def _validate_keys(module_key: str, action: str) -> None:
     try:
-        validate_permission_key(module_key)
-        validate_permission_key(action)
+        validate_key(module_key)
+        validate_key(action)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

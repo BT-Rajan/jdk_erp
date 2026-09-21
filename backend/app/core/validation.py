@@ -3,7 +3,7 @@ import re
 _UPPERCASE_RE = re.compile(r"[A-Z]")
 _DIGIT_RE = re.compile(r"[0-9]")
 _SPECIAL_RE = re.compile(r"[^A-Za-z0-9]")
-_PERMISSION_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def validate_password_complexity(password: str) -> str:
@@ -20,10 +20,13 @@ def validate_password_complexity(password: str) -> str:
     return password
 
 
-def validate_permission_key(value: str) -> str:
-    """module_key/action are free-form, not a fixed catalog
-    (docs/modules/permissions.md #2), but still lowercase snake_case so
-    'Sales' and 'sales' can't silently become two different keys."""
-    if not _PERMISSION_KEY_RE.match(value):
+def validate_key(value: str) -> str:
+    """Shared free-form-string constraint: permissions' module_key/action
+    (docs/modules/permissions.md #2) and audit_events' module/action
+    (docs/modules/audit_trail.md #2) are both open-ended -- a future
+    module registers a new one by writing a row, not editing a Python
+    constant -- but still lowercase snake_case so 'Sales' and 'sales'
+    can't silently become two different keys."""
+    if not _KEY_RE.match(value):
         raise ValueError("must be lowercase snake_case, e.g. 'sales' or 'view'")
     return value

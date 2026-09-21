@@ -116,7 +116,7 @@ new.
   token is already rotated, so it costs no extra query on ordinary
   requests); role changes now also revoke the user's sessions; a new
   `role_changed`/`team_added`/`team_removed` audit trail records who
-  performed the action via `AuthEvent.actor_user_id`; centralized
+  performed the action via `AuditEvent.actor_user_id`; centralized
   security-headers middleware (CSP, `X-Content-Type-Options`,
   `X-Frame-Options`, `Referrer-Policy`, conditional HSTS); and an opt-in
   `FORCE_HTTPS` for deployments that terminate TLS themselves. Matches
@@ -128,6 +128,28 @@ new.
   §9 not-applicable rather than something to build), and mobile-app
   compatibility stays open. Full reasoning in
   [`../docs/audit/SESSION_SECURITY_AUDIT.md`](../docs/audit/SESSION_SECURITY_AUDIT.md).
+- **Audit Trail** (`app/models/audit_event.py`, `app/services/audit_service.py`,
+  `app/api/audit_events.py`) — one unified `audit_events` table for both
+  security and business events, generalized in place from the
+  session/security phase's security-only `AuthEvent` rather than kept as
+  a second, parallel table (the spec's own example mixes a sales
+  approval, a role change, and a stock adjustment in one list). One row
+  per *event*, not per changed field like `jdk_clean`'s `audit_log` —
+  `details` holds a compact "field: old -> new" string via the new
+  `audit_service.diff_fields()`/`format_changes()` helpers, which also
+  foreclose the diffing-logic duplication `jdk_clean` fell into across
+  6+ services (see
+  [`../docs/audit/AUDIT_TRAIL_AUDIT.md`](../docs/audit/AUDIT_TRAIL_AUDIT.md)).
+  `audit_service.log_event()` never commits — the caller commits the
+  audit row in the same transaction as the business change, matching
+  `jdk_clean`'s one genuinely good property here (verified by its own
+  test that a failed audit write rolls back the business change too).
+  `GET /api/audit-events` is `require_admin`-gated, always
+  organisation-scoped and paginated, and filters by user, actor, module,
+  action, entity, and date range — a real admin-facing audit browser,
+  which `jdk_clean` never built (every read there requires already
+  knowing a specific record, or asking about yourself). Matches
+  [`../docs/modules/audit_trail.md`](../docs/modules/audit_trail.md).
 
 Every gap the audit found has a fix in this implementation:
 
@@ -135,7 +157,7 @@ Every gap the audit found has a fix in this implementation:
 | --- | --- |
 | Hardcoded default JWT secret | `JWT_SECRET_KEY` has no default — app refuses to start without it (`app/core/config.py`) |
 | No login rate limiting | Rolling-window lockout by username (`app/services/auth_service.py`, `LOGIN_LOCKOUT_THRESHOLD`/`_WINDOW_MINUTES`) |
-| No authentication audit trail | `auth_events` table logs every login success/failure, logout, password change (`app/models/auth_event.py`) |
+| No authentication audit trail | `audit_events` table logs every login success/failure, logout, password change (`app/models/audit_event.py`) |
 | Timing/enumeration leaks | Password verification always runs (dummy hash for unknown users); one generic message for bad password / unknown user / inactive account |
 | Password policy was length-only | Full complexity check — length, uppercase, digit, special character (`app/core/validation.py`) |
 | Vestigial `role` claim in JWT | Not present — the access token carries only `sub`/`org` |

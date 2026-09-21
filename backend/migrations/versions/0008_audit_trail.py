@@ -1,0 +1,72 @@
+"""generalize auth_events into audit_events (security + business events)
+
+Revision ID: 0008
+Revises: 0007
+Create Date: 2026-09-21
+
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "0008"
+down_revision = "0007"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.rename_table("auth_events", "audit_events")
+
+    with op.batch_alter_table("audit_events") as batch_op:
+        batch_op.alter_column("event_type", new_column_name="action")
+        batch_op.add_column(
+            sa.Column(
+                "organisation_id",
+                sa.Integer(),
+                sa.ForeignKey("organisations.id", name="fk_audit_events_organisation_id"),
+                nullable=True,
+            )
+        )
+        # "security" backfills every pre-existing row (all of them were
+        # security events before this migration); new rows always pass
+        # module explicitly via audit_service.log_event.
+        batch_op.add_column(sa.Column("module", sa.String(length=30), nullable=False, server_default="security"))
+        batch_op.add_column(sa.Column("entity_type", sa.String(length=30), nullable=True))
+        batch_op.add_column(sa.Column("entity_id", sa.Integer(), nullable=True))
+        batch_op.add_column(sa.Column("result", sa.String(length=20), nullable=True))
+        batch_op.add_column(sa.Column("details", sa.Text(), nullable=True))
+
+        batch_op.drop_index("ix_auth_events_user_id")
+        batch_op.drop_index("ix_auth_events_username_attempted")
+        batch_op.drop_index("ix_auth_events_created_at")
+
+        batch_op.create_index("ix_audit_events_organisation_id", ["organisation_id"])
+        batch_op.create_index("ix_audit_events_user_id", ["user_id"])
+        batch_op.create_index("ix_audit_events_username_attempted", ["username_attempted"])
+        batch_op.create_index("ix_audit_events_created_at", ["created_at"])
+        batch_op.create_index("ix_audit_events_entity_type_entity_id", ["entity_type", "entity_id"])
+        batch_op.create_index("ix_audit_events_module_created_at", ["module", "created_at"])
+
+
+def downgrade() -> None:
+    with op.batch_alter_table("audit_events") as batch_op:
+        batch_op.drop_index("ix_audit_events_module_created_at")
+        batch_op.drop_index("ix_audit_events_entity_type_entity_id")
+        batch_op.drop_index("ix_audit_events_created_at")
+        batch_op.drop_index("ix_audit_events_username_attempted")
+        batch_op.drop_index("ix_audit_events_user_id")
+        batch_op.drop_index("ix_audit_events_organisation_id")
+
+        batch_op.drop_column("details")
+        batch_op.drop_column("result")
+        batch_op.drop_column("entity_id")
+        batch_op.drop_column("entity_type")
+        batch_op.drop_column("module")
+        batch_op.drop_column("organisation_id")
+        batch_op.alter_column("action", new_column_name="event_type")
+
+        batch_op.create_index("ix_auth_events_created_at", ["created_at"])
+        batch_op.create_index("ix_auth_events_username_attempted", ["username_attempted"])
+        batch_op.create_index("ix_auth_events_user_id", ["user_id"])
+
+    op.rename_table("audit_events", "auth_events")
