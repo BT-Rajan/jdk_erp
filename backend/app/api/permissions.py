@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
+from app.core.errors import NotFoundError, ValidationError
 from app.core.roles import VALID_ROLES
 from app.core.validation import validate_key
 from app.models.role_permission import RolePermission
@@ -16,23 +17,25 @@ router = APIRouter(prefix="/api/permissions", tags=["permissions"])
 
 def _validate_role(role: str) -> None:
     if role not in VALID_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"role must be one of {sorted(VALID_ROLES)}"
-        )
+        message = f"role must be one of {sorted(VALID_ROLES)}"
+        raise ValidationError(message, fields={"role": message})
 
 
 def _validate_keys(module_key: str, action: str) -> None:
-    try:
-        validate_key(module_key)
-        validate_key(action)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    fields: dict[str, str] = {}
+    for name, value in (("module_key", module_key), ("action", action)):
+        try:
+            validate_key(value)
+        except ValueError as exc:
+            fields[name] = str(exc)
+    if fields:
+        raise ValidationError("Please review the highlighted fields.", fields=fields)
 
 
 def _get_user_in_org(db: Session, user_id: int, organisation_id: int) -> User:
     user = db.query(User).filter(User.id == user_id, User.organisation_id == organisation_id).first()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+        raise NotFoundError("User not found.")
     return user
 
 
@@ -103,7 +106,7 @@ def delete_role_permission(
         .first()
     )
     if grant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role permission not found.")
+        raise NotFoundError("Role permission not found.")
     db.delete(grant)
     db.commit()
 
@@ -172,7 +175,7 @@ def delete_user_permission(
         .first()
     )
     if grant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User permission not found.")
+        raise NotFoundError("User permission not found.")
     db.delete(grant)
     db.commit()
 

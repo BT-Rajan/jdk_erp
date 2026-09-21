@@ -134,7 +134,8 @@ def test_setting_role_permission_twice_upserts_not_duplicates(client, admin_user
 def test_set_role_permission_rejects_invalid_role(client, admin_user):
     headers = _headers(client, "admin_person")
     response = client.put("/api/permissions/roles/superhero/sales/view", json={"scope": "own"}, headers=headers)
-    assert response.status_code == 400
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_set_role_permission_rejects_invalid_scope(client, admin_user):
@@ -146,7 +147,8 @@ def test_set_role_permission_rejects_invalid_scope(client, admin_user):
 def test_set_role_permission_rejects_bad_module_key(client, admin_user):
     headers = _headers(client, "admin_person")
     response = client.put("/api/permissions/roles/team_member/Sales/view", json={"scope": "own"}, headers=headers)
-    assert response.status_code == 400
+    assert response.status_code == 422
+    assert response.json()["error"]["fields"]["module_key"]
 
 
 def test_delete_role_permission(client, admin_user):

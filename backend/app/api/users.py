@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
+from app.core.errors import NotFoundError
 from app.models.audit_event import ROLE_CHANGED, SECURITY_MODULE
 from app.models.user import User
 from app.models.user_team import UserTeam
@@ -52,7 +53,7 @@ def get_user(
     if user is None:
         # 404 whether the id doesn't exist at all or belongs to another
         # organisation -- never confirm another organisation's user id.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+        raise NotFoundError("User not found.")
     team_ids = user_service.team_ids_for_users(db, [user.id])[user.id]
     return user_service.to_user_out(user, team_ids)
 
@@ -73,7 +74,7 @@ def change_user_role(
     (docs/modules/session_security.md #8/#14, docs/modules/audit_trail.md)."""
     user = db.query(User).filter(User.id == user_id, User.organisation_id == admin.organisation_id).first()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+        raise NotFoundError("User not found.")
 
     old_role = user.role
     user.role = payload.role

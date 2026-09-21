@@ -10,7 +10,7 @@ def test_deactivated_organisation_blocks_login(client, user_in_inactive_organisa
     assert response.status_code == 401
     # Same generic message as any other login failure -- an inactive
     # organisation isn't a channel for enumerating tenants either.
-    assert response.json()["detail"] == "Invalid username or password."
+    assert response.json()["error"]["message"] == "Invalid username or password."
 
 
 def test_deactivating_organisation_kills_an_already_issued_token(

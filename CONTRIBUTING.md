@@ -30,6 +30,18 @@
 - Record who did what and when for sensitive operations: user/role
   management, approvals, financial documents, stock movements
   (Principle 13).
+- **Never raise a raw `fastapi.HTTPException` or return a caught
+  exception's `str()`/a third-party service's raw error text to the
+  client.** Raise an `AppError` subclass from `app/core/errors.py`
+  (`ValidationError`, `AuthError`, `AccessDeniedError`, `NotFoundError`,
+  `ConflictError`, `BusinessRuleError`, `RateLimitedError`) with a
+  hand-written, safe, professional message — the global handlers in
+  `app/core/error_handlers.py` turn it into the standard envelope and log
+  the full technical detail server-side. This is a non-negotiable
+  platform rule, not a per-module choice — see
+  [`docs/modules/api_error_handling.md`](docs/modules/api_error_handling.md)
+  and [`docs/audit/API_ERROR_HANDLING_AUDIT.md`](docs/audit/API_ERROR_HANDLING_AUDIT.md)
+  for the concrete leaks this prevents.
 
 ## Tests
 

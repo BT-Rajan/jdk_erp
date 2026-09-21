@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.errors import AuthError
+from app.core.errors import AuthError, RateLimitedError, ValidationError
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -73,7 +73,7 @@ def login(db: Session, username: str, password: str, ip_address: str | None) -> 
             result="failure",
         )
         db.commit()
-        raise AuthError(LOCKOUT_ERROR)
+        raise RateLimitedError(LOCKOUT_ERROR)
 
     user = db.query(User).filter(User.username == username).first()
     # Always run password verification, even when the user doesn't exist,
@@ -184,10 +184,19 @@ def logout(db: Session, refresh_token: str) -> None:
 
 
 def change_password(db: Session, user: User, current_password: str, new_password: str) -> None:
+    # These aren't "who are you" authentication failures (the caller is
+    # already authenticated to reach this endpoint) -- they're input
+    # problems on this specific request, so VALIDATION_ERROR with a
+    # field-level message, not AuthError/401.
     if not verify_password(current_password, user.password_hash):
-        raise AuthError("Current password is incorrect.")
+        raise ValidationError(
+            "Current password is incorrect.", fields={"current_password": "Current password is incorrect."}
+        )
     if verify_password(new_password, user.password_hash):
-        raise AuthError("New password must be different from the current password.")
+        raise ValidationError(
+            "New password must be different from the current password.",
+            fields={"new_password": "New password must be different from the current password."},
+        )
 
     user.password_hash = hash_password(new_password)
     db.add(user)

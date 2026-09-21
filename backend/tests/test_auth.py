@@ -18,7 +18,11 @@ def test_login_success_returns_tokens_and_records_last_login(client, active_user
 def test_login_wrong_password_is_rejected(client, active_user):
     response = client.post("/api/auth/login", json={"username": "ada", "password": "wrong-password"})
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid username or password."
+    body = response.json()
+    assert body["success"] is False
+    assert body["error"]["code"] == "AUTHENTICATION_ERROR"
+    assert body["error"]["message"] == "Invalid username or password."
+    assert "request_id" in body
 
 
 def test_login_unknown_user_gets_identical_message_to_wrong_password(client, active_user):
@@ -28,7 +32,7 @@ def test_login_unknown_user_gets_identical_message_to_wrong_password(client, act
     unknown_user = client.post("/api/auth/login", json={"username": "nobody", "password": "whatever123!"})
 
     assert unknown_user.status_code == wrong_password.status_code == 401
-    assert unknown_user.json()["detail"] == wrong_password.json()["detail"]
+    assert unknown_user.json()["error"]["message"] == wrong_password.json()["error"]["message"]
 
 
 def test_login_inactive_user_gets_generic_message(client, inactive_user):
@@ -36,7 +40,7 @@ def test_login_inactive_user_gets_generic_message(client, inactive_user):
     message that reveals the account exists (AUTHENTICATION_AUDIT.md #3)."""
     response = client.post("/api/auth/login", json={"username": "inactive_user", "password": "Str0ng!Pass"})
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid username or password."
+    assert response.json()["error"]["message"] == "Invalid username or password."
 
 
 def test_login_locks_out_after_repeated_failures(client, active_user):
@@ -44,12 +48,15 @@ def test_login_locks_out_after_repeated_failures(client, active_user):
     for _ in range(3):
         response = client.post("/api/auth/login", json={"username": "ada", "password": "wrong-password"})
         assert response.status_code == 401
-        assert response.json()["detail"] == "Invalid username or password."
+        assert response.json()["error"]["message"] == "Invalid username or password."
 
     # Even the *correct* password is now rejected until the window passes.
+    # RATE_LIMITED/429, not AUTHENTICATION_ERROR/401 -- this is a rate
+    # limit, not a credentials failure (docs/modules/api_error_handling.md #6).
     locked = client.post("/api/auth/login", json={"username": "ada", "password": "Str0ng!Pass"})
-    assert locked.status_code == 401
-    assert locked.json()["detail"] == "Too many failed login attempts. Please try again later."
+    assert locked.status_code == 429
+    assert locked.json()["error"]["code"] == "RATE_LIMITED"
+    assert locked.json()["error"]["message"] == "Too many failed login attempts. Please try again later."
 
 
 def test_refresh_rotates_and_rejects_replay(client, active_user):
@@ -108,7 +115,10 @@ def test_change_password_requires_current_password(client, active_user):
         json={"current_password": "not-the-password", "new_password": "NewStr0ng!Pass"},
         headers=headers,
     )
-    assert wrong_current.status_code == 400
+    assert wrong_current.status_code == 422
+    body = wrong_current.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert body["error"]["fields"]["current_password"] == "Current password is incorrect."
 
 
 def test_change_password_rejects_weak_new_passwords(client, active_user):

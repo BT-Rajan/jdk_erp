@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.models.audit_event import SECURITY_MODULE, TEAM_ADDED, TEAM_REMOVED
 from app.models.team import Team
 from app.models.user import User
@@ -18,7 +19,7 @@ def _get_team_in_org(db: Session, team_id: int, organisation_id: int) -> Team:
     if team is None:
         # 404 whether the id doesn't exist at all or belongs to another
         # organisation -- never confirm another organisation's team id.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
+        raise NotFoundError("Team not found.")
     return team
 
 
@@ -57,15 +58,15 @@ def add_team_member(
     if not team.is_active:
         # docs/modules/teams.md #7 acceptance criterion: an inactive team
         # cannot receive new users.
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot add a member to an inactive team.")
+        raise BusinessRuleError("Cannot add a member to an inactive team.")
 
     user = db.query(User).filter(User.id == payload.user_id, User.organisation_id == admin.organisation_id).first()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+        raise NotFoundError("User not found.")
 
     existing = db.query(UserTeam).filter(UserTeam.user_id == user.id, UserTeam.team_id == team.id).first()
     if existing is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User is already a member of this team.")
+        raise ConflictError("User is already a member of this team.")
 
     db.add(UserTeam(user_id=user.id, team_id=team.id))
     audit_service.log_event(
@@ -97,7 +98,7 @@ def remove_team_member(
 
     membership = db.query(UserTeam).filter(UserTeam.user_id == user_id, UserTeam.team_id == team.id).first()
     if membership is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found.")
+        raise NotFoundError("Membership not found.")
 
     db.delete(membership)
     audit_service.log_event(

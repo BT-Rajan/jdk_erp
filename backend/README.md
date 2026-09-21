@@ -150,6 +150,36 @@ new.
   which `jdk_clean` never built (every read there requires already
   knowing a specific record, or asking about yourself). Matches
   [`../docs/modules/audit_trail.md`](../docs/modules/audit_trail.md).
+- **Common API & Error Handling** (`app/core/errors.py`,
+  `app/core/error_handlers.py`, `app/core/request_context.py`,
+  `app/core/request_id_middleware.py`) — a non-negotiable platform rule,
+  not a per-module choice: every error response is one standard envelope
+  (`{"success": false, "error": {"code", "message", "fields"}, "request_id"}`)
+  built from a small, fixed `AppError` hierarchy (`ValidationError`,
+  `AuthError`, `AccessDeniedError`, `NotFoundError`, `ConflictError`,
+  `BusinessRuleError`, `RateLimitedError`) — no route or service raises a
+  raw `fastapi.HTTPException` (see `CONTRIBUTING.md`). Global handlers
+  catch every remaining case too (an uncaught `IntegrityError`,
+  `SQLAlchemyError`, or any other exception) so nothing but the safe
+  envelope ever reaches a client; the full technical detail (stack trace,
+  SQL, file paths) is logged server-side only, tagged with a per-request
+  correlation id (`X-Request-ID` response header, echoed in the body as
+  `request_id`) set once by `RequestIDMiddleware` and readable from
+  service-layer logging too via a `ContextVar`. Unlike `jdk_clean`'s
+  equivalent, which only ever surfaced `exc.errors()[0]`, request
+  validation failures report every invalid field at once in `fields`, so
+  a UI can show them all beside their inputs. Matches
+  [`../docs/modules/api_error_handling.md`](../docs/modules/api_error_handling.md).
+  Reused jdk_clean's `AppError`/global-handler design almost as-is (its
+  strongest, most directly reusable pattern of any module audited so
+  far), fixing its confirmed gaps and adding an explicit `code` field it
+  lacked; see
+  [`../docs/audit/API_ERROR_HANDLING_AUDIT.md`](../docs/audit/API_ERROR_HANDLING_AUDIT.md).
+  Deliberately **excludes** wrapping success responses in a matching
+  envelope — the spec's own §13 says to follow the existing stack rather
+  than impose a new API framework, and jdk_clean never had a consistent
+  success envelope either; only the error side needed the leak-proofing
+  this module is about.
 
 Every gap the audit found has a fix in this implementation:
 

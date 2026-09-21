@@ -1,9 +1,9 @@
-from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.errors import AuthError
+from app.core.errors import AccessDeniedError, AuthError
 from app.core.roles import ADMIN_ROLES
 from app.core.security import decode_token
 from app.models.organisation import Organisation
@@ -18,17 +18,17 @@ def get_current_user(
 ) -> User:
     """Resolves who the caller is -- nothing more. No role or permission
     lookup happens here on purpose; that's a separate, later dependency
-    the RBAC layer adds on top of this one (docs/modules/authentication.md #6)."""
+    the RBAC layer adds on top of this one (docs/modules/authentication.md #6).
+    Raises AuthError directly -- the global handler
+    (docs/modules/api_error_handling.md) turns it into the standard
+    envelope, so no per-call try/except is needed here."""
     if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated.")
+        raise AuthError("Not authenticated.")
 
-    try:
-        payload = decode_token(credentials.credentials)
-    except AuthError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    payload = decode_token(credentials.credentials)
 
     if payload.get("type") != "access":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type.")
+        raise AuthError("Invalid token type.")
 
     # Joined so a deactivated organisation (docs/modules/organisation.md #7)
     # blocks every subsequent request, not just new logins -- an
@@ -41,7 +41,7 @@ def get_current_user(
         .first()
     )
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+        raise AuthError("User not found or inactive.")
 
     return user
 
@@ -52,5 +52,5 @@ def require_admin(current_user: User = Depends(get_current_user)) -> User:
     team-membership and role-change endpoints
     (docs/modules/roles_rbac.md #4)."""
     if current_user.role not in ADMIN_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
+        raise AccessDeniedError("Admin privileges required.")
     return current_user

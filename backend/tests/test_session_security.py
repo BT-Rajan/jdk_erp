@@ -41,7 +41,7 @@ def test_refresh_fails_after_idle_timeout(client, active_user, db_session):
 
     response = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
     assert response.status_code == 401
-    assert "inactivity" in response.json()["detail"].lower()
+    assert "inactivity" in response.json()["error"]["message"].lower()
 
 
 def test_refresh_updates_last_used_at_on_success(client, active_user, db_session):
