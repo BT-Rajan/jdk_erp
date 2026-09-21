@@ -3,10 +3,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
+from app.models.auth_event import AuthEventType
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
 from app.schemas.team import TeamMemberIn, TeamOut
+from app.services import auth_service
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -65,6 +67,9 @@ def add_team_member(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User is already a member of this team.")
 
     db.add(UserTeam(user_id=user.id, team_id=team.id))
+    auth_service.log_team_membership_changed(
+        db, event_type=AuthEventType.TEAM_ADDED, user_id=user.id, actor_user_id=admin.id, team_id=team.id
+    )
     db.commit()
 
 
@@ -83,4 +88,7 @@ def remove_team_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found.")
 
     db.delete(membership)
+    auth_service.log_team_membership_changed(
+        db, event_type=AuthEventType.TEAM_REMOVED, user_id=user_id, actor_user_id=admin.id, team_id=team.id
+    )
     db.commit()

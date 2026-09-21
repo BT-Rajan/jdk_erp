@@ -3,10 +3,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
+from app.models.auth_event import AuthEventType
 from app.models.user import User
 from app.models.user_team import UserTeam
 from app.schemas.user import RoleChangeRequest, UserOut
-from app.services import user_service
+from app.services import auth_service, user_service
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -66,10 +67,16 @@ def change_user_role(
     """Admin-gated (docs/modules/roles_rbac.md #4), scoped to the admin's
     own organisation -- an Admin from Organisation A cannot change
     Organisation B's users, and a user can never change their own role
-    (there's no self-service path here at all)."""
+    (there's no self-service path here at all). Also revokes the user's
+    sessions and records who made the change
+    (docs/modules/session_security.md #8/#14)."""
     user = db.query(User).filter(User.id == user_id, User.organisation_id == admin.organisation_id).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    old_role = user.role
     user.role = payload.role
     db.add(user)
+    auth_service.revoke_all_sessions(db, user.id)
+    auth_service.log_role_changed(db, user_id=user.id, actor_user_id=admin.id, old_role=old_role, new_role=payload.role)
     db.commit()

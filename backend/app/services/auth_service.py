@@ -31,6 +31,7 @@ def _log_event(
     event_type: AuthEventType,
     *,
     user_id: int | None = None,
+    actor_user_id: int | None = None,
     username_attempted: str | None = None,
     ip_address: str | None = None,
     reason: str | None = None,
@@ -39,12 +40,37 @@ def _log_event(
         AuthEvent(
             event_type=event_type.value,
             user_id=user_id,
+            actor_user_id=actor_user_id,
             username_attempted=username_attempted,
             ip_address=ip_address,
             reason=reason,
         )
     )
     db.commit()
+
+
+def revoke_all_sessions(db: Session, user_id: int) -> None:
+    """Force re-login everywhere for this user -- used by password change
+    and, per docs/modules/session_security.md #8, by role changes."""
+    db.query(RefreshToken).filter(RefreshToken.user_id == user_id, RefreshToken.revoked.is_(False)).update(
+        {"revoked": True}
+    )
+
+
+def log_role_changed(db: Session, *, user_id: int, actor_user_id: int, old_role: str, new_role: str) -> None:
+    _log_event(
+        db,
+        AuthEventType.ROLE_CHANGED,
+        user_id=user_id,
+        actor_user_id=actor_user_id,
+        reason=f"{old_role}->{new_role}",
+    )
+
+
+def log_team_membership_changed(
+    db: Session, *, event_type: AuthEventType, user_id: int, actor_user_id: int, team_id: int
+) -> None:
+    _log_event(db, event_type, user_id=user_id, actor_user_id=actor_user_id, reason=f"team_id:{team_id}")
 
 
 def _issue_tokens(db: Session, user: User) -> TokenResponse:
@@ -101,7 +127,14 @@ def login(db: Session, username: str, password: str, ip_address: str | None) -> 
 
     user.last_login_at = datetime.utcnow()
     db.add(user)
-    _log_event(db, AuthEventType.LOGIN_SUCCESS, user_id=user.id, username_attempted=username, ip_address=ip_address)
+    _log_event(
+        db,
+        AuthEventType.LOGIN_SUCCESS,
+        user_id=user.id,
+        actor_user_id=user.id,
+        username_attempted=username,
+        ip_address=ip_address,
+    )
 
     return _issue_tokens(db, user)
 
@@ -113,8 +146,19 @@ def refresh(db: Session, refresh_token: str) -> TokenResponse:
 
     jti = payload.get("jti")
     record = db.query(RefreshToken).filter(RefreshToken.jti == jti).first()
-    if record is None or record.revoked or record.expires_at < datetime.utcnow():
+    now = datetime.utcnow()
+    if record is None or record.revoked or record.expires_at < now:
         raise AuthError("Invalid refresh token.")
+
+    # Idle timeout (docs/modules/session_security.md #5): a session that
+    # hasn't been refreshed recently enough is dead, even if it hasn't
+    # hit its absolute expiry yet.
+    idle_cutoff = now - timedelta(minutes=settings.SESSION_IDLE_TIMEOUT_MINUTES)
+    if record.last_used_at < idle_cutoff:
+        record.revoked = True
+        db.add(record)
+        db.commit()
+        raise AuthError("Session expired due to inactivity.")
 
     user = (
         db.query(User)
@@ -147,8 +191,8 @@ def logout(db: Session, refresh_token: str) -> None:
         record.revoked = True
         db.add(record)
 
-    user_id = payload.get("sub")
-    _log_event(db, AuthEventType.LOGOUT, user_id=int(user_id) if user_id else None)
+    user_id = int(payload["sub"]) if payload.get("sub") else None
+    _log_event(db, AuthEventType.LOGOUT, user_id=user_id, actor_user_id=user_id)
 
 
 def change_password(db: Session, user: User, current_password: str, new_password: str) -> None:
@@ -162,8 +206,6 @@ def change_password(db: Session, user: User, current_password: str, new_password
 
     # Force re-login everywhere -- a changed password should invalidate
     # every session, not just the one that changed it.
-    db.query(RefreshToken).filter(RefreshToken.user_id == user.id, RefreshToken.revoked.is_(False)).update(
-        {"revoked": True}
-    )
+    revoke_all_sessions(db, user.id)
 
-    _log_event(db, AuthEventType.PASSWORD_CHANGE, user_id=user.id)
+    _log_event(db, AuthEventType.PASSWORD_CHANGE, user_id=user.id, actor_user_id=user.id)

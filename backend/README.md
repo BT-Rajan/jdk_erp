@@ -110,6 +110,24 @@ new.
   Deliberately **excludes** a generic resource-agnostic query-scoping
   helper (`WHERE team_id IN (...)`) — no concrete table's columns exist
   yet to validate one against; documented as a contract instead.
+- **Session / Security hardening** (`app/core/security_headers.py`) — an
+  idle timeout on top of the refresh token's existing absolute timeout
+  (`SESSION_IDLE_TIMEOUT_MINUTES`, checked/updated at the same point the
+  token is already rotated, so it costs no extra query on ordinary
+  requests); role changes now also revoke the user's sessions; a new
+  `role_changed`/`team_added`/`team_removed` audit trail records who
+  performed the action via `AuthEvent.actor_user_id`; centralized
+  security-headers middleware (CSP, `X-Content-Type-Options`,
+  `X-Frame-Options`, `Referrer-Policy`, conditional HSTS); and an opt-in
+  `FORCE_HTTPS` for deployments that terminate TLS themselves. Matches
+  [`../docs/modules/session_security.md`](../docs/modules/session_security.md).
+  **Keeps the bearer-token transport** rather than switching to a
+  cookie-based session as that document's §2 conditionally prefers — no
+  frontend exists yet in this repo to have the `localStorage` problem it
+  warns about, a bearer token is immune to CSRF by construction (making
+  §9 not-applicable rather than something to build), and mobile-app
+  compatibility stays open. Full reasoning in
+  [`../docs/audit/SESSION_SECURITY_AUDIT.md`](../docs/audit/SESSION_SECURITY_AUDIT.md).
 
 Every gap the audit found has a fix in this implementation:
 

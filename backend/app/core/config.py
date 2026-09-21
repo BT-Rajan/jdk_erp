@@ -20,12 +20,27 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # The refresh token doubles as the "session" docs/modules/session_security.md
+    # #5 asks for: REFRESH_TOKEN_EXPIRE_DAYS is its absolute timeout, this
+    # is its idle timeout -- if a client doesn't call /refresh within this
+    # window, the session is dead even though it hasn't hit its absolute
+    # expiry yet. Checked/updated inside refresh() itself, which already
+    # writes to the database to rotate the token, so this adds no extra
+    # query to ordinary API requests.
+    SESSION_IDLE_TIMEOUT_MINUTES: int = 60 * 12
+
     # Login lockout: number of recent failures for a given username, within
     # the window below, before further attempts are rejected outright.
     LOGIN_LOCKOUT_THRESHOLD: int = 5
     LOGIN_LOCKOUT_WINDOW_MINUTES: int = 15
 
     CORS_ORIGINS: str = ""
+
+    # Off by default so local HTTP development keeps working with no extra
+    # setup. Turn on in production only when this app terminates TLS
+    # itself rather than behind a TLS-terminating load balancer/proxy
+    # (docs/modules/session_security.md acceptance criterion 14).
+    FORCE_HTTPS: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
