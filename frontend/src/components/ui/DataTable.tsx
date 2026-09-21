@@ -1,0 +1,194 @@
+import { useRef, useState, type ReactNode } from 'react'
+import { Columns3 } from 'lucide-react'
+import { cn } from '@/lib/cn'
+import { useDismissableOverlay } from '@/lib/useDismissableOverlay'
+import { Alert } from './Alert'
+import { EmptyState } from './EmptyState'
+import { IconButton } from './IconButton'
+import { Pagination } from './Pagination'
+import { SortableHeader } from './SortableHeader'
+import { Spinner } from './Spinner'
+import { toggleSort, type SortState } from './sort'
+
+export interface DataTableColumn<T> {
+  key: string
+  label: string
+  sortable?: boolean
+  align?: 'left' | 'right' | 'center'
+  /** Excluded from the column-visibility toggle -- always shown. */
+  alwaysVisible?: boolean
+  render: (row: T) => ReactNode
+}
+
+export interface DataTableProps<T> {
+  columns: DataTableColumn<T>[]
+  rows: T[]
+  rowKey: (row: T) => string | number
+  sort?: SortState | null
+  onSortChange?: (sort: SortState | null) => void
+  loading?: boolean
+  error?: string
+  emptyTitle?: string
+  emptyMessage?: string
+  page?: number
+  totalPages?: number
+  total?: number
+  onPageChange?: (page: number) => void
+  enableColumnVisibility?: boolean
+}
+
+/** The one table shell every list page composes -- masters and business
+ * lists alike. Generalizes jdk_clean's MasterListPage column-as-data
+ * shape (which only masters actually used; every real business list
+ * page hand-copied the same shell instead). Search/status filtering is
+ * deliberately not owned here -- compose FilterBar + TextField/SelectField
+ * above this component instead of this component reinventing them. */
+export function DataTable<T>({
+  columns,
+  rows,
+  rowKey,
+  sort = null,
+  onSortChange,
+  loading = false,
+  error,
+  emptyTitle = 'No records found',
+  emptyMessage,
+  page,
+  totalPages,
+  total,
+  onPageChange,
+  enableColumnVisibility = false,
+}: DataTableProps<T>) {
+  const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set())
+  const visibleColumns = columns.filter((column) => !hiddenKeys.has(column.key))
+
+  function handleSort(field: string) {
+    onSortChange?.(toggleSort(sort ?? null, field))
+  }
+
+  function toggleColumn(key: string) {
+    setHiddenKeys((previous) => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const showPagination = page !== undefined && totalPages !== undefined && total !== undefined && !!onPageChange
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Alert variant="danger">{error}</Alert>
+      {enableColumnVisibility && (
+        <div className="flex justify-end">
+          <ColumnVisibilityMenu columns={columns} hiddenKeys={hiddenKeys} onToggle={toggleColumn} />
+        </div>
+      )}
+      {loading ? (
+        <div className="flex justify-center py-16">
+          <Spinner />
+        </div>
+      ) : rows.length === 0 ? (
+        <EmptyState title={emptyTitle} message={emptyMessage} />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-ink-700">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead className="border-b border-ink-700 bg-ink-800/50">
+              <tr>
+                {visibleColumns.map((column) =>
+                  column.sortable ? (
+                    <SortableHeader
+                      key={column.key}
+                      label={column.label}
+                      field={column.key}
+                      sort={sort ?? null}
+                      onSort={handleSort}
+                      align={column.align}
+                    />
+                  ) : (
+                    <th
+                      key={column.key}
+                      scope="col"
+                      className={cn(
+                        'px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gold-100/60',
+                        column.align === 'right' && 'text-right',
+                        column.align === 'center' && 'text-center',
+                      )}
+                    >
+                      {column.label}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink-700">
+              {rows.map((row) => (
+                <tr key={rowKey(row)} className="transition-colors hover:bg-ink-800/40">
+                  {visibleColumns.map((column) => (
+                    <td
+                      key={column.key}
+                      className={cn(
+                        'px-3 py-2 text-gold-100',
+                        column.align === 'right' && 'text-right',
+                        column.align === 'center' && 'text-center',
+                      )}
+                    >
+                      {column.render(row)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {showPagination && (
+        <Pagination page={page} totalPages={totalPages} total={total} onPageChange={onPageChange} />
+      )}
+    </div>
+  )
+}
+
+function ColumnVisibilityMenu<T>({
+  columns,
+  hiddenKeys,
+  onToggle,
+}: {
+  columns: DataTableColumn<T>[]
+  hiddenKeys: Set<string>
+  onToggle: (key: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  useDismissableOverlay(containerRef, { open, onDismiss: () => setOpen(false) })
+
+  const toggleable = columns.filter((column) => !column.alwaysVisible)
+
+  return (
+    <div ref={containerRef} className="relative">
+      <IconButton
+        icon={<Columns3 size={16} />}
+        aria-label="Choose visible columns"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      />
+      {open && (
+        <div role="menu" aria-label="Choose visible columns" className="absolute right-0 z-10 mt-2 min-w-48 rounded-md border border-ink-600 bg-ink-800 p-2 shadow-lg">
+          {toggleable.map((column) => (
+            <label key={column.key} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm text-gold-100 hover:bg-ink-700">
+              <input
+                type="checkbox"
+                checked={!hiddenKeys.has(column.key)}
+                onChange={() => onToggle(column.key)}
+                className="h-4 w-4 rounded border-ink-600 bg-ink-800 text-gold-400"
+              />
+              {column.label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

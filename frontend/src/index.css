@@ -1,0 +1,57 @@
+@import 'tailwindcss';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/playfair-display/500.css';
+@import '@fontsource/playfair-display/600.css';
+
+/* Design tokens -- single source of truth, mirrors docs/DESIGN_SYSTEM.md.
+   Every component reads these via Tailwind utilities (bg-ink-900,
+   text-gold-400, font-display, ...) -- never a hard-coded hex value. */
+@theme {
+  --color-ink-950: #05050a;
+  --color-ink-900: #0b0b12;
+  --color-ink-800: #12121c;
+  --color-ink-700: #1a1a28;
+  --color-ink-600: #262638;
+
+  --color-gold-100: #faf3e2;
+  --color-gold-200: #f1d999;
+  --color-gold-300: #e4c37e;
+  --color-gold-400: #d4af6a;
+  --color-gold-500: #c39a4e;
+  --color-gold-600: #b9873c;
+  --color-gold-700: #8f6a2c;
+
+  --color-violet-500: #6a4fb3;
+  --color-violet-600: #4c3480;
+
+  --color-success-500: #22c55e;
+  --color-warning-500: #f59e0b;
+  --color-danger-500: #f43f5e;
+  --color-info-500: #38bdf8;
+
+  --font-display: 'Playfair Display', serif;
+  --font-sans: 'Inter', sans-serif;
+
+  --shadow-glow-gold: 0 0 0 1px color-mix(in oklab, var(--color-gold-400) 35%, transparent),
+    0 8px 40px -8px color-mix(in oklab, var(--color-gold-500) 45%, transparent);
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-ink-950);
+  color: var(--color-gold-100);
+  font-family: var(--font-sans);
+}
+
+/* Focus is always visible -- never suppressed, per
+   docs/DESIGN_SYSTEM.md's Accessibility section. */
+:focus-visible {
+  outline: 2px solid var(--color-gold-400);
+  outline-offset: 2px;
+}
