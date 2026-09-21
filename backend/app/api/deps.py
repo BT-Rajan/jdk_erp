@@ -1,0 +1,35 @@
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.errors import AuthError
+from app.core.security import decode_token
+from app.models.user import User
+
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """Resolves who the caller is -- nothing more. No role or permission
+    lookup happens here on purpose; that's a separate, later dependency
+    the RBAC layer adds on top of this one (docs/modules/authentication.md #6)."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated.")
+
+    try:
+        payload = decode_token(credentials.credentials)
+    except AuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type.")
+
+    user = db.query(User).filter(User.id == int(payload["sub"]), User.is_active.is_(True)).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+
+    return user

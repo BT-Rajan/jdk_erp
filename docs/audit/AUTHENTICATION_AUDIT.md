@@ -209,33 +209,44 @@ audit trail.
 
 ## Action items for Phase 1 (port forward, don't rewrite)
 
-1. Fail loudly at startup if `JWT_SECRET_KEY` is unset or still the
-   default placeholder — never fall back to a guessable secret.
-2. Add login rate limiting / lockout (per-username and/or per-IP).
-3. Add a real authentication audit trail: login success, login failure,
-   logout, self-service password change — as first-class audit events,
-   not incidental diffs.
-4. Fix the two enumeration/timing leaks in `auth_service.login` (always
-   run password verification even for a nonexistent user; unify the
-   deactivated-account and invalid-credential messages).
-5. Enforce full password complexity (uppercase + number + special
-   character), not just minimum length, per the spec.
-6. Add `organisation_id` and `last_login` to the identity model, if the
-   product direction still calls for multi-tenancy — confirm this
-   decision explicitly before porting the schema, since it's a
-   foundational, hard-to-retrofit choice.
-7. Drop the unused `role` claim from the JWT, or start actually using it
-   consistently — don't leave dead authorization data in a bearer token.
-8. Move mobile token storage from `AsyncStorage` to OS secure storage.
-9. Bring mobile to parity on change-password (and decide whether
-   forgot-password is in scope at all, per the spec's "don't build what
-   isn't needed" rule).
-10. Replace the two independent frontend/mobile refresh-interceptor
-    implementations with one shared client, if both platforms are kept.
-11. Consolidate the three CLI bootstrap scripts to import the same
-    Pydantic validation schemas the API uses, instead of re-implementing
-    (and drifting from) them.
-12. Write the authentication test suite that doesn't currently exist:
-    login, refresh rotation, logout revocation, change/reset password —
-    both the happy paths and the access-boundary cases required by
-    Principle 14.
+Status as of the `backend/` implementation in this repo:
+
+1. ✅ Fail loudly at startup if `JWT_SECRET_KEY` is unset — no default
+   exists (`app/core/config.py`); confirmed by test (import fails with a
+   `pydantic.ValidationError` when the env var is missing).
+2. ✅ Login rate limiting / lockout — rolling-window lockout by username
+   (`app/services/auth_service.py`, backed by `auth_events`).
+3. ✅ Real authentication audit trail — `auth_events` table records login
+   success, login failure (with a `reason`), logout, and password change.
+4. ✅ Enumeration/timing leaks fixed — password verification always runs
+   (against a dummy hash when the user doesn't exist); unknown user,
+   wrong password and inactive account all return the identical generic
+   message.
+5. ✅ Full password complexity enforced (length, uppercase, digit, special
+   character) — `app/core/validation.py`, applied to `change-password`.
+6. ✅ `organisation_id` and `last_login_at` are on `users` from the start
+   (`app/models/user.py`). Multi-tenant *isolation* (scoping queries by
+   org) is not implemented yet — that's RBAC/data-access work, not
+   authentication's job.
+7. ✅ No `role` claim in the JWT at all — the access token carries only
+   `sub` (user id) and `org` (organisation id).
+8. ⏸ Mobile secure token storage — deferred, no mobile app exists in this
+   repo yet.
+9. ⏸ Mobile change-password parity — deferred, same reason.
+10. ⏸ Unify frontend/mobile refresh-interceptor logic — deferred until a
+    frontend exists to write one.
+11. N/A — there's one seed script (`scripts/seed_admin.py`), not three, so
+    there's nothing to consolidate. It uses `getpass` throughout.
+12. ✅ Test suite added — `backend/tests/test_auth.py` covers login
+    (success, wrong password, unknown user, inactive user, lockout),
+    refresh rotation and replay rejection, logout revocation, and
+    change-password (wrong current password, weak new password, and the
+    full success path including old-session/old-password invalidation.
+    12 tests, all passing.
+
+Also decided along the way, not in the original list: RBAC's `role`
+column and any user profile fields (department, phone, avatar, manager)
+are deliberately **not** on this `users` table — see
+[`../modules/authentication.md`](../modules/authentication.md)'s note on
+keeping identity and authorization schema-separated from day one, per
+finding #6 above.

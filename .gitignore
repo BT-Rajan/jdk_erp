@@ -21,3 +21,6 @@ build/
 
 # Logs
 *.log
+
+# Local SQLite dev/test databases
+*.db
