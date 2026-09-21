@@ -15,6 +15,11 @@ extended.
   read this before writing any code. It governs architecture, security,
   data integrity, UI consistency and review standards for the whole
   project.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — the phase-by-phase build order,
+  from foundation through hardening, and the dependency graph between
+  modules.
+- [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) — colour palette,
+  typography and status-colour conventions for the standard UI system.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to propose and land a change.
 
 ## Project layout
