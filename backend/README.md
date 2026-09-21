@@ -88,6 +88,28 @@ new.
   that document also describes — no business module exists yet to
   consult it, so it's specified as a contract for the first one that
   does, not built with no caller.
+- **Permissions / Access Scope** (`app/services/authorization_service.py`,
+  `app/api/permissions.py`) — the layer that ties the rest together.
+  `role_permissions` (role → module/action → scope, the org-wide
+  default) and `user_permissions` (per-user override, always wins) as
+  two small tables — not one polymorphic table with a nullable
+  role/user_id column, since a partial unique index isn't portable to
+  MySQL. `module_key`/`action` are free-form lowercase-snake-case
+  strings, not a fixed catalog: a future module registers one by writing
+  a permission row, not by editing a Python constant (unlike
+  `jdk_clean`'s hardcoded `PAGE_KEYS` tuple — see
+  [`../docs/audit/PERMISSIONS_AUDIT.md`](../docs/audit/PERMISSIONS_AUDIT.md)).
+  `get_effective_scope()`/`can()` are the `can(user, action, resource)`
+  concept from the spec, minus the resource argument (nothing to check
+  ownership against yet); `get_user_team_ids()` is the one reusable
+  "which teams can I see" building block. Management API
+  (`PUT`/`DELETE /api/permissions/roles/...`,
+  `PUT`/`DELETE /api/permissions/users/{id}/...`) is `require_admin`-gated
+  and org-scoped; `GET /api/permissions/me` is self-service. Matches
+  [`../docs/modules/permissions.md`](../docs/modules/permissions.md).
+  Deliberately **excludes** a generic resource-agnostic query-scoping
+  helper (`WHERE team_id IN (...)`) — no concrete table's columns exist
+  yet to validate one against; documented as a contract instead.
 
 Every gap the audit found has a fix in this implementation:
 

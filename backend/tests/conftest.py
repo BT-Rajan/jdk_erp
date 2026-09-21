@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.database import Base, SessionLocal, engine
+from app.core.roles import ADMIN
 from app.core.security import hash_password
 from app.main import app
 from app.models.organisation import Organisation
@@ -126,6 +127,23 @@ def sales_team(db_session, organisation):
     db_session.commit()
     db_session.refresh(team)
     return team
+
+
+@pytest.fixture()
+def admin_user(db_session, organisation):
+    user = User(
+        organisation_id=organisation.id,
+        role=ADMIN,
+        full_name="Admin Person",
+        email="admin@example.com",
+        username="admin_person",
+        password_hash=hash_password("Str0ng!Pass"),
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
 
 
 @pytest.fixture()

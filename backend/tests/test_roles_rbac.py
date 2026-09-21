@@ -4,28 +4,10 @@ uniqueness constraint."""
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.core.roles import ADMIN, TEAM_MEMBER
-from app.core.security import hash_password
+from app.core.roles import TEAM_MEMBER
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
-
-
-@pytest.fixture()
-def admin_user(db_session, organisation):
-    user = User(
-        organisation_id=organisation.id,
-        role=ADMIN,
-        full_name="Admin Person",
-        email="admin@example.com",
-        username="admin_person",
-        password_hash=hash_password("Str0ng!Pass"),
-        is_active=True,
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    return user
 
 
 @pytest.fixture()
