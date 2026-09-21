@@ -4,16 +4,18 @@
 #   bash install.sh
 #
 # Env overrides:
-#   BRANCH PORT HOST WORKERS APP_NAME HEALTH_TIMEOUT
+#   BRANCH PORT FRONTEND_PORT HOST WORKERS APP_NAME HEALTH_TIMEOUT
 #   DB_HOST DB_PORT DB_NAME DB_USER DB_PASS   MySQL/MariaDB settings, applied when backend/.env is first created
 #   USE_SQLITE=1                              keep the .env.example SQLite default instead of switching to MySQL
 set -Eeuo pipefail
 
 APP_NAME="${APP_NAME:-jdk_erp}"
+FRONTEND_APP_NAME="${FRONTEND_APP_NAME:-${APP_NAME}-frontend}"
 REPO_URL="${REPO_URL:-https://github.com/BT-Rajan/jdk_erp.git}"
 BRANCH="${BRANCH:-main}"
 HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8000}"
+PORT="${PORT:-8989}"
+FRONTEND_PORT="${FRONTEND_PORT:-7173}"
 WORKERS="${WORKERS:-1}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
 USE_SQLITE="${USE_SQLITE:-0}"
@@ -81,11 +83,22 @@ done
 "$VPY" -m pip install --quiet -r requirements.txt
 ok "Python dependencies installed"
 
-if [ -f "$APP_DIR/frontend/package.json" ]; then
-  ( cd "$APP_DIR/frontend"
+FRONTEND="$APP_DIR/frontend"
+HAS_FRONTEND=0
+FRONTEND_MODE=""  # "preview" (built, served via vite preview/serve) or "dev"
+if [ -f "$FRONTEND/package.json" ]; then
+  HAS_FRONTEND=1
+  script_exists() { node -e 'process.exit(((require("./package.json").scripts)||{})[process.argv[1]]?0:1)' "$1"; }
+  ( cd "$FRONTEND"
     if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi
-    if node -e 'process.exit(((require("./package.json").scripts)||{}).build?0:1)'; then npm run build; fi )
-  ok "Frontend built"
+    if script_exists build; then
+      npm run build
+      echo "FRONTEND_MODE=preview" > .install-sh-mode
+    else
+      echo "FRONTEND_MODE=dev" > .install-sh-mode
+    fi )
+  FRONTEND_MODE="$(cut -d= -f2 "$FRONTEND/.install-sh-mode")"; rm -f "$FRONTEND/.install-sh-mode"
+  ok "Frontend dependencies installed ($([ "$FRONTEND_MODE" = preview ] && echo built || echo "no build script — will run dev server"))"
 else
   warn "frontend/ has no package.json yet — skipping"
 fi
@@ -155,8 +168,14 @@ if url.get_backend_name() == "mysql":
 else:
     print(f"  {url.get_backend_name()} database — no server setup needed")
 PY
-"$VPY" -m alembic upgrade head
-ok "Migrations applied (alembic upgrade head)"
+BEFORE="$("$VPY" -m alembic current 2>&1 | tail -1)"
+UPGRADE_OUT="$("$VPY" -m alembic upgrade head 2>&1)" || { echo "$UPGRADE_OUT"; die "alembic upgrade head failed"; }
+if echo "$UPGRADE_OUT" | grep -q "Running upgrade"; then
+  echo "$UPGRADE_OUT" | grep "Running upgrade" | sed 's/^/  /'
+  ok "Migrations applied"
+else
+  ok "Migrations already up to date ($BEFORE) — nothing to run"
+fi
 
 USERS="$("$VPY" - <<'PY'
 from app.core.database import SessionLocal
@@ -182,8 +201,18 @@ step "6/7 Start with pm2"
 pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
 pm2 start "$VPY" --name "$APP_NAME" --cwd "$BACKEND" --interpreter none -- \
   -m uvicorn app.main:app --host "$HOST" --port "$PORT" --workers "$WORKERS"
-pm2 save --force >/dev/null
 ok "pm2 process '$APP_NAME' started on $HOST:$PORT"
+
+if [ "$HAS_FRONTEND" = "1" ]; then
+  pm2 delete "$FRONTEND_APP_NAME" >/dev/null 2>&1 || true
+  if [ "$FRONTEND_MODE" = "preview" ]; then
+    pm2 start npm --name "$FRONTEND_APP_NAME" --cwd "$FRONTEND" -- run preview -- --host "$HOST" --port "$FRONTEND_PORT" --strictPort
+  else
+    pm2 start npm --name "$FRONTEND_APP_NAME" --cwd "$FRONTEND" -- run dev -- --host "$HOST" --port "$FRONTEND_PORT" --strictPort
+  fi
+  ok "pm2 process '$FRONTEND_APP_NAME' started on $HOST:$FRONTEND_PORT ($FRONTEND_MODE)"
+fi
+pm2 save --force >/dev/null
 
 # ───────────────────────── 7. health check ─────────────────────────
 step "7/7 Health check"
@@ -195,9 +224,9 @@ pm2_state() {
       if(!p){console.log("missing");process.exit(1)}
       const e=p.pm2_env||{};
       console.log(e.status+" (restarts: "+(e.restart_time||0)+")");
-      process.exit(e.status==="online"&&(e.restart_time||0)<3?0:1);});' "$APP_NAME"
+      process.exit(e.status==="online"&&(e.restart_time||0)<3?0:1);});' "$1"
 }
-fail_logs() { pm2 logs "$APP_NAME" --lines 40 --nostream 2>&1 | tail -60 || true; }
+fail_logs() { pm2 logs "$1" --lines 40 --nostream 2>&1 | tail -60 || true; }
 
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:$PORT/health}"
 HEALTHY=""
@@ -210,11 +239,20 @@ if [ -z "$HEALTHY" ]; then fail_logs; die "No healthy response from $HEALTH_URL 
 ok "GET /health -> $body"
 
 sleep 2
-STATE="$(pm2_state)" || { fail_logs; die "pm2 process unhealthy: $STATE"; }
-ok "pm2: $STATE"
+STATE="$(pm2_state "$APP_NAME")" || { fail_logs "$APP_NAME"; die "pm2 process '$APP_NAME' unhealthy: $STATE"; }
+ok "pm2 ($APP_NAME): $STATE"
+
+if [ "$HAS_FRONTEND" = "1" ]; then
+  FSTATE="$(pm2_state "$FRONTEND_APP_NAME")" || { fail_logs "$FRONTEND_APP_NAME"; die "pm2 process '$FRONTEND_APP_NAME' unhealthy: $FSTATE"; }
+  ok "pm2 ($FRONTEND_APP_NAME): $FSTATE"
+  FCODE="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$FRONTEND_PORT/" 2>/dev/null || true)"
+  case "$FCODE" in 2*|3*) ok "Frontend responding on :$FRONTEND_PORT ($FCODE)" ;; *) warn "Frontend on :$FRONTEND_PORT returned $FCODE — check pm2 logs $FRONTEND_APP_NAME" ;; esac
+fi
 
 MIGR="$(cd "$BACKEND" && "$VPY" -m alembic current 2>&1 | tail -1)"
 case "$MIGR" in *"(head)"*) ok "DB schema at head: $MIGR" ;; *) die "DB schema not at head: $MIGR" ;; esac
 
-printf '\n\033[1;32mDeploy complete\033[0m  %s @ %s  ->  http://localhost:%s  (docs: /docs)\n' "$APP_NAME" "$(git -C "$APP_DIR" rev-parse --short HEAD)" "$PORT"
+printf '\n\033[1;32mDeploy complete\033[0m  %s @ %s\n' "$APP_NAME" "$(git -C "$APP_DIR" rev-parse --short HEAD)"
+printf '  Backend:  http://localhost:%s  (docs: /docs)\n' "$PORT"
+[ "$HAS_FRONTEND" = "1" ] && printf '  Frontend: http://localhost:%s\n' "$FRONTEND_PORT"
 echo "  Survive reboots (once):  pm2 startup   # then run the command it prints"
