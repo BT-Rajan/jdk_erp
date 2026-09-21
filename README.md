@@ -2,12 +2,13 @@
 
 A clean-slate rebuild of the JDK ERP system.
 
-This repository starts from a blank project. The previous implementation
-(`jdk_clean`) is kept only as a reference for business workflows — no code
-is carried over. Every module here is built against the rules in
-[`docs/ENGINEERING_PRINCIPLES.md`](docs/ENGINEERING_PRINCIPLES.md), which is
-the project-wide contract for how this codebase is designed, reviewed and
-extended.
+This repository starts from a blank project, built by auditing the
+previous implementation (`jdk_clean`) module by module — see
+[`docs/ROADMAP.md`](docs/ROADMAP.md) §Phase 0. Where a module already
+holds up, it's ported forward and hardened rather than rewritten; where it
+doesn't, it's rebuilt clean. Every module is built and reviewed against
+[`docs/ENGINEERING_PRINCIPLES.md`](docs/ENGINEERING_PRINCIPLES.md), the
+project-wide contract for how this codebase is designed.
 
 ## Start here
 
@@ -20,6 +21,10 @@ extended.
   modules.
 - [`docs/DESIGN_SYSTEM.md`](docs/DESIGN_SYSTEM.md) — colour palette,
   typography and status-colour conventions for the standard UI system.
+- [`docs/audit/`](docs/audit/) — Phase 0 audit findings per module, each
+  ending in a reuse-vs-rebuild verdict and an action-item list.
+- [`docs/modules/`](docs/modules/) — the definition/spec for each module,
+  written before implementation starts.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to propose and land a change.
 
 ## Project layout
