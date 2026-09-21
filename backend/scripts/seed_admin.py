@@ -46,7 +46,22 @@ def main() -> None:
 
         organisation = db.query(Organisation).filter(Organisation.name == org_name).first()
         if organisation is None:
-            organisation = Organisation(name=org_name)
+            code = input("Organisation code (short identifier, e.g. JDK): ").strip()
+            currency = input("Currency code (e.g. INR, USD): ").strip().upper()
+            timezone = input("Timezone [UTC]: ").strip() or "UTC"
+            contact_email = input("Contact email (optional): ").strip() or None
+            contact_phone = input("Contact phone (optional): ").strip() or None
+            address = input("Address (optional): ").strip() or None
+            organisation = Organisation(
+                name=org_name,
+                code=code,
+                currency=currency,
+                timezone=timezone,
+                contact_email=contact_email,
+                contact_phone=contact_phone,
+                address=address,
+                is_active=True,
+            )
             db.add(organisation)
             db.flush()
 

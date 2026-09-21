@@ -45,11 +45,36 @@ def client():
 
 @pytest.fixture()
 def organisation(db_session):
-    org = Organisation(name="Test Org")
+    org = Organisation(name="Test Org", code="TESTORG", currency="USD", timezone="UTC", is_active=True)
     db_session.add(org)
     db_session.commit()
     db_session.refresh(org)
     return org
+
+
+@pytest.fixture()
+def inactive_organisation(db_session):
+    org = Organisation(name="Inactive Org", code="INACTIVEORG", currency="USD", timezone="UTC", is_active=False)
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+    return org
+
+
+@pytest.fixture()
+def user_in_inactive_organisation(db_session, inactive_organisation):
+    user = User(
+        organisation_id=inactive_organisation.id,
+        full_name="Org Suspended Person",
+        email="suspended-org@example.com",
+        username="suspended_org_user",
+        password_hash=hash_password("Str0ng!Pass"),
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
 
 
 @pytest.fixture()

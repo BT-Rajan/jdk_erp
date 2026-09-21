@@ -12,6 +12,7 @@ from app.core.security import (
     verify_password,
 )
 from app.models.auth_event import AuthEvent, AuthEventType
+from app.models.organisation import Organisation
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.auth import TokenResponse
@@ -76,14 +77,18 @@ def login(db: Session, username: str, password: str, ip_address: str | None) -> 
     # so response time can't be used to distinguish "no such user" from
     # "wrong password" (docs/audit/AUTHENTICATION_AUDIT.md #4).
     password_ok = verify_password(password, user.password_hash if user else None)
+    organisation = db.query(Organisation).filter(Organisation.id == user.organisation_id).first() if user else None
+    organisation_active = organisation is not None and organisation.is_active
 
-    if user is None or not password_ok or not user.is_active:
+    if user is None or not password_ok or not user.is_active or not organisation_active:
         if user is None:
             reason = "unknown_user"
         elif not password_ok:
             reason = "bad_password"
-        else:
+        elif not user.is_active:
             reason = "inactive"
+        else:
+            reason = "organisation_inactive"
         _log_event(
             db,
             AuthEventType.LOGIN_FAILURE,
@@ -111,7 +116,12 @@ def refresh(db: Session, refresh_token: str) -> TokenResponse:
     if record is None or record.revoked or record.expires_at < datetime.utcnow():
         raise AuthError("Invalid refresh token.")
 
-    user = db.query(User).filter(User.id == int(payload["sub"]), User.is_active.is_(True)).first()
+    user = (
+        db.query(User)
+        .join(Organisation, Organisation.id == User.organisation_id)
+        .filter(User.id == int(payload["sub"]), User.is_active.is_(True), Organisation.is_active.is_(True))
+        .first()
+    )
     if user is None:
         raise AuthError("Invalid refresh token.")
 

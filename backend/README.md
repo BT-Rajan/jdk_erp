@@ -35,6 +35,18 @@ new.
   Deliberately **excludes** roles, permissions, and admin-initiated
   password reset — those belong to the RBAC/user-management layer, built
   next, on top of this one.
+- **Organisation** (`app/api/organisations.py`, `app/models/organisation.py`) —
+  the top-level data/access boundary: full organisation record (name,
+  code, contact, address, currency, timezone, active flag), `GET
+  /api/organisations/me`, and deactivation enforced in both login and
+  current-user resolution (an inactive organisation blocks new logins
+  *and* kills already-issued tokens on their next use). Matches
+  [`../docs/modules/organisation.md`](../docs/modules/organisation.md).
+  Deliberately **excludes** an admin API to create/edit/deactivate
+  organisations — that needs a Super Admin role RBAC hasn't defined yet.
+  Every future organisation-owned table (customers, products, ...) mixes
+  in `OrganisationScopedMixin` (`app/models/mixins.py`) instead of
+  redeclaring the FK + index.
 
 Every gap the audit found has a fix in this implementation:
 

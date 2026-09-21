@@ -1,13 +1,13 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.models.mixins import TimestampMixin
+from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
 
-class User(Base, TimestampMixin):
+class User(Base, TimestampMixin, OrganisationScopedMixin):
     """Pure identity, per docs/modules/authentication.md #2 -- exactly the
     fields authentication needs and nothing else. No role, department or
     profile fields here: those belong to the RBAC/user-management layer
@@ -17,7 +17,6 @@ class User(Base, TimestampMixin):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    organisation_id: Mapped[int] = mapped_column(ForeignKey("organisations.id"), nullable=False, index=True)
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
