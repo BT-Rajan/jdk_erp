@@ -6,7 +6,10 @@ Usage:
 Entering an organisation name that already exists adds a new user to that
 organisation instead of creating a second one -- this is also how you add
 more users today, since there's no user-management API yet (RBAC hasn't
-defined who's allowed to call one; see docs/modules/users.md).
+defined who's allowed to call one; see docs/modules/users.md). The same
+applies to the optional team name: an existing team is reused, a new name
+creates one. There's no team-management API yet either -- see
+docs/modules/teams.md.
 
 The password is always prompted interactively -- never accepted as a CLI
 argument -- so it never lands in shell history or a process listing.
@@ -27,6 +30,7 @@ from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.core.validation import validate_password_complexity
 from app.models.organisation import Organisation
+from app.models.team import Team
 from app.models.user import User
 
 
@@ -72,8 +76,23 @@ def main() -> None:
             db.add(organisation)
             db.flush()
 
+        team_name = input("Team name (optional, press Enter to skip): ").strip()
+        team_id = None
+        if team_name:
+            team = (
+                db.query(Team)
+                .filter(Team.organisation_id == organisation.id, Team.name == team_name)
+                .first()
+            )
+            if team is None:
+                team = Team(organisation_id=organisation.id, name=team_name, is_active=True)
+                db.add(team)
+                db.flush()
+            team_id = team.id
+
         user = User(
             organisation_id=organisation.id,
+            team_id=team_id,
             full_name=full_name,
             email=email,
             username=username,

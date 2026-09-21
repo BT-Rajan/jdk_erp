@@ -60,6 +60,21 @@ new.
   record itself, which the spec explicitly forbids. `UserOut`
   (`app/schemas/user.py`) is now the one public-safe user shape, shared
   between `/api/auth/me` and the directory endpoints.
+- **Teams** (`app/api/teams.py`, `app/models/team.py`) — organisational
+  grouping only, no permission data: `GET /api/teams`, `GET
+  /api/teams/{id}`, and `GET /api/users?team_id=...` to view a team's
+  members (reusing the existing directory endpoint rather than adding a
+  new one). Team name and code are unique *within* an organisation (not
+  globally — teams aren't a login identifier, so there's no
+  disambiguation problem the way there was for usernames). Matches
+  [`../docs/modules/teams.md`](../docs/modules/teams.md). Deliberately
+  **excludes** create/edit/deactivate/assign-user endpoints, same
+  reasoning as Organisation and Users. Also deliberately excludes two
+  things `jdk_clean`'s equivalent (`Department`) had: a
+  department-to-page permission matrix (that's RBAC's job, not a team's)
+  and a `manager_id` reporting-line column (a manager's scope should be
+  `role = Manager` + `team`, not a separate hierarchy) — see
+  [`../docs/audit/TEAMS_AUDIT.md`](../docs/audit/TEAMS_AUDIT.md).
 
 Every gap the audit found has a fix in this implementation:
 

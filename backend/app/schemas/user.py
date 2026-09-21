@@ -18,3 +18,4 @@ class UserOut(BaseModel):
     username: str
     is_active: bool
     last_login_at: datetime | None
+    team_id: int | None

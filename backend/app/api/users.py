@@ -14,6 +14,7 @@ def list_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     include_inactive: bool = Query(False),
+    team_id: int | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[User]:
@@ -21,10 +22,17 @@ def list_users(
     boundary would fail docs/modules/organisation.md #3 and
     docs/modules/users.md acceptance criterion 13. No role check yet
     (RBAC doesn't exist): this is read-only and never exposes
-    password_hash, so it can't be used to escalate privilege."""
+    password_hash, so it can't be used to escalate privilege.
+
+    team_id doubles as "view team members" (docs/modules/teams.md #6)
+    without a separate endpoint -- a team_id from another organisation
+    just yields an empty list, since the organisation_id filter below
+    still applies."""
     query = db.query(User).filter(User.organisation_id == current_user.organisation_id)
     if not include_inactive:
         query = query.filter(User.is_active.is_(True))
+    if team_id is not None:
+        query = query.filter(User.team_id == team_id)
     return query.order_by(User.id).offset(skip).limit(limit).all()
 
 
