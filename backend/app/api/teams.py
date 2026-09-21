@@ -1,13 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.models.team import Team
 from app.models.user import User
-from app.schemas.team import TeamOut
+from app.models.user_team import UserTeam
+from app.schemas.team import TeamMemberIn, TeamOut
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
+
+
+def _get_team_in_org(db: Session, team_id: int, organisation_id: int) -> Team:
+    team = db.query(Team).filter(Team.id == team_id, Team.organisation_id == organisation_id).first()
+    if team is None:
+        # 404 whether the id doesn't exist at all or belongs to another
+        # organisation -- never confirm another organisation's team id.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
+    return team
 
 
 @router.get("", response_model=list[TeamOut])
@@ -27,9 +37,50 @@ def list_teams(
 
 @router.get("/{team_id}", response_model=TeamOut)
 def get_team(team_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Team:
-    team = db.query(Team).filter(Team.id == team_id, Team.organisation_id == current_user.organisation_id).first()
-    if team is None:
-        # 404 whether the id doesn't exist at all or belongs to another
-        # organisation -- never confirm another organisation's team id.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
-    return team
+    return _get_team_in_org(db, team_id, current_user.organisation_id)
+
+
+@router.post("/{team_id}/members", status_code=status.HTTP_204_NO_CONTENT)
+def add_team_member(
+    team_id: int,
+    payload: TeamMemberIn,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """Admin-gated (docs/modules/roles_rbac.md #4): a user cannot add
+    themselves, or anyone else, to a team. Both the team and the user
+    must belong to the admin's own organisation (docs/modules/teams.md #9)."""
+    team = _get_team_in_org(db, team_id, admin.organisation_id)
+    if not team.is_active:
+        # docs/modules/teams.md #7 acceptance criterion: an inactive team
+        # cannot receive new users.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot add a member to an inactive team.")
+
+    user = db.query(User).filter(User.id == payload.user_id, User.organisation_id == admin.organisation_id).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    existing = db.query(UserTeam).filter(UserTeam.user_id == user.id, UserTeam.team_id == team.id).first()
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User is already a member of this team.")
+
+    db.add(UserTeam(user_id=user.id, team_id=team.id))
+    db.commit()
+
+
+@router.delete("/{team_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_team_member(
+    team_id: int,
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """Admin-gated, same organisation-boundary check as adding a member."""
+    team = _get_team_in_org(db, team_id, admin.organisation_id)
+
+    membership = db.query(UserTeam).filter(UserTeam.user_id == user_id, UserTeam.team_id == team.id).first()
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found.")
+
+    db.delete(membership)
+    db.commit()

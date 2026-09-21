@@ -7,7 +7,7 @@ from app.core.errors import AuthError
 from app.models.user import User
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, RefreshRequest, TokenResponse
 from app.schemas.user import UserOut
-from app.services import auth_service
+from app.services import auth_service, user_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -35,8 +35,9 @@ def logout(payload: RefreshRequest, db: Session = Depends(get_db)) -> None:
 
 
 @router.get("/me", response_model=UserOut)
-def me(current_user: User = Depends(get_current_user)) -> User:
-    return current_user
+def me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> UserOut:
+    team_ids = user_service.team_ids_for_users(db, [current_user.id])[current_user.id]
+    return user_service.to_user_out(current_user, team_ids)
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)

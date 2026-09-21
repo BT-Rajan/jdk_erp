@@ -5,33 +5,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.core.security import hash_password
-from app.models.organisation import Organisation
 from app.models.user import User
-
-
-@pytest.fixture()
-def other_organisation(db_session):
-    org = Organisation(name="Other Org", code="OTHERORG", currency="USD", timezone="UTC", is_active=True)
-    db_session.add(org)
-    db_session.commit()
-    db_session.refresh(org)
-    return org
-
-
-@pytest.fixture()
-def other_org_user(db_session, other_organisation):
-    user = User(
-        organisation_id=other_organisation.id,
-        full_name="Grace Hopper",
-        email="grace@example.com",
-        username="grace",
-        password_hash=hash_password("Str0ng!Pass"),
-        is_active=True,
-    )
-    db_session.add(user)
-    db_session.commit()
-    db_session.refresh(user)
-    return user
 
 
 def _login_headers(client, username="ada", password="Str0ng!Pass"):

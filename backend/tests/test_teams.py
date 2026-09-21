@@ -1,31 +1,14 @@
 """Tests for docs/modules/teams.md acceptance criteria implemented at this
 stage: organisation-scoped teams, per-organisation name/code uniqueness,
-and using team_id to view team members via the existing users directory."""
+and using team_id to view team members via the existing users directory.
+Role/RBAC-gated team membership tests live in test_roles_rbac.py."""
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.core.security import hash_password
-from app.models.organisation import Organisation
 from app.models.team import Team
 from app.models.user import User
-
-
-@pytest.fixture()
-def sales_team(db_session, organisation):
-    team = Team(organisation_id=organisation.id, name="Sales", code="SALES", is_active=True)
-    db_session.add(team)
-    db_session.commit()
-    db_session.refresh(team)
-    return team
-
-
-@pytest.fixture()
-def other_organisation(db_session):
-    org = Organisation(name="Other Org", code="OTHERORG", currency="USD", timezone="UTC", is_active=True)
-    db_session.add(org)
-    db_session.commit()
-    db_session.refresh(org)
-    return org
+from app.models.user_team import UserTeam
 
 
 def _login_headers(client, username="ada", password="Str0ng!Pass"):
@@ -120,7 +103,6 @@ def test_team_code_unique_within_organisation_when_provided(db_session, organisa
 def test_users_endpoint_filters_by_team_id_to_view_team_members(client, db_session, organisation, sales_team):
     ada = User(
         organisation_id=organisation.id,
-        team_id=sales_team.id,
         full_name="Ada Lovelace",
         email="ada@example.com",
         username="ada",
@@ -129,7 +111,6 @@ def test_users_endpoint_filters_by_team_id_to_view_team_members(client, db_sessi
     )
     bob = User(
         organisation_id=organisation.id,
-        team_id=None,
         full_name="Bob NoTeam",
         email="bob@example.com",
         username="bob",
@@ -137,6 +118,8 @@ def test_users_endpoint_filters_by_team_id_to_view_team_members(client, db_sessi
         is_active=True,
     )
     db_session.add_all([ada, bob])
+    db_session.flush()
+    db_session.add(UserTeam(user_id=ada.id, team_id=sales_team.id))
     db_session.commit()
 
     headers = _login_headers(client)
@@ -162,7 +145,32 @@ def test_users_endpoint_team_filter_from_other_organisation_yields_no_leak(
     assert response.json() == []
 
 
-def test_user_without_team_has_null_team_id(client, active_user):
+def test_user_without_team_has_empty_team_ids(client, active_user):
     headers = _login_headers(client)
     response = client.get("/api/auth/me", headers=headers)
-    assert response.json()["team_id"] is None
+    assert response.json()["team_ids"] == []
+
+
+def test_user_can_belong_to_multiple_teams(client, db_session, organisation, sales_team):
+    """docs/modules/roles_rbac.md #1 -- the corrected many-to-many model."""
+    accounts_team = Team(organisation_id=organisation.id, name="Accounts", is_active=True)
+    db_session.add(accounts_team)
+    db_session.flush()
+
+    ravi = User(
+        organisation_id=organisation.id,
+        full_name="Ravi",
+        email="ravi@example.com",
+        username="ravi",
+        password_hash=hash_password("Str0ng!Pass"),
+        is_active=True,
+    )
+    db_session.add(ravi)
+    db_session.flush()
+    db_session.add(UserTeam(user_id=ravi.id, team_id=sales_team.id))
+    db_session.add(UserTeam(user_id=ravi.id, team_id=accounts_team.id))
+    db_session.commit()
+
+    headers = _login_headers(client, username="ravi")
+    response = client.get("/api/auth/me", headers=headers)
+    assert sorted(response.json()["team_ids"]) == sorted([sales_team.id, accounts_team.id])

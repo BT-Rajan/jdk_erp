@@ -19,6 +19,7 @@ from app.core.database import Base, SessionLocal, engine
 from app.core.security import hash_password
 from app.main import app
 from app.models.organisation import Organisation
+from app.models.team import Team
 from app.models.user import User
 
 
@@ -91,6 +92,40 @@ def active_user(db_session, organisation):
     db_session.commit()
     db_session.refresh(user)
     return user
+
+
+@pytest.fixture()
+def other_organisation(db_session):
+    org = Organisation(name="Other Org", code="OTHERORG", currency="USD", timezone="UTC", is_active=True)
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+    return org
+
+
+@pytest.fixture()
+def other_org_user(db_session, other_organisation):
+    user = User(
+        organisation_id=other_organisation.id,
+        full_name="Grace Hopper",
+        email="grace@example.com",
+        username="grace",
+        password_hash=hash_password("Str0ng!Pass"),
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture()
+def sales_team(db_session, organisation):
+    team = Team(organisation_id=organisation.id, name="Sales", code="SALES", is_active=True)
+    db_session.add(team)
+    db_session.commit()
+    db_session.refresh(team)
+    return team
 
 
 @pytest.fixture()

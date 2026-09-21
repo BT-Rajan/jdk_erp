@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.errors import AuthError
+from app.core.roles import ADMIN_ROLES
 from app.core.security import decode_token
 from app.models.organisation import Organisation
 from app.models.user import User
@@ -43,3 +44,13 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
 
     return user
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """The RBAC layer's own dependency, composed on top of get_current_user
+    rather than fused into it (docs/modules/authentication.md #6). Gates
+    team-membership and role-change endpoints
+    (docs/modules/roles_rbac.md #4)."""
+    if current_user.role not in ADMIN_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required.")
+    return current_user

@@ -6,6 +6,14 @@ and [`users.md`](users.md), per [`../ROADMAP.md`](../ROADMAP.md) Phase 1.
 Organisational grouping and, later, a manager's visibility scope — not
 another permission system.
 
+> **Revision:** §3 originally read "one user → one team." That's
+> superseded — see [`roles_rbac.md`](roles_rbac.md), which corrects it to
+> a many-to-many membership (a user can belong to several teams; no
+> "primary team" concept). §3, §10, and §11 below are updated to match;
+> the rest of this document (§1, §2, §4-9, §12) is unaffected, since the
+> correction is about *how many* teams a user belongs to, not what a team
+> is or what it's for.
+
 ## 1. Purpose
 
 A Team/Department answers: which part of the organisation does this user
@@ -32,7 +40,9 @@ needed.
 
 ## 3. User relationship
 
-**One user → one team.** A team can have many users.
+**A user may belong to multiple teams.** A team can have many users; a
+user can have many teams. No "primary team" — see
+[`roles_rbac.md`](roles_rbac.md) for the full reasoning.
 
 ```text
 Sales
@@ -43,7 +53,8 @@ Sales
 ```
 
 Role and team remain separate concepts — a person can be `Manager +
-Sales` or `Team Member + Sales`.
+Sales` or `Team Member + Sales`, and can hold that role across more than
+one team at once (e.g. `Team Member` in both `Sales` and `Accounts`).
 
 ## 4. Team manager
 
@@ -108,19 +119,23 @@ teams
 
 users
     organisation_id
+
+user_teams
+    user_id
     team_id
 ```
 
-Index `organisation_id`, `team_id`, and active/status. Avoid a
-many-to-many team-membership table unless the business actually needs
-one.
+A proper many-to-many `user_teams` table with a unique constraint on
+`(user_id, team_id)` — see [`roles_rbac.md`](roles_rbac.md) §Database.
+Index `organisation_id` on `teams`, and both `user_id`/`team_id` on
+`user_teams`.
 
 ## 11. Acceptance tests
 
 1. Admin creates a team.
 2. Admin assigns users to the team.
-3. Each user belongs to one team.
-4. User can be moved to another team.
+3. A user can belong to multiple teams at once.
+4. A user's team memberships can be changed (added/removed) by an admin.
 5. Team membership changes immediately affect current access scope.
 6. Historical records remain unchanged.
 7. Inactive team cannot receive new users.
@@ -188,12 +203,18 @@ touches `team_id` at all, and no parent-team column exists.
   login-disambiguation problem, so per-organisation uniqueness is exactly
   what §2 calls for with no trade-off needed), code unique within the
   organisation when provided.
-- `users.team_id` — nullable (a user may not have a team yet), so
-  existing users and the acceptance criteria that don't depend on
-  assignment still work.
 - `GET /api/teams`, `GET /api/teams/{id}` — organisation-scoped, same
   shape and same cross-organisation 404 behaviour as the Users directory.
 - `GET /api/users?team_id=...` — reuses the existing directory endpoint
   (Principle 5: reuse before creating) rather than adding a separate
   "team members" endpoint, satisfying acceptance criterion 6's "view team
   members" without new surface area.
+
+**Corrected in the RBAC phase, before that phase's own work started**
+(see [`roles_rbac.md`](roles_rbac.md)): the original implementation gave
+`User` a single nullable `team_id` column (one team per user). That was
+replaced by a `user_teams` many-to-many table before Role/RBAC was built
+on top of it, since building RBAC against the one-team assumption would
+have meant redoing it immediately after. The membership-management
+endpoints (add/remove a user from a team, change role) are implemented in
+the RBAC phase, since they need the admin-role gate that phase defines.

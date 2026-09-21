@@ -1,21 +1,23 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
+from sqlalchemy import Boolean, DateTime, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.roles import TEAM_MEMBER
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
 
 class User(Base, TimestampMixin, OrganisationScopedMixin):
     """Pure identity, per docs/modules/authentication.md #2 -- exactly the
-    fields authentication needs and nothing else. No role or profile
-    fields here: those belong to the RBAC/user-management layer built
-    next, on top of this table, not inside it (see
-    docs/audit/AUTHENTICATION_AUDIT.md #6-7 for why that boundary
-    matters). team_id is the one exception -- docs/modules/users.md #2
-    lists it as part of the core identity record, and docs/modules/teams.md
-    #3 fixes it at one user -> one team, not a permission relationship."""
+    fields authentication needs and nothing else. Team membership is NOT
+    a column here -- docs/modules/roles_rbac.md #1 makes it many-to-many
+    (see app/models/user_team.py), replacing an earlier team_id column
+    that assumed one team per user. role is a plain string, not a FK into
+    a roles table -- docs/modules/roles_rbac.md's implementation section
+    on why a fixed four-value set doesn't need one. No permission data of
+    any kind lives on this table (docs/audit/AUTHENTICATION_AUDIT.md #6-7,
+    docs/modules/users.md #5)."""
 
     __tablename__ = "users"
     __table_args__ = (
@@ -31,8 +33,4 @@ class User(Base, TimestampMixin, OrganisationScopedMixin):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    # Nullable -- a user may not be assigned to a team yet (docs/modules/teams.md
-    # #3). No cross-organisation FK risk: assignment only ever happens
-    # through app code that already scopes the team lookup to the user's
-    # own organisation (see app/api/users.py, scripts/seed_admin.py).
-    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id"), nullable=True, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default=TEAM_MEMBER)

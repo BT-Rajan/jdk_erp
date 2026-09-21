@@ -5,11 +5,17 @@ Usage:
 
 Entering an organisation name that already exists adds a new user to that
 organisation instead of creating a second one -- this is also how you add
-more users today, since there's no user-management API yet (RBAC hasn't
-defined who's allowed to call one; see docs/modules/users.md). The same
-applies to the optional team name: an existing team is reused, a new name
-creates one. There's no team-management API yet either -- see
-docs/modules/teams.md.
+more users today, since there's no full user-creation API yet (only
+role-change and team-membership are RBAC-gated so far; see
+docs/modules/roles_rbac.md). The same applies to team names: an existing
+team is reused, a new name creates one, and you can enter several
+(comma-separated) since team membership is many-to-many
+(docs/modules/roles_rbac.md #1).
+
+The first user created for a brand-new organisation is made 'admin' of
+it automatically -- otherwise nobody could ever manage that organisation's
+teams or users afterward. Every other user defaults to 'team_member',
+overridable at the prompt.
 
 The password is always prompted interactively -- never accepted as a CLI
 argument -- so it never lands in shell history or a process listing.
@@ -27,11 +33,13 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from sqlalchemy.exc import IntegrityError
 
 from app.core.database import SessionLocal
+from app.core.roles import ADMIN, TEAM_MEMBER, VALID_ROLES
 from app.core.security import hash_password
 from app.core.validation import validate_password_complexity
 from app.models.organisation import Organisation
 from app.models.team import Team
 from app.models.user import User
+from app.models.user_team import UserTeam
 
 
 def main() -> None:
@@ -56,6 +64,7 @@ def main() -> None:
             break
 
         organisation = db.query(Organisation).filter(Organisation.name == org_name).first()
+        is_new_organisation = organisation is None
         if organisation is None:
             code = input("Organisation code (short identifier, e.g. JDK): ").strip()
             currency = input("Currency code (e.g. INR, USD): ").strip().upper()
@@ -76,23 +85,33 @@ def main() -> None:
             db.add(organisation)
             db.flush()
 
-        team_name = input("Team name (optional, press Enter to skip): ").strip()
-        team_id = None
-        if team_name:
-            team = (
-                db.query(Team)
-                .filter(Team.organisation_id == organisation.id, Team.name == team_name)
-                .first()
-            )
+        if is_new_organisation:
+            role = ADMIN
+            print(f"Role: {role} (first user of a new organisation)")
+        else:
+            while True:
+                role = input(f"Role {sorted(VALID_ROLES)} [{TEAM_MEMBER}]: ").strip() or TEAM_MEMBER
+                if role in VALID_ROLES:
+                    break
+                print(f"Role must be one of {sorted(VALID_ROLES)}.")
+
+        team_names = [
+            name.strip()
+            for name in input("Team name(s), comma-separated (optional, press Enter to skip): ").split(",")
+            if name.strip()
+        ]
+        teams = []
+        for team_name in team_names:
+            team = db.query(Team).filter(Team.organisation_id == organisation.id, Team.name == team_name).first()
             if team is None:
                 team = Team(organisation_id=organisation.id, name=team_name, is_active=True)
                 db.add(team)
                 db.flush()
-            team_id = team.id
+            teams.append(team)
 
         user = User(
             organisation_id=organisation.id,
-            team_id=team_id,
+            role=role,
             full_name=full_name,
             email=email,
             username=username,
@@ -101,12 +120,18 @@ def main() -> None:
         )
         db.add(user)
         try:
-            db.commit()
+            db.flush()
         except IntegrityError:
             db.rollback()
             print(f"A user with email '{email}' or username '{username}' already exists.")
             return
-        print(f"Created user '{username}' in organisation '{organisation.name}'.")
+
+        for team in teams:
+            db.add(UserTeam(user_id=user.id, team_id=team.id))
+
+        db.commit()
+        team_summary = ", ".join(t.name for t in teams) or "no team"
+        print(f"Created user '{username}' ({role}) in organisation '{organisation.name}' -- {team_summary}.")
     finally:
         db.close()
 

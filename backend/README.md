@@ -48,18 +48,17 @@ new.
   in `OrganisationScopedMixin` (`app/models/mixins.py`) instead of
   redeclaring the FK + index.
 - **Users** (`app/api/users.py`) — an organisation-scoped user directory:
-  `GET /api/users` (paginated, active-only by default) and `GET
-  /api/users/{id}`, both scoped to the caller's own organisation (a
-  cross-organisation lookup returns 404, never confirming another
-  organisation's user exists). Matches
-  [`../docs/modules/users.md`](../docs/modules/users.md). Deliberately
-  **excludes** create/edit/deactivate/assign-role endpoints — same reason
-  as organisation's admin API: they need an "authorised administrator,"
-  which only RBAC can define, and gating them with anything less (e.g. an
-  `is_admin` flag on `User`) would put permission logic on the User
-  record itself, which the spec explicitly forbids. `UserOut`
-  (`app/schemas/user.py`) is now the one public-safe user shape, shared
-  between `/api/auth/me` and the directory endpoints.
+  `GET /api/users` (paginated, active-only by default, filterable by
+  `team_id`) and `GET /api/users/{id}`, both scoped to the caller's own
+  organisation (a cross-organisation lookup returns 404, never confirming
+  another organisation's user exists). Matches
+  [`../docs/modules/users.md`](../docs/modules/users.md). Still
+  **excludes** create/edit/deactivate — those need a fuller "authorised
+  administrator" story than the role gate RBAC adds below covers; only
+  `PATCH /api/users/{id}/role` (admin-gated) is built, since that's what
+  the RBAC phase explicitly asked for. `UserOut` (`app/schemas/user.py`)
+  is the one public-safe user shape, shared between `/api/auth/me` and
+  the directory endpoints, carrying `role` and `team_ids`.
 - **Teams** (`app/api/teams.py`, `app/models/team.py`) — organisational
   grouping only, no permission data: `GET /api/teams`, `GET
   /api/teams/{id}`, and `GET /api/users?team_id=...` to view a team's
@@ -67,14 +66,28 @@ new.
   new one). Team name and code are unique *within* an organisation (not
   globally — teams aren't a login identifier, so there's no
   disambiguation problem the way there was for usernames). Matches
-  [`../docs/modules/teams.md`](../docs/modules/teams.md). Deliberately
-  **excludes** create/edit/deactivate/assign-user endpoints, same
-  reasoning as Organisation and Users. Also deliberately excludes two
-  things `jdk_clean`'s equivalent (`Department`) had: a
-  department-to-page permission matrix (that's RBAC's job, not a team's)
-  and a `manager_id` reporting-line column (a manager's scope should be
-  `role = Manager` + `team`, not a separate hierarchy) — see
-  [`../docs/audit/TEAMS_AUDIT.md`](../docs/audit/TEAMS_AUDIT.md).
+  [`../docs/modules/teams.md`](../docs/modules/teams.md). Still
+  **excludes** create/edit/deactivate for the team itself. Also
+  deliberately excludes two things `jdk_clean`'s equivalent
+  (`Department`) had: a department-to-page permission matrix (that's
+  RBAC's job, not a team's) and a `manager_id` reporting-line column (a
+  manager's scope should be `role = Manager` + `team`, not a separate
+  hierarchy) — see [`../docs/audit/TEAMS_AUDIT.md`](../docs/audit/TEAMS_AUDIT.md).
+- **Roles & RBAC** (`app/core/roles.py`, `app/models/user_team.py`) —
+  `User.role` (`super_admin`/`admin`/`manager`/`team_member`, a plain
+  column, not a `roles` table — a small fixed set, not organisation
+  configuration), and team membership corrected to many-to-many
+  (`user_teams`, replacing the earlier one-`team_id`-column design)
+  before any role-gated endpoint was built against it. `POST
+  /api/teams/{team_id}/members`, `DELETE
+  /api/teams/{team_id}/members/{user_id}`, and `PATCH
+  /api/users/{user_id}/role` are gated by `require_admin`
+  (`app/api/deps.py`) and re-check the organisation boundary. Matches
+  [`../docs/modules/roles_rbac.md`](../docs/modules/roles_rbac.md).
+  Deliberately **excludes** the `OWN/TEAM/ALL` module-permission engine
+  that document also describes — no business module exists yet to
+  consult it, so it's specified as a contract for the first one that
+  does, not built with no caller.
 
 Every gap the audit found has a fix in this implementation:
 

@@ -10,3 +10,7 @@ class TeamOut(BaseModel):
     code: str | None
     description: str | None
     is_active: bool
+
+
+class TeamMemberIn(BaseModel):
+    user_id: int

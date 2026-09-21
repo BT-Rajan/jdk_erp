@@ -5,6 +5,11 @@ Third foundation layer, after [`authentication.md`](authentication.md) and
 Phase 1. The User record is the central identity — it does not contain
 role, permission, or team-hierarchy logic itself.
 
+> **Revision:** §5 originally paired one Role with one Team. Team
+> membership is now many-to-many — see
+> [`roles_rbac.md`](roles_rbac.md). Role stays singular (one role per
+> user); only the team side of §5's diagram changes.
+
 ## 1. Purpose
 
 A User represents a person who operates JDK within an organisation. The
@@ -30,7 +35,7 @@ Kept small:
 - Password hash
 - Active/inactive status
 - Role
-- Team/department
+- Team/department membership(s)
 - Created at
 - Updated at
 - Last login
@@ -63,12 +68,12 @@ and a valid organisation relationship.
 ```text
 User
  ├── one Role
- └── one Team / Department
+ └── one or more Teams / Departments
 ```
 
-No competing roles or nested team memberships unless a genuine
-requirement emerges. Role and team determine access later, through RBAC.
-**Users themselves do not contain permission logic.**
+No competing roles unless a genuine requirement emerges. Role and team
+determine access later, through RBAC. **Users themselves do not contain
+permission logic.**
 
 ## 6. Changing users
 
@@ -108,7 +113,7 @@ team, and role.
 1. Admin creates a user.
 2. User belongs to exactly one organisation.
 3. User has one primary role.
-4. User has one team/department.
+4. User can belong to multiple teams/departments.
 5. Duplicate login identifier is rejected.
 6. Invalid team/role assignment is rejected.
 7. User can be activated/deactivated.
@@ -144,24 +149,22 @@ identity (§2, minus role/team) was already built while implementing
 authentication, so this phase adds what's genuinely new: an
 organisation-scoped user directory and the indexing §9 asks for.
 
-**Deferred to the layers this spec itself says come next**, and why:
+**Deferred at the time this module was first built**, since resolved (see
+[`roles_rbac.md`](roles_rbac.md)):
 
-- **No `role`/`department` columns yet.** They'd be foreign keys into
-  tables (`roles`, `departments`) that don't exist until the Team/RBAC
-  phases. A nullable column pointing at nothing isn't a real field —
-  it's added in the same migration that creates what it points to.
-- **No admin API to create/edit/deactivate/assign-role users.** §4/§6
-  require an "authorised administrator," which only RBAC can define.
-  Same reasoning as organisation's deferred admin API (see
-  [`ORGANISATION_AUDIT.md`](../audit/ORGANISATION_AUDIT.md)) — shipping
-  a write endpoint with no real authorization check would violate
-  server-side authority (Principle 3) and directly contradicts §5's
-  instruction that Users must not contain permission logic: gating it
-  with anything short of real RBAC (e.g. an `is_admin` flag on User)
-  would be adding exactly the permission logic this module is told not
-  to hold. `scripts/seed_admin.py` remains the only way to create a user
-  until then; acceptance criteria 1, 3, 4, 6, 9, 10, 11 are consequently
-  deferred too.
+- `role` and team membership were deliberately absent from `User` until
+  RBAC defined what a role actually is and how membership works. Both
+  are now implemented: `role` as a column on `User`, team membership as
+  the `user_teams` table `roles_rbac.md` calls for (not a `team_id`
+  column — see that document for why one-user-many-teams).
+- The admin API to create/edit/deactivate a user is still **not** fully
+  built — only the role-change and team-membership pieces the RBAC phase
+  explicitly asked for are (see `roles_rbac.md`'s implementation
+  section). Creating a brand-new user and activating/deactivating one
+  still go through `scripts/seed_admin.py` only; acceptance criteria 1
+  and 7 remain deferred for that reason. Criteria 3, 4, 6, 9, 10, 12 are
+  now implemented and tested; 11 stays deferred since no business record
+  yet exists to test "unchanged after a role/team change" against.
 - **Login identifier uniqueness stays global, not per-organisation.**
   §4 and Organisation §8 both call for uniqueness scoped to the
   organisation. That was deliberately not implemented: today's login
@@ -191,4 +194,11 @@ Authentication) already exist:
   it, so nothing is lost for a plain organisation filter either.
 - `UserOut`, the one public-safe representation of a user, now shared
   between `GET /api/auth/me` and the new directory endpoints instead of
-  each defining its own shape.
+  each defining its own shape. Updated in the RBAC phase to carry `role`
+  and `team_ids` (see [`roles_rbac.md`](roles_rbac.md)) alongside the
+  original identity fields — still never `password_hash`.
+- `GET /api/users` now also filters by `team_id`, still read but no
+  longer restricted to "there's no role system yet": the mutating
+  operations RBAC adds (role change, team membership) are gated by role;
+  the read directory stays open to any authenticated organisation member,
+  unchanged.
