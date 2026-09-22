@@ -181,7 +181,7 @@ if url.get_backend_name() == "mysql":
 else:
     print(f"  {url.get_backend_name()} database — no server setup needed")
 PY
-BEFORE="$("$VPY" -m alembic current 2>&1 | tail -1)"
+BEFORE="$("$VPY" -m alembic current 2>&1 | tail -1)" || true
 UPGRADE_OUT="$("$VPY" -m alembic upgrade head 2>&1)" || { echo "$UPGRADE_OUT"; die "alembic upgrade head failed"; }
 if echo "$UPGRADE_OUT" | grep -q "Running upgrade"; then
   echo "$UPGRADE_OUT" | grep "Running upgrade" | sed 's/^/  /'
