@@ -1,4 +1,5 @@
 from app.models.audit_event import AuditEvent
+from app.models.file import FileRecord
 from app.models.organisation import Organisation
 from app.models.refresh_token import RefreshToken
 from app.models.role_permission import RolePermission
@@ -16,4 +17,5 @@ __all__ = [
     "UserPermission",
     "RefreshToken",
     "AuditEvent",
+    "FileRecord",
 ]

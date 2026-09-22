@@ -57,6 +57,21 @@ class Settings(BaseSettings):
     # (docs/modules/logging_request_tracing.md #8/#11).
     SLOW_REQUEST_THRESHOLD_MS: int = 1000
 
+    # Private, outside any public web root -- this app serves no static
+    # files at all today, so there is no public root to accidentally
+    # collide with (docs/modules/file_storage.md #9). Relative paths
+    # resolve against the process's working directory, same as
+    # DATABASE_URL's sqlite:///./dev.db default.
+    FILE_STORAGE_ROOT: str = "./storage"
+
+    MAX_UPLOAD_SIZE_MB: int = 20
+
+    # Allow-list, not a deny-list -- an unrecognized extension is
+    # rejected by construction rather than relying on enumerating every
+    # dangerous one (docs/modules/file_storage.md #3/#4/#9). A future
+    # module needing a new type extends this, not app/core/storage.py.
+    ALLOWED_UPLOAD_EXTENSIONS: str = "pdf,png,jpg,jpeg,gif,csv,docx,xlsx"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
@@ -64,6 +79,14 @@ class Settings(BaseSettings):
     @property
     def allowed_qr_domains(self) -> list[str]:
         return [domain.strip().lower() for domain in self.ALLOWED_QR_DOMAINS.split(",") if domain.strip()]
+
+    @property
+    def allowed_upload_extensions(self) -> set[str]:
+        return {ext.strip().lower() for ext in self.ALLOWED_UPLOAD_EXTENSIONS.split(",") if ext.strip()}
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
 @lru_cache

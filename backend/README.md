@@ -326,6 +326,46 @@ already exists. Log storage/rotation/retention is the deploying
 platform's job (stdout + a log driver/aggregator), not application
 code — `LOG_LEVEL` is the one piece of that this app owns directly.
 
+### File / Storage Foundation (docs/modules/file_storage.md)
+
+One shared storage layer — modules never implement their own file
+storage logic (`docs/audit/FILE_STORAGE_AUDIT.md`):
+
+- **`app/core/storage.py`**: a `StorageBackend` protocol
+  (`upload`/`download`/`delete`/`exists`/`metadata`) and
+  `LocalStorageBackend`, the "start simple" step — a future S3/Azure
+  Blob backend is one new class implementing the same protocol, no
+  caller changes.
+- **Secure filenames.** `generate_storage_key()` never touches the
+  user's filename — a fresh `f_<uuid4>.<ext>` every upload;
+  `original_filename` is sanitized and stored separately, for display
+  only, never for a filesystem path.
+- **Server-side upload validation.** An allow-list of extensions (never
+  a deny-list of dangerous ones), each with an expected magic-byte
+  signature checked against the upload's actual bytes before anything
+  is written to storage — a `.pdf`-named file that's actually an
+  executable is rejected, regardless of the client-supplied
+  `Content-Type`. Size is enforced while streaming
+  (`MAX_UPLOAD_SIZE_MB`), not after buffering the whole file, and a
+  rejected upload's partial write is cleaned up immediately.
+- **`GET /api/files/{file_id}`**: authenticate → load scoped to the
+  caller's organisation (404, not 403, for another organisation's file —
+  never confirms it exists) → `app/core/entity_access.py`'s
+  authorization hook → stream. The response never includes the physical
+  `storage_key`.
+- **Access control hook, not a hardcoded rule.** No business entity
+  (Invoice, Quotation, ...) exists yet to own "who can view this
+  record," so `entity_access.register_entity_access_check()` is the
+  mechanism a future module registers its actual rule into;
+  organisation-scoping alone is the baseline until one does.
+- **Soft delete only.** `DELETE /api/files/{file_id}` sets `deleted_at`;
+  the physical file is untouched. Physical deletion is a retention-policy
+  decision this phase doesn't implement, since no such policy exists yet.
+
+Storage backup is an operational requirement, not application code: the
+`FILE_STORAGE_ROOT` directory must be included in whatever backs up the
+database, since the database only holds references to the files in it.
+
 ## Setup
 
 ```bash

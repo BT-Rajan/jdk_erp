@@ -24,3 +24,7 @@ build/
 
 # Local SQLite dev/test databases
 *.db
+
+# Local file storage (docs/modules/file_storage.md) -- uploaded content,
+# never source
+backend/storage/

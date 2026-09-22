@@ -13,3 +13,4 @@ pydantic-settings>=2.5
 python-dotenv>=1.0
 email-validator>=2.2
 qrcode[pil]>=7.4
+python-multipart>=0.0.12

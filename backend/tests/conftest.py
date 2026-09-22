@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -7,10 +8,18 @@ from pathlib import Path
 _TMP_DB = Path(tempfile.gettempdir()) / "jdk_erp_test_auth.db"
 _TMP_DB.unlink(missing_ok=True)
 
+# app.core.storage's default_storage is a module-level singleton built
+# from this at import time too, same as DATABASE_URL -- without this,
+# tests would write real files under backend/storage (the production
+# default) instead of an isolated, disposable directory.
+_TMP_STORAGE = Path(tempfile.gettempdir()) / "jdk_erp_test_storage"
+shutil.rmtree(_TMP_STORAGE, ignore_errors=True)
+
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-only-for-automated-tests")
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TMP_DB}")
 os.environ.setdefault("LOGIN_LOCKOUT_THRESHOLD", "3")
 os.environ.setdefault("LOGIN_LOCKOUT_WINDOW_MINUTES", "15")
+os.environ.setdefault("FILE_STORAGE_ROOT", str(_TMP_STORAGE))
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +27,7 @@ from fastapi.testclient import TestClient
 from app.core.database import Base, SessionLocal, engine
 from app.core.roles import ADMIN
 from app.core.security import hash_password
+from app.core.storage import default_storage
 from app.main import app
 from app.models.organisation import Organisation
 from app.models.team import Team
@@ -29,6 +39,7 @@ def _clean_schema():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
+    default_storage._wipe_for_tests()
 
 
 @pytest.fixture()
