@@ -106,7 +106,7 @@ fi
 # ───────────────────────── 4. environment ─────────────────────────
 step "4/7 Environment (backend/.env)"
 FRESH_ENV=0
-if [ ! -f .env ]; then cp .env.example .env; FRESH_ENV=1; ok "Created .env from .env.example"; fi
+if [ ! -s .env ]; then cp .env.example .env; FRESH_ENV=1; ok "Created .env from .env.example"; fi
 export FRESH_ENV
 "$VPY" - <<'PY'
 import os, re, secrets
