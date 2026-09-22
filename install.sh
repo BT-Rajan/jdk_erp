@@ -180,8 +180,8 @@ backend_url = sys.argv[1]
 path = ".env"
 text = open(path).read()
 
-def get(k):
-    m = re.search(rf"^{k}=(.*)$", text, re.M)
+def get(k, source=None):
+    m = re.search(rf"^{k}=(.*)$", source if source is not None else text, re.M)
     return m.group(1).strip() if m else None
 
 def put(k, v):
@@ -191,13 +191,19 @@ def put(k, v):
     else:
         text += ("" if text.endswith("\n") else "\n") + f"{k}={v}\n"
 
-# Vite inlines VITE_API_URL at build time -- if this is left unset (or
-# stuck on the .env.example placeholder while PORT was overridden), the
+# Vite inlines VITE_API_URL at build time -- if this is left unset, the
 # built/dev frontend silently calls its own origin instead of the
-# backend and every API request 404s or hits the wrong server. Only
-# fill it in when unset, same rule as backend/.env above, so a
-# manually-customized value survives a re-run.
-if not get("VITE_API_URL"):
+# backend and every API request fails (often as a same-origin 404 or,
+# worse, a same-port "connection refused" that looks nothing like a
+# backend problem). Unlike backend/.env's CORS_ORIGINS, .env.example
+# ships this with a non-empty placeholder (http://localhost:8989), so
+# "only fill in when unset" would never correct it for a real
+# deployment (PUBLIC_HOST/PORT != localhost/8989) -- only overwrite when
+# it's still that untouched placeholder, so a genuinely
+# manually-customized value still survives a re-run.
+example_default = get("VITE_API_URL", open(".env.example").read()) or ""
+current = get("VITE_API_URL") or ""
+if not current or current == example_default:
     put("VITE_API_URL", backend_url)
     print(f"  VITE_API_URL set to {backend_url}")
 
