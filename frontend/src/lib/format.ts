@@ -41,12 +41,12 @@ function pad(n: number): string {
 /** Deliberately not Intl.DateTimeFormat/toLocaleDateString -- those are
  * browser-locale-dependent, so the same record would render differently
  * depending on the viewer's OS settings. One fixed, explicit format
- * everywhere instead: DD-MM-YYYY. */
+ * everywhere instead: DD/MM/YYYY (docs/modules/common_validation.md #2). */
 export function formatDate(value: string | Date | null | undefined): string {
   if (!value) return EMPTY
   const d = typeof value === 'string' ? new Date(value) : value
   if (Number.isNaN(d.getTime())) return EMPTY
-  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`
 }
 
 export function formatDateTime(value: string | Date | null | undefined): string {

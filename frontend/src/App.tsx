@@ -232,7 +232,7 @@ export function App() {
             <FilterBar>
               <TextField label="Supplier name" placeholder="Search..." required />
               <NumberField label="Discount %" min={0} max={100} />
-              <CurrencyField label="Credit limit" currency="USD" />
+              <CurrencyField label="Credit limit" />
               <DateField label="Due date" />
               <SelectField label="Status">
                 <option value="active">Active</option>
@@ -384,7 +384,7 @@ export function App() {
                     { key: 'revenue', label: 'Revenue' },
                     { key: 'cost', label: 'Cost' },
                   ]}
-                  valueFormatter={(v) => formatCurrency(v, 'USD')}
+                  valueFormatter={(v) => formatCurrency(v, 'KWD')}
                   height={240}
                 />
               </Card>
@@ -398,7 +398,7 @@ export function App() {
                     { key: 'budget', label: 'Budget' },
                     { key: 'actual', label: 'Actual' },
                   ]}
-                  valueFormatter={(v) => formatCurrency(v, 'USD')}
+                  valueFormatter={(v) => formatCurrency(v, 'KWD')}
                   height={240}
                 />
               </Card>
@@ -494,7 +494,7 @@ export function App() {
         }}
       >
         <TextField label="Supplier name" required />
-        <CurrencyField label="Opening balance" currency="USD" />
+        <CurrencyField label="Opening balance" />
       </FormDialog>
 
       <AlertDialog

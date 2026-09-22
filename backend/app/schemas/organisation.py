@@ -10,6 +10,7 @@ class OrganisationOut(BaseModel):
     contact_email: str | None
     contact_phone: str | None
     address: str | None
+    email_domain: str | None
     currency: str
     timezone: str
     is_active: bool

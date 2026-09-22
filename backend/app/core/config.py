@@ -36,6 +36,11 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = ""
 
+    # Domains a generated QR code is allowed to point to when it represents
+    # a JDK-controlled resource (docs/modules/common_validation.md #5) --
+    # comma-separated, centralized here rather than left to each module.
+    ALLOWED_QR_DOMAINS: str = ""
+
     # Off by default so local HTTP development keeps working with no extra
     # setup. Turn on in production only when this app terminates TLS
     # itself rather than behind a TLS-terminating load balancer/proxy
@@ -45,6 +50,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def allowed_qr_domains(self) -> list[str]:
+        return [domain.strip().lower() for domain in self.ALLOWED_QR_DOMAINS.split(",") if domain.strip()]
 
 
 @lru_cache

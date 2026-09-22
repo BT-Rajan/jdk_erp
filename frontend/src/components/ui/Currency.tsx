@@ -1,3 +1,4 @@
+import { DEFAULT_CURRENCY } from '@/lib/currency'
 import { formatCurrency } from '@/lib/format'
 
 export interface CurrencyProps {
@@ -7,6 +8,6 @@ export interface CurrencyProps {
   className?: string
 }
 
-export function Currency({ value, currency = 'USD', locale = 'en-US', className }: CurrencyProps) {
+export function Currency({ value, currency = DEFAULT_CURRENCY, locale = 'en-US', className }: CurrencyProps) {
   return <span className={className}>{formatCurrency(value, currency, locale)}</span>
 }

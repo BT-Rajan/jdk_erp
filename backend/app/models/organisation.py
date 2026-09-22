@@ -18,6 +18,9 @@ class Organisation(Base, TimestampMixin):
     contact_email: Mapped[str | None] = mapped_column(String(120), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
-    currency: Mapped[str] = mapped_column(String(3), nullable=False)
-    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
+    # Company email domain for validate_company_email_domain
+    # (docs/modules/common_validation.md #1) -- None means no restriction.
+    email_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="KWD")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Kuwait")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)

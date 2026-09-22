@@ -198,6 +198,44 @@ token storage, unifying frontend/mobile refresh clients, and CLI-script
 consolidation — none of these apply yet since no frontend/mobile app
 exists in this repo yet.
 
+### Common Validation (docs/modules/common_validation.md)
+
+One authoritative implementation for cross-cutting rules, built ahead of
+the Sales/Finance/Products/Materials modules that will consume it
+(docs/audit/COMMON_VALIDATION_AUDIT.md):
+
+- **Email** (`app/core/validation.py`): `normalize_email`,
+  `validate_email_format` (via the `email_validator` package already used
+  by `EmailStr`), `validate_company_email_domain` — the allowed domain is
+  `Organisation.email_domain`, per-organisation configuration, not a
+  hard-coded constant; `None` means no restriction.
+- **Date ranges** (`app/core/validation.py`): `validate_date_range` — the
+  one `start <= end` comparison mechanism, same-day valid, only
+  `start > end` rejected. Past/future restrictions stay a business rule
+  the calling module enforces.
+- **ID formats** (`app/core/id_formats.py`): one `IdFormat` shape
+  (prefix + digit count), instantiated for Quotation (`QXXXXXX`), Order
+  (`OXXXXXX`), User (`XXXXX`), Product (`PRXXXX`), Material (`MXXXX`).
+  Owns only the shape — the owning module supplies the next sequence
+  number.
+- **Currency** (`app/core/currency.py`): `KWD` is the default currency
+  (`Organisation.currency`'s default), 3 decimal places (fils) vs. most
+  currencies' 2; `round_currency` uses `Decimal`/`ROUND_HALF_UP`, never
+  `float`.
+- **Timezone** (`app/core/timezone.py`): `Asia/Kuwait`
+  (`Organisation.timezone`'s default) is the one place any timestamp is
+  converted for display — every stored timestamp stays naive-UTC.
+- **QR codes** (`app/core/qr.py`): `validate_qr_url` centralizes the
+  domain/HTTPS check (`ALLOWED_QR_DOMAINS` setting) before
+  `generate_qr_code` renders a PNG with the standard logo-overlay
+  treatment — no module builds its own QR image or invents its own
+  branding.
+
+Not built yet, on purpose: no endpoint calls any of this (no
+user-creation, Quotation, Order, Product, or Material endpoint exists),
+so it's verified standalone (`tests/test_common_validation.py`,
+`tests/test_qr.py`) rather than through a request/response test.
+
 ## Setup
 
 ```bash

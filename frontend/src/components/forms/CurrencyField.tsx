@@ -1,6 +1,7 @@
 import { forwardRef, type InputHTMLAttributes } from 'react'
 import { useFieldIds } from '@/lib/useFieldIds'
 import { cn } from '@/lib/cn'
+import { currencyDecimals, DEFAULT_CURRENCY } from '@/lib/currency'
 import { FieldShell } from './FieldShell'
 import { describedBy } from './describedBy'
 import { inputClasses } from './inputClasses'
@@ -20,10 +21,15 @@ export interface CurrencyFieldProps extends Omit<InputHTMLAttributes<HTMLInputEl
  * currency formatting is the separate `Currency` component
  * (`components/ui/Currency.tsx`). */
 export const CurrencyField = forwardRef<HTMLInputElement, CurrencyFieldProps>(function CurrencyField(
-  { label, error, hint, currency = 'USD', id, className, required, step = '0.01', ...props },
+  { label, error, hint, currency = DEFAULT_CURRENCY, id, className, required, step, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
+  // Step matches the currency's own decimal precision (KWD: 3 places,
+  // most others: 2) rather than a hard-coded 2-decimal assumption
+  // (docs/modules/common_validation.md #4) -- an explicit `step` prop
+  // still wins.
+  const resolvedStep = step ?? (1 / 10 ** currencyDecimals(currency)).toString()
   const symbol =
     new Intl.NumberFormat('en-US', { style: 'currency', currency, currencyDisplay: 'narrowSymbol' })
       .formatToParts(0)
@@ -37,7 +43,7 @@ export const CurrencyField = forwardRef<HTMLInputElement, CurrencyFieldProps>(fu
           ref={ref}
           id={fieldId}
           type="number"
-          step={step}
+          step={resolvedStep}
           aria-invalid={!!error || undefined}
           aria-describedby={describedBy(hint, error, hintId, errorId)}
           className={cn(inputClasses(!!error), 'pl-8', className)}

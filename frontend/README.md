@@ -143,6 +143,26 @@ across every module).
     (keeps advanced/less-used filters collapsed until asked for); new
     `DateRangeField` (a from/to pair — the spec lists "date/date range"
     as one filter type, and only a single-date field existed before).
+  - **Common Validation** (docs/modules/common_validation.md): the
+    frontend's copy of the same mechanisms as the backend's
+    `app/core/` modules, for UI-side validation ahead of the server's
+    authoritative check.
+    - `formatDate`/`formatDateTime` (`lib/format.ts`) now render
+      `DD/MM/YYYY`/`DD/MM/YYYY HH:mm` with slashes, matching the spec's
+      standard display format (was hyphens).
+    - `lib/currency.ts`: `DEFAULT_CURRENCY` (`KWD`) and
+      `CURRENCY_DECIMALS`, mirroring the backend's
+      `app/core/currency.py` — `Currency` and `CurrencyField` now
+      default to KWD, and `CurrencyField`'s numeric `step` matches the
+      given currency's own decimal precision instead of a hard-coded
+      2-decimal assumption.
+    - `lib/validation.ts`: `normalizeEmail`, `validateCompanyEmailDomain`,
+      `validateDateRange`, and the same five `ID_FORMATS` shapes
+      (Quotation/Order/User/Product/Material) as the backend's
+      `id_formats.py` — plain functions a form's zod schema can wrap in
+      `.refine()`.
+    - `lib/timezone.ts`: `formatKuwaitTime` — the one JDK/Kuwait
+      timezone conversion path; no component does its own.
 
 ## Setup
 
