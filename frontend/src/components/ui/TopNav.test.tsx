@@ -54,4 +54,15 @@ describe('TopNav', () => {
     )
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
   })
+
+  it('hides the inline entries list below md -- mobile navigation goes through a Sidebar/hamburger instead', () => {
+    render(
+      <MemoryRouter>
+        <TopNav logo={<span>Logo</span>} entries={entries} />
+      </MemoryRouter>,
+    )
+    const nav = screen.getByRole('navigation', { name: 'Main' })
+    expect(nav.className).toContain('hidden')
+    expect(nav.className).toContain('md:block')
+  })
 })

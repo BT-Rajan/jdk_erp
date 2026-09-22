@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { ChevronDown, ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { cn } from '@/lib/cn'
@@ -10,6 +10,13 @@ export interface SidebarProps {
   collapsed: boolean
   onToggleCollapsed: () => void
   header?: ReactNode
+  /** Mobile-only off-canvas state. Below the `md` breakpoint the sidebar
+   * is hidden by default and slides in as an overlay with a backdrop
+   * when true; at `md` and above both props are ignored and the sidebar
+   * behaves exactly as before (always visible, sized by `collapsed`).
+   * Omitting them keeps existing usage unchanged. */
+  mobileOpen?: boolean
+  onMobileClose?: () => void
 }
 
 const LEAF_CLASSES =
@@ -18,14 +25,34 @@ const LEAF_CLASSES =
 /** A persistent, collapsible side nav -- jdk_clean had no equivalent at
  * all (it's top-nav-only), so this has no reused precedent. Takes the
  * same NavEntry[] shape as TopNav and owns no auth/business state. */
-export function Sidebar({ entries, collapsed, onToggleCollapsed, header }: SidebarProps) {
+export function Sidebar({ entries, collapsed, onToggleCollapsed, header, mobileOpen = false, onMobileClose }: SidebarProps) {
+  useEffect(() => {
+    if (!mobileOpen) return
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onMobileClose?.()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [mobileOpen, onMobileClose])
+
   return (
-    <aside
-      className={cn(
-        'flex h-full flex-col border-r border-ink-700 bg-ink-900/60 transition-[width]',
-        collapsed ? 'w-16' : 'w-64',
+    <>
+      {mobileOpen && (
+        <div
+          aria-hidden="true"
+          onClick={onMobileClose}
+          className="fixed inset-0 z-30 bg-ink-950/70 md:hidden"
+        />
       )}
-    >
+      <aside
+        className={cn(
+          'flex h-full flex-col border-r border-ink-700 bg-ink-900/60 transition-transform md:static md:z-auto md:translate-x-0 md:transition-[width]',
+          'fixed inset-y-0 left-0 z-40',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          collapsed ? 'md:w-16' : 'md:w-64',
+          'w-64',
+        )}
+      >
       {header && <div className="px-3 py-4">{header}</div>}
       <nav aria-label="Main" className="flex-1 overflow-y-auto px-2">
         <ul className="flex flex-col gap-1">
@@ -55,12 +82,13 @@ export function Sidebar({ entries, collapsed, onToggleCollapsed, header }: Sideb
         type="button"
         onClick={onToggleCollapsed}
         aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        className="flex items-center justify-center gap-2 border-t border-ink-700 px-3 py-3 text-sm text-gold-100/60 hover:text-gold-100"
+        className="hidden items-center justify-center gap-2 border-t border-ink-700 px-3 py-3 text-sm text-gold-100/60 hover:text-gold-100 md:flex"
       >
         {collapsed ? <ChevronsRight size={16} /> : <ChevronsLeft size={16} />}
         {!collapsed && 'Collapse'}
       </button>
-    </aside>
+      </aside>
+    </>
   )
 }
 

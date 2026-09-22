@@ -18,6 +18,22 @@ export default defineConfig({
       'Referrer-Policy': 'strict-origin-when-cross-origin',
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // recharts (+ its d3 internals) is the single biggest dependency
+        // in this app -- keep it in its own chunk so pages that render
+        // no charts don't pay for it, and so it's cached independently
+        // of app code that changes far more often.
+        manualChunks(id: string) {
+          if (id.includes('node_modules/recharts') || id.includes('node_modules/d3-')) {
+            return 'vendor-charts'
+          }
+          return undefined
+        },
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Home, Package, Settings } from 'lucide-react'
+import { Home, Menu, Package, Settings } from 'lucide-react'
 import { ActionMenu } from './components/ui/ActionMenu'
 import { Alert } from './components/ui/Alert'
 import { Avatar } from './components/ui/Avatar'
@@ -8,6 +8,8 @@ import { Breadcrumbs } from './components/ui/Breadcrumbs'
 import { Button } from './components/ui/Button'
 import { Card } from './components/ui/Card'
 import { ConfirmDialog } from './components/ui/ConfirmDialog'
+import { ContextMenu } from './components/ui/ContextMenu'
+import { CopyToClipboard } from './components/ui/CopyToClipboard'
 import { Currency } from './components/ui/Currency'
 import { DataTable, type DataTableColumn } from './components/ui/DataTable'
 import { DateTime } from './components/ui/DateTime'
@@ -18,6 +20,10 @@ import { FormSectionHeading } from './components/ui/FormSectionHeading'
 import { IconButton } from './components/ui/IconButton'
 import { KeyValue } from './components/ui/KeyValue'
 import { Modal } from './components/ui/Modal'
+import { AccessDeniedState } from './components/ui/AccessDeniedState'
+import { PageErrorState } from './components/ui/PageErrorState'
+import { ProgressBar } from './components/ui/ProgressBar'
+import { Skeleton } from './components/ui/Skeleton'
 import type { NavEntry } from './components/ui/nav-types'
 import { NumberDisplay } from './components/ui/Number'
 import { PageHeader } from './components/ui/PageHeader'
@@ -26,6 +32,7 @@ import { Sidebar } from './components/ui/Sidebar'
 import type { SortState } from './components/ui/sort'
 import { Spinner } from './components/ui/Spinner'
 import { StatCard } from './components/ui/StatCard'
+import { StatGrid } from './components/ui/StatGrid'
 import { Tabs, TabPanel } from './components/ui/Tabs'
 import { Tooltip } from './components/ui/Tooltip'
 import { TopNav } from './components/ui/TopNav'
@@ -40,6 +47,10 @@ import { SearchSelectField } from './components/forms/SearchSelectField'
 import { SelectField } from './components/forms/SelectField'
 import { TextField } from './components/forms/TextField'
 import { TextareaField } from './components/forms/TextareaField'
+import { LineChart } from './components/charts/LineChart'
+import { BarChart } from './components/charts/BarChart'
+import { PieChart } from './components/charts/PieChart'
+import { formatCurrency } from './lib/format'
 
 interface Supplier {
   id: number
@@ -55,15 +66,42 @@ const suppliers: Supplier[] = [
 ]
 
 const supplierColumns: DataTableColumn<Supplier>[] = [
-  { key: 'name', label: 'Name', sortable: true, render: (row) => row.name },
-  { key: 'balance', label: 'Balance', sortable: true, align: 'right', render: (row) => <Currency value={row.balance} /> },
+  { key: 'name', label: 'Name', sortable: true, alwaysVisible: true, render: (row) => row.name },
+  {
+    key: 'balance',
+    label: 'Balance',
+    sortable: true,
+    align: 'right',
+    hideBelow: 'md',
+    render: (row) => <Currency value={row.balance} />,
+  },
   {
     key: 'status',
     label: 'Status',
+    alwaysVisible: true,
     render: (row) => (
       <StatusBadge status={row.status} toneMap={{ active: 'success', overdue: 'danger', inactive: 'neutral' }} />
     ),
   },
+]
+
+const revenueByMonth = [
+  { month: 'Apr', revenue: 42000, cost: 28000 },
+  { month: 'May', revenue: 51000, cost: 31000 },
+  { month: 'Jun', revenue: 47000, cost: 29500 },
+  { month: 'Jul', revenue: 58000, cost: 33000 },
+]
+
+const spendByCategory = [
+  { category: 'Raw materials', budget: 20000, actual: 18500 },
+  { category: 'Labour', budget: 15000, actual: 16200 },
+  { category: 'Logistics', budget: 8000, actual: 7100 },
+]
+
+const suppliersByStatus = [
+  { status: 'Active', count: 92 },
+  { status: 'Overdue', count: 12 },
+  { status: 'Inactive', count: 24 },
 ]
 
 const navEntries: NavEntry[] = [
@@ -87,15 +125,36 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false)
   const [customer, setCustomer] = useState<string | null>(null)
   const [files, setFiles] = useState<File[]>([])
 
   return (
     <div className="min-h-screen bg-ink-950 text-gold-100">
-      <TopNav logo={<span className="font-display text-lg text-gold-400">JDK ERP</span>} entries={navEntries} actions={<UserChip src={null} name="Ada Lovelace" subtitle="Admin" />} />
+      <TopNav
+        logo={
+          <span className="flex items-center gap-2">
+            <IconButton
+              icon={<Menu size={18} />}
+              aria-label="Open navigation"
+              className="md:hidden"
+              onClick={() => setSidebarMobileOpen(true)}
+            />
+            <span className="font-display text-lg text-gold-400">JDK ERP</span>
+          </span>
+        }
+        entries={navEntries}
+        actions={<UserChip src={null} name="Ada Lovelace" subtitle="Admin" />}
+      />
 
       <div className="flex">
-        <Sidebar entries={navEntries} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((v) => !v)} />
+        <Sidebar
+          entries={navEntries}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+          mobileOpen={sidebarMobileOpen}
+          onMobileClose={() => setSidebarMobileOpen(false)}
+        />
 
         <main className="flex-1 space-y-10 p-6">
           <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: 'Suppliers', to: '/suppliers' }, { label: 'Acme Corp' }]} />
@@ -184,11 +243,16 @@ export function App() {
 
           <section className="space-y-3">
             <FormSectionHeading>4. Data &amp; Tables</FormSectionHeading>
-            <div className="grid grid-cols-3 gap-4">
+            <StatGrid>
               <StatCard label="Open orders" value={42} hint="+5 this week" />
               <StatCard label="Overdue invoices" value={3} />
               <StatCard label="Active suppliers" value={128} />
-            </div>
+              <StatCard label="Total spend" value={<Currency value={45800} />} />
+            </StatGrid>
+            <p className="text-xs text-gold-100/50">
+              The Balance column below hides under the md breakpoint (resize the window to see it) -- Name and Status
+              stay visible.
+            </p>
             <DataTable
               columns={supplierColumns}
               rows={suppliers}
@@ -227,6 +291,103 @@ export function App() {
               <Badge tone="gold">Featured</Badge>
               <Avatar src={null} name="Ada Lovelace" />
               <UserChip src={null} name="Ada Lovelace" subtitle="Admin" />
+              <div className="flex items-center gap-1 text-sm">
+                <span>INV-2026-001</span>
+                <CopyToClipboard value="INV-2026-001" label="Copy invoice number" />
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <FormSectionHeading>9. Charts</FormSectionHeading>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card className="p-4">
+                <p className="mb-2 text-sm text-gold-100/60">Revenue vs. cost (line)</p>
+                <LineChart
+                  data={revenueByMonth}
+                  xKey="month"
+                  series={[
+                    { key: 'revenue', label: 'Revenue' },
+                    { key: 'cost', label: 'Cost' },
+                  ]}
+                  valueFormatter={(v) => formatCurrency(v, 'USD')}
+                  height={240}
+                />
+              </Card>
+              <Card className="p-4">
+                <p className="mb-2 text-sm text-gold-100/60">Budget vs. actual (stacked bar)</p>
+                <BarChart
+                  data={spendByCategory}
+                  xKey="category"
+                  stacked
+                  series={[
+                    { key: 'budget', label: 'Budget' },
+                    { key: 'actual', label: 'Actual' },
+                  ]}
+                  valueFormatter={(v) => formatCurrency(v, 'USD')}
+                  height={240}
+                />
+              </Card>
+              <Card className="p-4">
+                <p className="mb-2 text-sm text-gold-100/60">Suppliers by status (donut)</p>
+                <PieChart data={suppliersByStatus} nameKey="status" valueKey="count" donut height={240} />
+              </Card>
+              <Card className="p-4">
+                <p className="mb-2 text-sm text-gold-100/60">Loading / empty / error states</p>
+                <div className="space-y-4">
+                  <LineChart data={[]} xKey="month" series={[{ key: 'revenue', label: 'Revenue' }]} loading height={80} />
+                  <LineChart data={[]} xKey="month" series={[{ key: 'revenue', label: 'Revenue' }]} height={80} />
+                  <LineChart
+                    data={[]}
+                    xKey="month"
+                    series={[{ key: 'revenue', label: 'Revenue' }]}
+                    error="Failed to load revenue data"
+                    height={80}
+                  />
+                </div>
+              </Card>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <FormSectionHeading>Context / Right-click Actions</FormSectionHeading>
+            <p className="text-xs text-gold-100/50">
+              The same options are reachable both ways -- the visible ⋮ menu (works everywhere, including touch) and,
+              optionally, right-click on the card below (desktop convenience only, never the only path).
+            </p>
+            <ContextMenu
+              label="Supplier actions"
+              options={[
+                { key: 'edit', label: 'Edit', onSelect: () => {} },
+                { key: 'delete', label: 'Delete', onSelect: () => setConfirmOpen(true), danger: true },
+              ]}
+            >
+              <Card className="flex items-center justify-between p-4">
+                <span>Acme Corp -- right-click me, or use the menu</span>
+                <ActionMenu
+                  label="Supplier actions"
+                  options={[
+                    { key: 'edit', label: 'Edit', onSelect: () => {} },
+                    { key: 'delete', label: 'Delete', onSelect: () => setConfirmOpen(true), danger: true },
+                  ]}
+                />
+              </Card>
+            </ContextMenu>
+          </section>
+
+          <section className="space-y-3">
+            <FormSectionHeading>Additional Utility &amp; Display Components</FormSectionHeading>
+            <div className="space-y-4">
+              <ProgressBar value={64} label="Import progress" />
+              <div className="flex items-center gap-3">
+                <Skeleton className="h-9 w-9 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-3 w-1/3" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+              </div>
+              <AccessDeniedState message="Only admins can view audit events." />
+              <PageErrorState onRetry={() => {}} />
             </div>
           </section>
         </main>

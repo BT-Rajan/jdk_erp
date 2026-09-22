@@ -68,6 +68,38 @@ across every module).
   page — useful as a quick visual reference and as a live smoke test
   (`npm run dev`) until real module screens replace it.
 
+- **Common UI Components — coverage patch** (same directories) — a
+  follow-up pass that audited the phase above and added only what was
+  genuinely missing, per
+  [`../docs/audit/COMMON_UI_COMPONENTS_COVERAGE_PATCH.md`](../docs/audit/COMMON_UI_COMPONENTS_COVERAGE_PATCH.md):
+  - **Charts** (`src/components/charts/`): `LineChart`, `BarChart`
+    (`stacked` variant), `PieChart` (`donut` variant), built on
+    `recharts` (matching `jdk_clean`'s own choice) through one shared
+    `ChartState` wrapper for loading/empty/error — modules never import
+    `recharts` directly. KPI is covered by the existing `StatCard`, not
+    duplicated.
+  - **Context menu**: `ContextMenu` (right-click, desktop-only
+    convenience), always paired with the existing `ActionMenu` on the
+    same row offering identical options, never a replacement for it.
+    Shares a new internal `MenuPanel` with `ActionMenu` rather than
+    duplicating the option-list/keyboard-nav logic a second time.
+  - **Responsive fixes**: `DataTable` gained a per-column `hideBelow`
+    breakpoint (drops a secondary column instead of forcing a scroll);
+    `Sidebar` gained an off-canvas mobile mode (`mobileOpen`/
+    `onMobileClose`, backward compatible); `Tabs` scrolls horizontally
+    instead of overflowing; `TopNav`'s inline nav list now hides below
+    `md` (a real overflow bug live-viewport testing caught, not
+    something a code read alone would have found); new `StatGrid` for a
+    responsive row of `StatCard`s.
+  - **New utility/display components**: `CopyToClipboard`, `ProgressBar`,
+    `Skeleton`, `AccessDeniedState` (mirrors the backend's
+    `ACCESS_DENIED` contract), `PageErrorState` (mirrors the backend's
+    generic `SERVER_ERROR` message), `useUnsavedChangesGuard` (tab-close/
+    refresh warning only — in-app route blocking needs a data router
+    this app doesn't use yet, documented as a deliberate deferral).
+  - `recharts` is isolated into its own `vendor-charts` build chunk
+    (`vite.config.ts`) so the main app bundle size is unchanged.
+
 ## Setup
 
 ```bash

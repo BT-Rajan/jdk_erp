@@ -48,4 +48,41 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
   })
+
+  it('is off-canvas (translated out) by default and slides in when mobileOpen is set', () => {
+    const { container, rerender } = render(
+      <MemoryRouter>
+        <Sidebar entries={entries} collapsed={false} onToggleCollapsed={vi.fn()} />
+      </MemoryRouter>,
+    )
+    const aside = container.querySelector('aside')!
+    expect(aside.className).toContain('-translate-x-full')
+
+    rerender(
+      <MemoryRouter>
+        <Sidebar entries={entries} collapsed={false} onToggleCollapsed={vi.fn()} mobileOpen onMobileClose={vi.fn()} />
+      </MemoryRouter>,
+    )
+    expect(aside.className).toContain('translate-x-0')
+  })
+
+  it('closes via the backdrop click and via Escape when mobileOpen', async () => {
+    const onMobileClose = vi.fn()
+    render(
+      <MemoryRouter>
+        <Sidebar entries={entries} collapsed={false} onToggleCollapsed={vi.fn()} mobileOpen onMobileClose={onMobileClose} />
+      </MemoryRouter>,
+    )
+    await userEvent.keyboard('{Escape}')
+    expect(onMobileClose).toHaveBeenCalledOnce()
+  })
+
+  it('renders no backdrop when mobileOpen is not set (existing desktop-only usage is unaffected)', () => {
+    const { container } = render(
+      <MemoryRouter>
+        <Sidebar entries={entries} collapsed={false} onToggleCollapsed={vi.fn()} />
+      </MemoryRouter>,
+    )
+    expect(container.querySelector('.fixed.inset-0')).not.toBeInTheDocument()
+  })
 })

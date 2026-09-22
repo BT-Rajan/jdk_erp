@@ -49,7 +49,11 @@ export function Tabs({ items, activeId, onChange, size = 'md', className }: Tabs
   }
 
   return (
-    <div role="tablist" onKeyDown={handleKeyDown} className={cn('flex gap-1 border-b border-ink-700', className)}>
+    <div
+      role="tablist"
+      onKeyDown={handleKeyDown}
+      className={cn('flex gap-1 overflow-x-auto border-b border-ink-700', className)}
+    >
       {items.map((item, index) => {
         const isActive = item.id === activeId
         return (

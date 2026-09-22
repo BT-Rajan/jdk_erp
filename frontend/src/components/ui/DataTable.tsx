@@ -17,7 +17,19 @@ export interface DataTableColumn<T> {
   align?: 'left' | 'right' | 'center'
   /** Excluded from the column-visibility toggle -- always shown. */
   alwaysVisible?: boolean
+  /** Hide this column on screens narrower than the given breakpoint,
+   * instead of shrinking every column to fit -- for secondary
+   * information a narrow table can drop, while the row's important
+   * columns and its actions column (mark that one `alwaysVisible`, not
+   * `hideBelow`) stay put. */
+  hideBelow?: 'sm' | 'md' | 'lg'
   render: (row: T) => ReactNode
+}
+
+const HIDE_BELOW_CLASSES: Record<NonNullable<DataTableColumn<unknown>['hideBelow']>, string> = {
+  sm: 'hidden sm:table-cell',
+  md: 'hidden md:table-cell',
+  lg: 'hidden lg:table-cell',
 }
 
 export interface DataTableProps<T> {
@@ -105,6 +117,7 @@ export function DataTable<T>({
                       sort={sort ?? null}
                       onSort={handleSort}
                       align={column.align}
+                      className={column.hideBelow && HIDE_BELOW_CLASSES[column.hideBelow]}
                     />
                   ) : (
                     <th
@@ -114,6 +127,7 @@ export function DataTable<T>({
                         'px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gold-100/60',
                         column.align === 'right' && 'text-right',
                         column.align === 'center' && 'text-center',
+                        column.hideBelow && HIDE_BELOW_CLASSES[column.hideBelow],
                       )}
                     >
                       {column.label}
@@ -132,6 +146,7 @@ export function DataTable<T>({
                         'px-3 py-2 text-gold-100',
                         column.align === 'right' && 'text-right',
                         column.align === 'center' && 'text-center',
+                        column.hideBelow && HIDE_BELOW_CLASSES[column.hideBelow],
                       )}
                     >
                       {column.render(row)}

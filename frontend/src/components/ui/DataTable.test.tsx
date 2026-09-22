@@ -82,4 +82,19 @@ describe('DataTable', () => {
     expect(screen.queryByRole('columnheader', { name: /Balance/ })).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: /Name/ })).toBeInTheDocument()
   })
+
+  it('applies a responsive hide-below-breakpoint class to a column marked hideBelow, without hiding it outright', () => {
+    const columnsWithHideBelow: DataTableColumn<Supplier>[] = [
+      { key: 'name', label: 'Name', render: (row) => row.name },
+      { key: 'balance', label: 'Balance', hideBelow: 'md', render: (row) => row.balance },
+    ]
+    render(<DataTable columns={columnsWithHideBelow} rows={suppliers} rowKey={(row) => row.id} />)
+
+    // Still in the DOM (jsdom has no real viewport/media-query
+    // evaluation) -- what we can verify is that the responsive class
+    // that hides it below md is actually applied.
+    const header = screen.getByRole('columnheader', { name: 'Balance' })
+    expect(header.className).toContain('hidden')
+    expect(header.className).toContain('md:table-cell')
+  })
 })

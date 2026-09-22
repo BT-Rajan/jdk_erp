@@ -20,9 +20,12 @@ export function TopNav({ logo, entries, actions }: TopNavProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-ink-700 bg-ink-950/90 backdrop-blur">
       <div className="mx-auto flex h-16 items-center justify-between gap-4 px-4">
-        <div className="flex items-center gap-6">
+        <div className="flex min-w-0 items-center gap-6">
           {logo}
-          <nav aria-label="Main">
+          {/* Below md, a Sidebar (opened via a hamburger the app places
+             in `logo`) is the mobile nav path -- this inline list would
+             otherwise force the header wider than the viewport. */}
+          <nav aria-label="Main" className="hidden md:block">
             <ul className="flex items-center gap-1">
               {entries.map((entry) => (
                 <li key={entry.label}>
@@ -39,7 +42,7 @@ export function TopNav({ logo, entries, actions }: TopNavProps) {
             </ul>
           </nav>
         </div>
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
     </header>
   )
