@@ -12,7 +12,10 @@ from app.core.config import settings
 from app.core.database import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# configparser treats "%" as the start of an interpolation placeholder (e.g. "%(name)s"),
+# so a literal "%" in the DB URL (common in URL-encoded passwords, e.g. "%23" for "#")
+# must be escaped as "%%" before being stored via set_main_option.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
