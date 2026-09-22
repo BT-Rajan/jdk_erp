@@ -12,13 +12,13 @@ export interface TextareaFieldProps extends TextareaHTMLAttributes<HTMLTextAreaE
 }
 
 export const TextareaField = forwardRef<HTMLTextAreaElement, TextareaFieldProps>(function TextareaField(
-  { label, error, hint, id, className, rows = 3, ...props },
+  { label, error, hint, id, className, rows = 3, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
       <textarea
         ref={ref}
         id={fieldId}

@@ -12,13 +12,13 @@ export interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement
 }
 
 export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(function SelectField(
-  { label, error, hint, id, className, children, ...props },
+  { label, error, hint, id, className, children, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
       <select
         ref={ref}
         id={fieldId}

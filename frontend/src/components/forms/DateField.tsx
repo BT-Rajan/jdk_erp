@@ -13,13 +13,13 @@ export interface DateFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
 }
 
 export const DateField = forwardRef<HTMLInputElement, DateFieldProps>(function DateField(
-  { label, error, hint, withTime = false, id, className, ...props },
+  { label, error, hint, withTime = false, id, className, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
       <input
         ref={ref}
         id={fieldId}

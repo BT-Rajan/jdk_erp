@@ -20,13 +20,13 @@ export interface MultiSelectFieldProps extends Omit<SelectHTMLAttributes<HTMLSel
  * reasonable future upgrade if the native control's look becomes a
  * problem, but isn't needed to satisfy the requirement today. */
 export const MultiSelectField = forwardRef<HTMLSelectElement, MultiSelectFieldProps>(function MultiSelectField(
-  { label, error, hint, id, className, children, size = 4, ...props },
+  { label, error, hint, id, className, children, size = 4, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
       <select
         ref={ref}
         id={fieldId}

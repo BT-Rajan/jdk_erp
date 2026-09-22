@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Columns3 } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { useDismissableOverlay } from '@/lib/useDismissableOverlay'
@@ -47,6 +47,16 @@ export interface DataTableProps<T> {
   total?: number
   onPageChange?: (page: number) => void
   enableColumnVisibility?: boolean
+  /** Renders a checkbox column when combined with `selectedKeys` +
+   * `onSelectionChange` -- the row-selection half of bulk actions
+   * (pair with BulkActionsBar for the action toolbar). */
+  selectable?: boolean
+  selectedKeys?: Set<string | number>
+  onSelectionChange?: (keys: Set<string | number>) => void
+  /** Keeps the header visible while the table body scrolls vertically
+   * -- only meaningful for a long table, so it also caps the body at a
+   * fixed height with its own scroll instead of the whole page. */
+  stickyHeader?: boolean
 }
 
 /** The one table shell every list page composes -- masters and business
@@ -70,12 +80,37 @@ export function DataTable<T>({
   total,
   onPageChange,
   enableColumnVisibility = false,
+  selectable = false,
+  selectedKeys,
+  onSelectionChange,
+  stickyHeader = false,
 }: DataTableProps<T>) {
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set())
   const visibleColumns = columns.filter((column) => !hiddenKeys.has(column.key))
 
   function handleSort(field: string) {
     onSortChange?.(toggleSort(sort ?? null, field))
+  }
+
+  const rowKeys = rows.map(rowKey)
+  const selectedCount = selectedKeys ? rowKeys.filter((key) => selectedKeys.has(key)).length : 0
+  const allSelected = rowKeys.length > 0 && selectedCount === rowKeys.length
+  const someSelected = selectedCount > 0 && !allSelected
+
+  function toggleAll() {
+    if (!onSelectionChange) return
+    const next = new Set(selectedKeys)
+    if (allSelected) rowKeys.forEach((key) => next.delete(key))
+    else rowKeys.forEach((key) => next.add(key))
+    onSelectionChange(next)
+  }
+
+  function toggleRow(key: string | number) {
+    if (!onSelectionChange) return
+    const next = new Set(selectedKeys)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    onSelectionChange(next)
   }
 
   function toggleColumn(key: string) {
@@ -104,10 +139,20 @@ export function DataTable<T>({
       ) : rows.length === 0 ? (
         <EmptyState title={emptyTitle} message={emptyMessage} />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-ink-700">
+        <div className={cn('overflow-x-auto rounded-lg border border-ink-700', stickyHeader && 'max-h-[32rem] overflow-y-auto')}>
           <table className="w-full border-collapse text-left text-sm">
-            <thead className="border-b border-ink-700 bg-ink-800/50">
+            <thead className={cn('border-b border-ink-700 bg-ink-800/50', stickyHeader && 'sticky top-0 z-10')}>
               <tr>
+                {selectable && (
+                  <th scope="col" className="w-10 px-3 py-2">
+                    <SelectionCheckbox
+                      checked={allSelected}
+                      indeterminate={someSelected}
+                      onChange={toggleAll}
+                      label="Select all rows"
+                    />
+                  </th>
+                )}
                 {visibleColumns.map((column) =>
                   column.sortable ? (
                     <SortableHeader
@@ -137,8 +182,19 @@ export function DataTable<T>({
               </tr>
             </thead>
             <tbody className="divide-y divide-ink-700">
-              {rows.map((row) => (
-                <tr key={rowKey(row)} className="transition-colors hover:bg-ink-800/40">
+              {rows.map((row) => {
+                const key = rowKey(row)
+                return (
+                <tr key={key} className="transition-colors hover:bg-ink-800/40">
+                  {selectable && (
+                    <td className="px-3 py-2">
+                      <SelectionCheckbox
+                        checked={!!selectedKeys?.has(key)}
+                        onChange={() => toggleRow(key)}
+                        label={`Select row ${key}`}
+                      />
+                    </td>
+                  )}
                   {visibleColumns.map((column) => (
                     <td
                       key={column.key}
@@ -153,7 +209,7 @@ export function DataTable<T>({
                     </td>
                   ))}
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
         </div>
@@ -162,6 +218,35 @@ export function DataTable<T>({
         <Pagination page={page} totalPages={totalPages} total={total} onPageChange={onPageChange} />
       )}
     </div>
+  )
+}
+
+function SelectionCheckbox({
+  checked,
+  indeterminate = false,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  indeterminate?: boolean
+  onChange: () => void
+  label: string
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate
+  }, [indeterminate])
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      aria-label={label}
+      checked={checked}
+      onChange={onChange}
+      className="h-4 w-4 rounded border-ink-600 bg-ink-800 text-gold-400"
+    />
   )
 }
 

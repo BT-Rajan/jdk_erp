@@ -14,13 +14,13 @@ export interface TextFieldProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function TextField(
-  { label, error, hint, leadingIcon, trailingSlot, id, className, ...props },
+  { label, error, hint, leadingIcon, trailingSlot, id, className, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
       <div className="relative flex items-center">
         {leadingIcon && <span className="pointer-events-none absolute left-3 text-gold-100/40">{leadingIcon}</span>}
         <input

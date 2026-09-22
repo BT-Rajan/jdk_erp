@@ -21,17 +21,20 @@ export interface RadioGroupFieldProps extends Omit<InputHTMLAttributes<HTMLInput
  * the checked value). Forwarding this component's ref to every `<input>`
  * below is intentional, not a bug. */
 export const RadioGroupField = forwardRef<HTMLInputElement, RadioGroupFieldProps>(function RadioGroupField(
-  { label, options, error, hint, name, id, className, ...props },
+  { label, options, error, hint, name, id, className, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
     <div className="flex flex-col gap-1.5">
-      <span id={fieldId} className="text-sm font-medium text-gold-100">
+      <span
+        id={fieldId}
+        className={cn('text-sm font-medium text-gold-100', required && "after:ml-0.5 after:text-danger-500 after:content-['*']")}
+      >
         {label}
       </span>
-      <div role="radiogroup" aria-labelledby={fieldId} className="flex flex-col gap-2">
+      <div role="radiogroup" aria-labelledby={fieldId} aria-required={required || undefined} className="flex flex-col gap-2">
         {options.map((option) => (
           <label key={option.value} className={cn('flex items-center gap-2 text-sm text-gold-100', className)}>
             <input

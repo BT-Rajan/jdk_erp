@@ -16,7 +16,7 @@ export interface NumberFieldProps extends Omit<InputHTMLAttributes<HTMLInputElem
  * applied it manually per call site rather than baking it into a
  * NumberField, since no such field existed). */
 export const NumberField = forwardRef<HTMLInputElement, NumberFieldProps>(function NumberField(
-  { label, error, hint, min, max, onBlur, id, className, ...props },
+  { label, error, hint, min, max, onBlur, id, className, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
@@ -35,7 +35,7 @@ export const NumberField = forwardRef<HTMLInputElement, NumberFieldProps>(functi
   }
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
       <input
         ref={ref}
         id={fieldId}

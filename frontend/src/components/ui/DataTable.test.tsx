@@ -97,4 +97,67 @@ describe('DataTable', () => {
     expect(header.className).toContain('hidden')
     expect(header.className).toContain('md:table-cell')
   })
+
+  it('renders no checkbox column when selectable is not set', () => {
+    render(<DataTable columns={columns} rows={suppliers} rowKey={(row) => row.id} />)
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+  })
+
+  it('supports selecting individual rows and reflects the selection state', async () => {
+    function Fixture() {
+      const [selected, setSelected] = useState<Set<string | number>>(new Set())
+      return (
+        <DataTable
+          columns={columns}
+          rows={suppliers}
+          rowKey={(row) => row.id}
+          selectable
+          selectedKeys={selected}
+          onSelectionChange={setSelected}
+        />
+      )
+    }
+    render(<Fixture />)
+    const acmeRow = screen.getByRole('checkbox', { name: 'Select row 1' })
+    expect(acmeRow).not.toBeChecked()
+
+    await userEvent.click(acmeRow)
+    expect(acmeRow).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Select row 2' })).not.toBeChecked()
+  })
+
+  it('the header checkbox selects/deselects all rows, and is indeterminate when only some are selected', async () => {
+    function Fixture() {
+      const [selected, setSelected] = useState<Set<string | number>>(new Set([1]))
+      return (
+        <DataTable
+          columns={columns}
+          rows={suppliers}
+          rowKey={(row) => row.id}
+          selectable
+          selectedKeys={selected}
+          onSelectionChange={setSelected}
+        />
+      )
+    }
+    render(<Fixture />)
+    const headerCheckbox = screen.getByRole('checkbox', { name: 'Select all rows' }) as HTMLInputElement
+    expect(headerCheckbox.indeterminate).toBe(true)
+
+    await userEvent.click(headerCheckbox)
+    expect(screen.getByRole('checkbox', { name: 'Select row 1' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Select row 2' })).toBeChecked()
+
+    await userEvent.click(headerCheckbox)
+    expect(screen.getByRole('checkbox', { name: 'Select row 1' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Select row 2' })).not.toBeChecked()
+  })
+
+  it('applies sticky-header classes only when stickyHeader is set', () => {
+    const { container, rerender } = render(<DataTable columns={columns} rows={suppliers} rowKey={(row) => row.id} />)
+    expect(container.querySelector('thead')!.className).not.toContain('sticky')
+
+    rerender(<DataTable columns={columns} rows={suppliers} rowKey={(row) => row.id} stickyHeader />)
+    expect(container.querySelector('thead')!.className).toContain('sticky')
+  })
 })

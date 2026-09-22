@@ -1,5 +1,6 @@
 import { forwardRef, type InputHTMLAttributes } from 'react'
 import { useFieldIds } from '@/lib/useFieldIds'
+import { cn } from '@/lib/cn'
 import { describedBy } from './describedBy'
 
 export interface CheckboxFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
@@ -9,14 +10,20 @@ export interface CheckboxFieldProps extends Omit<InputHTMLAttributes<HTMLInputEl
 }
 
 export const CheckboxField = forwardRef<HTMLInputElement, CheckboxFieldProps>(function CheckboxField(
-  { label, error, hint, id, className, ...props },
+  { label, error, hint, id, className, required, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={fieldId} className="flex items-center gap-2 text-sm text-gold-100">
+      <label
+        htmlFor={fieldId}
+        className={cn(
+          'flex items-center gap-2 text-sm text-gold-100',
+          required && "after:ml-0.5 after:text-danger-500 after:content-['*']",
+        )}
+      >
         <input
           ref={ref}
           id={fieldId}

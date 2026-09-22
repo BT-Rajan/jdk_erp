@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { Home, Menu, Package, Settings } from 'lucide-react'
 import { ActionMenu } from './components/ui/ActionMenu'
+import { ActiveFilterChips } from './components/ui/ActiveFilterChips'
 import { Alert } from './components/ui/Alert'
+import { AlertDialog } from './components/ui/AlertDialog'
 import { Avatar } from './components/ui/Avatar'
 import { Badge, StatusBadge } from './components/ui/Badge'
 import { Breadcrumbs } from './components/ui/Breadcrumbs'
+import { BulkActionsBar } from './components/ui/BulkActionsBar'
 import { Button } from './components/ui/Button'
 import { Card } from './components/ui/Card'
 import { ConfirmDialog } from './components/ui/ConfirmDialog'
@@ -16,10 +19,12 @@ import { DateTime } from './components/ui/DateTime'
 import { Drawer } from './components/ui/Drawer'
 import { EmptyState } from './components/ui/EmptyState'
 import { FilterBar } from './components/ui/FilterBar'
+import { FormDialog } from './components/ui/FormDialog'
 import { FormSectionHeading } from './components/ui/FormSectionHeading'
 import { IconButton } from './components/ui/IconButton'
 import { KeyValue } from './components/ui/KeyValue'
 import { Modal } from './components/ui/Modal'
+import { MoreFiltersDisclosure } from './components/ui/MoreFiltersDisclosure'
 import { AccessDeniedState } from './components/ui/AccessDeniedState'
 import { PageErrorState } from './components/ui/PageErrorState'
 import { ProgressBar } from './components/ui/ProgressBar'
@@ -38,7 +43,9 @@ import { Tooltip } from './components/ui/Tooltip'
 import { TopNav } from './components/ui/TopNav'
 import { UserChip } from './components/ui/UserChip'
 import { CheckboxField } from './components/forms/CheckboxField'
+import { CurrencyField } from './components/forms/CurrencyField'
 import { DateField } from './components/forms/DateField'
+import { DateRangeField, type DateRangeValue } from './components/forms/DateRangeField'
 import { FileUploadField } from './components/forms/FileUploadField'
 import { MultiSelectField } from './components/forms/MultiSelectField'
 import { NumberField } from './components/forms/NumberField'
@@ -51,6 +58,7 @@ import { LineChart } from './components/charts/LineChart'
 import { BarChart } from './components/charts/BarChart'
 import { PieChart } from './components/charts/PieChart'
 import { formatCurrency } from './lib/format'
+import { useFilters } from './lib/useFilters'
 
 interface Supplier {
   id: number
@@ -104,6 +112,8 @@ const suppliersByStatus = [
   { status: 'Inactive', count: 24 },
 ]
 
+const initialSupplierFilters = { search: '', status: 'all', owner: null as string | null }
+
 const navEntries: NavEntry[] = [
   { type: 'leaf', label: 'Dashboard', to: '/', icon: <Home size={16} /> },
   { type: 'leaf', label: 'Suppliers', to: '/suppliers', icon: <Package size={16} /> },
@@ -128,6 +138,11 @@ export function App() {
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false)
   const [customer, setCustomer] = useState<string | null>(null)
   const [files, setFiles] = useState<File[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<Set<string | number>>(new Set())
+  const [formDialogOpen, setFormDialogOpen] = useState(false)
+  const [alertDialogOpen, setAlertDialogOpen] = useState(false)
+  const [orderDateRange, setOrderDateRange] = useState<DateRangeValue>({ from: null, to: null })
+  const filters = useFilters(initialSupplierFilters)
 
   return (
     <div className="min-h-screen bg-ink-950 text-gold-100">
@@ -215,14 +230,16 @@ export function App() {
           <section className="space-y-3">
             <FormSectionHeading>3. Forms</FormSectionHeading>
             <FilterBar>
-              <TextField label="Supplier name" placeholder="Search..." />
+              <TextField label="Supplier name" placeholder="Search..." required />
               <NumberField label="Discount %" min={0} max={100} />
+              <CurrencyField label="Credit limit" currency="USD" />
               <DateField label="Due date" />
               <SelectField label="Status">
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
               </SelectField>
             </FilterBar>
+            <TextField label="Supplier code" value="ACME-001" readOnly hint="Assigned automatically, cannot be edited" />
             <MultiSelectField label="Teams">
               <option value="sales">Sales</option>
               <option value="ops">Operations</option>
@@ -239,6 +256,14 @@ export function App() {
             <RadioGroupField label="Payment terms" name="terms" options={[{ value: 'net30', label: 'Net 30' }, { value: 'net60', label: 'Net 60' }]} />
             <TextareaField label="Notes" />
             <FileUploadField label="Attachments" multiple value={files} onChange={setFiles} />
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setFormDialogOpen(true)}>
+                Open form dialog
+              </Button>
+              <Button variant="secondary" onClick={() => setAlertDialogOpen(true)}>
+                Open alert dialog
+              </Button>
+            </div>
           </section>
 
           <section className="space-y-3">
@@ -253,6 +278,14 @@ export function App() {
               The Balance column below hides under the md breakpoint (resize the window to see it) -- Name and Status
               stay visible.
             </p>
+            <BulkActionsBar
+              count={selectedSuppliers.size}
+              onClear={() => setSelectedSuppliers(new Set())}
+              actions={[
+                { key: 'export', label: 'Export', onSelect: () => {} },
+                { key: 'delete', label: 'Delete', onSelect: () => setConfirmOpen(true), danger: true },
+              ]}
+            />
             <DataTable
               columns={supplierColumns}
               rows={suppliers}
@@ -260,6 +293,9 @@ export function App() {
               sort={sort}
               onSortChange={setSort}
               enableColumnVisibility
+              selectable
+              selectedKeys={selectedSuppliers}
+              onSelectionChange={setSelectedSuppliers}
               page={1}
               totalPages={1}
               total={suppliers.length}
@@ -269,6 +305,44 @@ export function App() {
               <KeyValue label="Registered name" value="Acme Corp" />
               <KeyValue label="Phone" />
             </Card>
+          </section>
+
+          <section className="space-y-3">
+            <FormSectionHeading>Filters</FormSectionHeading>
+            <FilterBar>
+              <TextField
+                label="Search"
+                placeholder="Search by name..."
+                value={filters.values.search}
+                onChange={(e) => filters.setValue('search', e.target.value)}
+              />
+              <SelectField label="Status" value={filters.values.status} onChange={(e) => filters.setValue('status', e.target.value)}>
+                <option value="all">All</option>
+                <option value="active">Active</option>
+                <option value="overdue">Overdue</option>
+              </SelectField>
+            </FilterBar>
+            <ActiveFilterChips
+              filters={(Object.keys(filters.values) as Array<keyof typeof filters.values>)
+                .filter((key) => filters.values[key] && filters.values[key] !== initialSupplierFilters[key])
+                .map((key) => ({
+                  key: String(key),
+                  label: `${String(key)}: ${filters.values[key]}`,
+                  onRemove: () => filters.clearOne(key),
+                }))}
+              onClearAll={filters.activeCount > 0 ? filters.clear : undefined}
+            />
+            <MoreFiltersDisclosure>
+              <FilterBar>
+                <SearchSelectField
+                  label="Owner"
+                  options={suppliers.map((s) => ({ value: String(s.id), label: s.name }))}
+                  value={filters.values.owner}
+                  onChange={(value) => filters.setValue('owner', value)}
+                />
+                <DateRangeField label="Order date" value={orderDateRange} onChange={setOrderDateRange} />
+              </FilterBar>
+            </MoreFiltersDisclosure>
           </section>
 
           <section className="space-y-3">
@@ -408,6 +482,27 @@ export function App() {
         message="This cannot be undone."
         onConfirm={() => setConfirmOpen(false)}
         onCancel={() => setConfirmOpen(false)}
+      />
+
+      <FormDialog
+        open={formDialogOpen}
+        title="New supplier"
+        onClose={() => setFormDialogOpen(false)}
+        onSubmit={(event) => {
+          event.preventDefault()
+          setFormDialogOpen(false)
+        }}
+      >
+        <TextField label="Supplier name" required />
+        <CurrencyField label="Opening balance" currency="USD" />
+      </FormDialog>
+
+      <AlertDialog
+        open={alertDialogOpen}
+        title="Import complete"
+        message="42 suppliers were imported successfully."
+        onClose={() => setAlertDialogOpen(false)}
+        variant="success"
       />
     </div>
   )

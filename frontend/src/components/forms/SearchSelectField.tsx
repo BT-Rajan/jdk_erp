@@ -21,6 +21,7 @@ export interface SearchSelectFieldProps {
   placeholder?: string
   id?: string
   disabled?: boolean
+  required?: boolean
 }
 
 /** "Pick one record via search" -- jdk_clean had no form-field-level
@@ -39,6 +40,7 @@ export function SearchSelectField({
   placeholder,
   id,
   disabled,
+  required,
 }: SearchSelectFieldProps) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
   const selected = options.find((option) => option.value === value) ?? null
@@ -93,7 +95,7 @@ export function SearchSelectField({
   }
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
       <div ref={containerRef} className="relative">
         <input
           id={fieldId}

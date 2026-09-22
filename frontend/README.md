@@ -100,6 +100,50 @@ across every module).
   - `recharts` is isolated into its own `vendor-charts` build chunk
     (`vite.config.ts`) so the main app bundle size is unchanged.
 
+- **Tables / Forms / Modals / Filters** (same directories) — a
+  harden-and-extend pass on top of the two phases above, per
+  [`../docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md`](../docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md).
+  Nothing already built was redesigned; every addition is either a new
+  component/hook or an additive, backward-compatible prop.
+  - **Tables**: `DataTable` gained row selection (`selectable`/
+    `selectedKeys`/`onSelectionChange`, with a header checkbox that goes
+    indeterminate for a partial selection) and an opt-in `stickyHeader`;
+    new `BulkActionsBar` (pairs with selection, renders nothing when
+    nothing's selected); new `useServerTable` hook (`src/lib/`) — the
+    one shared page/sort/filter-to-request wiring, so "don't fetch all
+    records just to filter/sort in the browser" has an actual reusable
+    answer instead of every module reinventing it.
+  - **Forms**: `CurrencyField` (a currency-symbol-prefixed numeric
+    field, distinct from `NumberField` per the spec's own field-type
+    list); a required-field indicator across every field, and a
+    `readOnly` style in `inputClasses` — **deliberately visual only**:
+    `required` never sets the native HTML `required` attribute, because
+    the browser's own constraint validation fires on submit and
+    silently blocks it before react-hook-form's `handleSubmit` (and the
+    zod resolver) ever runs — a real bug this caught while integrating
+    the two, not a hypothetical one; new `FormActions` (the Save/Cancel
+    row every form ends with, `formId` prop for a Save button that
+    lives outside its `<form>`, e.g. in a dialog's footer); an
+    integration test (`formIntegration.test.tsx`) proving
+    react-hook-form + zod + these fields work together end to end,
+    including field-level error display and a blocked submit while
+    invalid.
+  - **Modals**: `FormDialog` (for small, self-contained forms — Save
+    lives in `Modal`'s footer, associated with the body's `<form>` via
+    the native `form` attribute rather than nesting one inside the
+    other) and `AlertDialog` (a single-button acknowledgement dialog for
+    "important information, warnings and errors," distinct from
+    `ConfirmDialog`'s two-button decision shape). `Drawer` already
+    covered "detail dialog/drawer" and `ConfirmDialog` already covered
+    "confirmation dialog" — reused as-is, no new code for either.
+  - **Filters**: `useFilters` hook (`src/lib/`) — one shared way a
+    module owns its filter-values state, active-filter counting, and
+    apply/clear semantics; `ActiveFilterChips` (a scannable, individually
+    removable summary of what's currently applied); `MoreFiltersDisclosure`
+    (keeps advanced/less-used filters collapsed until asked for); new
+    `DateRangeField` (a from/to pair — the spec lists "date/date range"
+    as one filter type, and only a single-date field existed before).
+
 ## Setup
 
 ```bash
