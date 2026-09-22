@@ -16,6 +16,11 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("users") as batch_op:
+        # The FK constraint must be dropped before the index it depends on --
+        # MySQL refuses to drop an index that's still backing a foreign key
+        # (error 1553), which native (non-rebuild) batch mode on MySQL hits
+        # since drop_index/drop_column run as separate ALTER statements.
+        batch_op.drop_constraint("fk_users_team_id", type_="foreignkey")
         batch_op.drop_index("ix_users_team_id")
         batch_op.drop_column("team_id")
         # "team_member" (least-privilege) backfills any pre-existing rows;
