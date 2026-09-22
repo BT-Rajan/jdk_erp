@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Controller, useForm } from 'react-hook-form'
 import { z } from 'zod'
@@ -12,12 +12,15 @@ import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { FormDialog } from '@/components/ui/FormDialog'
 import { PageHeader } from '@/components/ui/PageHeader'
+import type { SortState } from '@/components/ui/sort'
 import { MultiSelectField } from '@/components/forms/MultiSelectField'
 import { SelectField } from '@/components/forms/SelectField'
 import { TextField } from '@/components/forms/TextField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { ROLE_LABELS, VALID_ROLES, isAdminRole } from '@/lib/auth/roles'
+import { useDebouncedValue } from '@/lib/useDebouncedValue'
+import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
 import type { User } from '@/lib/auth/types'
 
 /** Mirrors backend/app/schemas/team.py's TeamOut -- kept local to this
@@ -30,6 +33,19 @@ interface Team {
   code: string | null
   description: string | null
   is_active: boolean
+}
+
+/** Mirrors backend/app/schemas/pagination.py's PaginatedResponse -- the
+ * one shape every server-backed list endpoint returns
+ * (docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md's list-contract
+ * follow-up). */
+interface PaginatedResponse<T> {
+  data: T[]
+  pagination: { page: number; page_size: number; total: number; total_pages: number }
+}
+
+interface UsersFilters {
+  search: string
 }
 
 const createUserSchema = z.object({
@@ -60,21 +76,53 @@ const emptyDefaults: CreateUserValues = {
   team_ids: [],
 }
 
+async function fetchUsers({
+  page,
+  pageSize,
+  sort,
+  filters,
+}: {
+  page: number
+  pageSize: number
+  sort: SortState | null
+  filters: UsersFilters
+}): Promise<ServerTableResult<User>> {
+  // The common list contract (docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md):
+  // page/page_size/sort_by/sort_direction/q, all applied server-side to
+  // the same organisation-scoped query -- this page never fetches
+  // everything and filters/sorts it in the browser.
+  const { data } = await apiClient.get<PaginatedResponse<User>>('/api/users', {
+    params: {
+      page,
+      page_size: pageSize,
+      sort_by: sort?.field,
+      sort_direction: sort?.direction,
+      include_inactive: true,
+      q: filters.search || undefined,
+    },
+  })
+  return { rows: data.data, total: data.pagination.total }
+}
+
 /** Admin-only user directory: list, create, change role, activate/
  * deactivate -- the frontend for the endpoints in backend/app/api/users.py
- * (docs/modules/users.md #4/#6/#10). Server-side is the real boundary
- * (Principle 3); the AccessDeniedState below is a usability courtesy for
- * a non-admin who lands on this route, not the enforcement itself. */
+ * (docs/modules/users.md #4/#6/#10). The first real consumer of the
+ * common list foundation (search/sort/pagination via useServerTable,
+ * docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md) -- nothing here is
+ * Users-specific business logic bleeding into that foundation; this
+ * page only supplies its own fetcher, columns, and sortable field
+ * names. Server-side is the real boundary (Principle 3); the
+ * AccessDeniedState below is a usability courtesy for a non-admin who
+ * lands on this route, not the enforcement itself. */
 export function UsersPage() {
   const { user: currentUser } = useAuth()
   const canManage = isAdminRole(currentUser?.role)
 
-  const [users, setUsers] = useState<User[]>([])
   const [teams, setTeams] = useState<Team[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | undefined>(undefined)
+  const [pageError, setPageError] = useState<string | undefined>(undefined)
+
   const [searchInput, setSearchInput] = useState('')
-  const [search, setSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(searchInput, 300)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -91,40 +139,60 @@ export function UsersPage() {
     formState: { errors, isSubmitting },
   } = useForm<CreateUserValues>({ resolver: zodResolver(createUserSchema), defaultValues: emptyDefaults })
 
+  // useServerTable must be called unconditionally (hooks rules), even
+  // though this page renders AccessDeniedState instead of the table
+  // for a non-admin below -- guarding inside the fetcher itself is what
+  // actually stops a real request firing for someone who can't use
+  // this page at all, rather than relying on the component returning
+  // early after the fetch has already gone out.
+  const fetchUsersGuarded = useCallback(
+    (params: Parameters<typeof fetchUsers>[0]) => (canManage ? fetchUsers(params) : Promise.resolve({ rows: [], total: 0 })),
+    [canManage],
+  )
+
+  const table = useServerTable<User, UsersFilters>({
+    fetcher: fetchUsersGuarded,
+    pageSize: 20,
+    initialFilters: { search: '' },
+  })
+
+  // Debounced search feeding into the table's own filter state --
+  // changing it resets to page 1 (useServerTable's own contract), the
+  // actual server request only fires once typing pauses. Skips its
+  // first run: useServerTable already fetches once on mount with
+  // `initialFilters`, so calling setFilters again there too would fire
+  // a second, redundant request with an identical (but newly-referenced)
+  // filters object -- exactly the "no unnecessary reloads" this
+  // foundation is meant to prevent.
+  const isFirstSearchRender = useRef(true)
+  useEffect(() => {
+    if (isFirstSearchRender.current) {
+      isFirstSearchRender.current = false
+      return
+    }
+    table.setFilters({ search: debouncedSearch })
+    // table.setFilters is stable across renders (defined fresh each
+    // render but only ever calls setState) -- omitted from deps to
+    // avoid re-running on every render; debouncedSearch is the only
+    // thing this effect actually reacts to.
+  }, [debouncedSearch])
+
   const teamsById = useMemo(() => new Map(teams.map((team) => [team.id, team])), [teams])
 
-  const loadAll = useCallback(async (q: string) => {
-    setLoading(true)
-    setLoadError(undefined)
+  const loadTeams = useCallback(async () => {
     try {
-      // q is forwarded to GET /api/users as-is (docs/modules/search.md)
-      // -- the backend applies it to this same organisation-scoped
-      // query, never a separate lookup, so this page can never surface
-      // a user the plain (no-search) list wouldn't already have shown.
-      const [usersRes, teamsRes] = await Promise.all([
-        apiClient.get<User[]>('/api/users', { params: { include_inactive: true, limit: 200, q: q || undefined } }),
-        apiClient.get<Team[]>('/api/teams', { params: { include_inactive: true, limit: 200 } }),
-      ])
-      setUsers(usersRes.data)
-      setTeams(teamsRes.data)
+      const { data } = await apiClient.get<PaginatedResponse<Team>>('/api/teams', {
+        params: { include_inactive: true, page_size: 200 },
+      })
+      setTeams(data.data)
     } catch (err) {
-      setLoadError(err instanceof ApiError ? err.message : 'Failed to load users.')
-    } finally {
-      setLoading(false)
+      setPageError(err instanceof ApiError ? err.message : 'Failed to load teams.')
     }
   }, [])
 
   useEffect(() => {
-    if (canManage) void loadAll(search)
-  }, [canManage, loadAll, search])
-
-  // Debounced: a keystroke updates `searchInput` immediately for a
-  // responsive input, but only fires the actual request 300ms after
-  // typing pauses, so the backend isn't hit on every keystroke.
-  useEffect(() => {
-    const timer = setTimeout(() => setSearch(searchInput), 300)
-    return () => clearTimeout(timer)
-  }, [searchInput])
+    if (canManage) void loadTeams()
+  }, [canManage, loadTeams])
 
   if (!canManage) {
     return (
@@ -146,7 +214,7 @@ export function UsersPage() {
     try {
       await apiClient.post('/api/users', values)
       setCreateOpen(false)
-      await loadAll(search)
+      table.refetch()
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.fields) {
@@ -162,35 +230,40 @@ export function UsersPage() {
   }
 
   async function handleRoleChange(target: User, role: string) {
-    const previous = users
-    setUsers((current) => current.map((u) => (u.id === target.id ? { ...u, role } : u)))
+    setPageError(undefined)
     try {
       await apiClient.patch(`/api/users/${target.id}/role`, { role })
+      table.refetch()
     } catch (err) {
-      setUsers(previous)
-      setLoadError(err instanceof ApiError ? err.message : 'Failed to change role.')
+      setPageError(err instanceof ApiError ? err.message : 'Failed to change role.')
     }
   }
 
   async function confirmStatusChange() {
     if (!statusTarget) return
     setStatusBusy(true)
+    setPageError(undefined)
     try {
       await apiClient.patch(`/api/users/${statusTarget.id}/status`, { is_active: !statusTarget.is_active })
       setStatusTarget(null)
-      await loadAll(search)
+      table.refetch()
     } catch (err) {
-      setLoadError(err instanceof ApiError ? err.message : 'Failed to change status.')
+      setPageError(err instanceof ApiError ? err.message : 'Failed to change status.')
     } finally {
       setStatusBusy(false)
     }
   }
 
   const columns: DataTableColumn<User>[] = [
-    { key: 'full_name', label: 'Name', render: (u) => u.full_name },
-    { key: 'email', label: 'Email', hideBelow: 'md', render: (u) => u.email },
-    { key: 'username', label: 'Username', hideBelow: 'sm', render: (u) => u.username },
-    { key: 'role', label: 'Role', render: (u) => <Badge tone="gold">{ROLE_LABELS[u.role] ?? u.role}</Badge> },
+    { key: 'full_name', label: 'Name', sortable: true, render: (u) => u.full_name },
+    { key: 'email', label: 'Email', sortable: true, hideBelow: 'md', render: (u) => u.email },
+    { key: 'username', label: 'Username', sortable: true, hideBelow: 'sm', render: (u) => u.username },
+    {
+      key: 'role',
+      label: 'Role',
+      sortable: true,
+      render: (u) => <Badge tone="gold">{ROLE_LABELS[u.role] ?? u.role}</Badge>,
+    },
     {
       key: 'teams',
       label: 'Teams',
@@ -241,6 +314,8 @@ export function UsersPage() {
         actions={<Button onClick={openCreate}>New User</Button>}
       />
 
+      <Alert variant="danger">{pageError}</Alert>
+
       <FilterBar>
         <TextField
           label="Search"
@@ -252,12 +327,20 @@ export function UsersPage() {
 
       <DataTable
         columns={columns}
-        rows={users}
+        rows={table.rows}
         rowKey={(u) => u.id}
-        loading={loading}
-        error={loadError}
-        emptyTitle={search ? 'No matching users' : 'No users yet'}
-        emptyMessage={search ? 'Try a different search term.' : 'Create the first teammate with the New User button above.'}
+        loading={table.loading}
+        error={table.error}
+        sort={table.sort}
+        onSortChange={table.setSort}
+        page={table.page}
+        totalPages={table.totalPages}
+        total={table.total}
+        onPageChange={table.setPage}
+        pageSize={table.pageSize}
+        onPageSizeChange={table.setPageSize}
+        emptyTitle={debouncedSearch ? 'No matching users' : 'No users yet'}
+        emptyMessage={debouncedSearch ? 'Try a different search term.' : 'Create the first teammate with the New User button above.'}
       />
 
       <FormDialog

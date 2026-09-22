@@ -1,9 +1,12 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
+from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.core.security import hash_password
 from app.core.validation import validate_company_email_domain
@@ -13,22 +16,37 @@ from app.models.organisation import Organisation
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
+from app.schemas.pagination import PaginatedResponse
 from app.schemas.user import RoleChangeRequest, UserCreateRequest, UserOut, UserStatusChangeRequest
 from app.services import audit_service, auth_service, notification_service, user_service
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
+# The one place a `sort_by` string becomes a real column
+# (docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md's list-contract
+# follow-up) -- app/core/list_query.apply_sort refuses anything not in
+# this map.
+_SORT_FIELDS = {
+    "full_name": User.full_name,
+    "email": User.email,
+    "username": User.username,
+    "role": User.role,
+    "created_at": User.created_at,
+}
 
-@router.get("", response_model=list[UserOut])
+
+@router.get("", response_model=PaginatedResponse[UserOut])
 def list_users(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    sort_by: str | None = Query(None),
+    sort_direction: Literal["asc", "desc"] = Query("asc"),
     include_inactive: bool = Query(False),
     team_id: int | None = Query(None),
     q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[UserOut]:
+) -> PaginatedResponse[UserOut]:
     """Scoped to the caller's own organisation only -- crossing that
     boundary would fail docs/modules/organisation.md #3 and
     docs/modules/users.md acceptance criterion 13. Still ungated for
@@ -43,19 +61,23 @@ def list_users(
     (docs/modules/roles_rbac.md #1), not a users.team_id column.
 
     q (docs/modules/search.md) searches full_name/email/username,
-    applied last -- after organisation_id, is_active and team_id -- so a
-    keyword can only narrow what this endpoint would already return,
-    never widen it."""
+    applied before sort/pagination -- after organisation_id, is_active
+    and team_id -- so a keyword can only narrow what this endpoint
+    would already return, never widen it. page/sort follow the common
+    list contract (docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md)."""
     query = db.query(User).filter(User.organisation_id == current_user.organisation_id)
     if not include_inactive:
         query = query.filter(User.is_active.is_(True))
     if team_id is not None:
         query = query.join(UserTeam, UserTeam.user_id == User.id).filter(UserTeam.team_id == team_id)
     query = apply_keyword_filter(query, q, User.full_name, User.email, User.username)
-    users = query.order_by(User.id).offset(skip).limit(limit).all()
+    query = apply_sort(query, sort_by, sort_direction, _SORT_FIELDS, default=User.id)
 
+    users, pagination = paginate(query, page, page_size)
     team_map = user_service.team_ids_for_users(db, [u.id for u in users])
-    return [user_service.to_user_out(u, team_map[u.id]) for u in users]
+    return PaginatedResponse(
+        data=[user_service.to_user_out(u, team_map[u.id]) for u in users], pagination=pagination
+    )
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

@@ -22,26 +22,26 @@ def test_user_search_matches_full_name(client, active_user):
     headers = _login_headers(client)
     response = client.get("/api/users?q=Lovelace", headers=headers)
     assert response.status_code == 200
-    assert {u["username"] for u in response.json()} == {"ada"}
+    assert {u["username"] for u in response.json()["data"]} == {"ada"}
 
 
 def test_user_search_matches_email(client, active_user):
     headers = _login_headers(client)
     response = client.get("/api/users?q=ada@example", headers=headers)
-    assert {u["username"] for u in response.json()} == {"ada"}
+    assert {u["username"] for u in response.json()["data"]} == {"ada"}
 
 
 def test_user_search_is_case_insensitive(client, active_user):
     headers = _login_headers(client)
     response = client.get("/api/users?q=LOVELACE", headers=headers)
-    assert {u["username"] for u in response.json()} == {"ada"}
+    assert {u["username"] for u in response.json()["data"]} == {"ada"}
 
 
 def test_user_search_no_match_returns_empty_list(client, active_user):
     headers = _login_headers(client)
     response = client.get("/api/users?q=zzz-no-such-user", headers=headers)
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["data"] == []
 
 
 def test_user_search_cannot_see_another_organisations_user(client, active_user, other_org_user):
@@ -51,16 +51,16 @@ def test_user_search_cannot_see_another_organisations_user(client, active_user, 
     headers = _login_headers(client)
     response = client.get("/api/users?q=Grace", headers=headers)
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["data"] == []
 
 
 def test_user_search_still_excludes_inactive_by_default(client, active_user, inactive_user):
     headers = _login_headers(client)
     response = client.get("/api/users?q=Inactive", headers=headers)
-    assert response.json() == []
+    assert response.json()["data"] == []
 
     response = client.get("/api/users?q=Inactive&include_inactive=true", headers=headers)
-    assert {u["username"] for u in response.json()} == {"inactive_user"}
+    assert {u["username"] for u in response.json()["data"]} == {"inactive_user"}
 
 
 def test_user_search_treats_percent_as_a_literal_character(client, active_user, db_session):
@@ -80,13 +80,13 @@ def test_user_search_treats_percent_as_a_literal_character(client, active_user, 
     # only the row that actually contains "50%", not every row (which
     # an unescaped LIKE '%50%%' would do).
     response = client.get("/api/users?q=50%25", headers=headers)
-    assert {u["username"] for u in response.json()} == {"fifty"}
+    assert {u["username"] for u in response.json()["data"]} == {"fifty"}
 
 
 def test_empty_keyword_returns_the_plain_authorized_list(client, active_user):
     headers = _login_headers(client)
-    without_q = {u["username"] for u in client.get("/api/users", headers=headers).json()}
-    with_blank_q = {u["username"] for u in client.get("/api/users?q=", headers=headers).json()}
+    without_q = {u["username"] for u in client.get("/api/users", headers=headers).json()["data"]}
+    with_blank_q = {u["username"] for u in client.get("/api/users?q=", headers=headers).json()["data"]}
     assert without_q == with_blank_q == {"ada"}
 
 
@@ -107,19 +107,19 @@ def test_user_search_requires_authentication(client):
 def test_team_search_matches_name(client, active_user, sales_team):
     headers = _login_headers(client)
     response = client.get("/api/teams?q=sal", headers=headers)
-    assert {t["name"] for t in response.json()} == {"Sales"}
+    assert {t["name"] for t in response.json()["data"]} == {"Sales"}
 
 
 def test_team_search_matches_code(client, active_user, sales_team):
     headers = _login_headers(client)
     response = client.get("/api/teams?q=SALES", headers=headers)
-    assert {t["id"] for t in response.json()} == {sales_team.id}
+    assert {t["id"] for t in response.json()["data"]} == {sales_team.id}
 
 
 def test_team_search_no_match_returns_empty_list(client, active_user, sales_team):
     headers = _login_headers(client)
     response = client.get("/api/teams?q=engineering", headers=headers)
-    assert response.json() == []
+    assert response.json()["data"] == []
 
 
 def test_team_search_cannot_see_another_organisations_team(client, active_user, other_organisation, db_session):
@@ -129,7 +129,7 @@ def test_team_search_cannot_see_another_organisations_team(client, active_user, 
 
     headers = _login_headers(client)
     response = client.get("/api/teams?q=sales", headers=headers)
-    assert response.json() == []
+    assert response.json()["data"] == []
 
 
 def test_team_search_still_excludes_inactive_by_default(client, active_user, organisation, db_session):
@@ -139,7 +139,7 @@ def test_team_search_still_excludes_inactive_by_default(client, active_user, org
 
     headers = _login_headers(client)
     response = client.get("/api/teams?q=retired", headers=headers)
-    assert response.json() == []
+    assert response.json()["data"] == []
 
     response = client.get("/api/teams?q=retired&include_inactive=true", headers=headers)
-    assert {t["name"] for t in response.json()} == {"Retired Team"}
+    assert {t["name"] for t in response.json()["data"]} == {"Retired Team"}

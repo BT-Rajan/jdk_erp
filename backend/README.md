@@ -503,6 +503,42 @@ exactly that.
   building its own widget. Polls the unread-count endpoint instead of
   holding a push connection open.
 
+### Common list contract (`app/core/list_query.py`, `app/schemas/pagination.py`)
+
+A follow-up to the Tables/Forms/Modals/Filters audit
+(`docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md`), prompted by actually
+wiring `UsersPage` up as a real consumer instead of a second hand-rolled
+fetch. `GET /api/users`/`GET /api/teams` previously used `skip`/`limit`
+and returned a bare array -- no endpoint returned a total or supported
+sorting, so the frontend's own `useServerTable` hook had never been
+exercised against anything real.
+
+- **`app/schemas/pagination.py`**: `PaginatedResponse[T]` (Pydantic
+  generic) -- `data: list[T]` + `pagination: {page, page_size, total,
+  total_pages}`. One envelope every list endpoint returns, not a
+  per-module shape.
+- **`app/core/list_query.py`**: `paginate(query, page, page_size)` counts
+  and slices (`.order_by(None).count()` so a prior sort never skews the
+  count); `apply_sort(query, sort_by, sort_direction, allowed, default)`
+  maps a client-supplied `sort_by` string to a real column only through a
+  fixed, per-endpoint allowlist dict -- an unrecognized field is a 422
+  naming the allowed set, never a silent fallback and never a raw
+  `order_by(getattr(Model, sort_by))` that would let a client order by
+  (or probe the existence of) an arbitrary column such as
+  `password_hash`.
+- Applied to both `GET /api/users` and `GET /api/teams`
+  (`_SORT_FIELDS` in each router), proving the contract on two
+  independent resources rather than just one.
+
+Deliberately not built: a generic query/filter-expression builder, saved
+filters, or an advanced search language -- `apply_sort` takes an
+already-validated allowlist key, the same size and shape as
+`app/core/search.py`'s `apply_keyword_filter`, not a query engine.
+16 new tests (`tests/test_list_query.py`) cover the primitive standalone
+plus both real endpoints; `tests/test_users.py`/`test_teams.py`/
+`test_search.py` were updated for the new response envelope, not
+rewritten.
+
 ## Setup
 
 ```bash

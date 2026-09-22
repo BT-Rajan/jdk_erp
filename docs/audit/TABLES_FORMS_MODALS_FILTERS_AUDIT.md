@@ -137,3 +137,93 @@ addition above is either a new, small, focused component/hook or an
 additive prop on an existing component that leaves current usage
 unaffected when omitted (matching the pattern already established in
 the coverage patch for `Sidebar`'s `mobileOpen`).
+
+## Follow-up: the common list contract (search/filter/sort/pagination)
+
+A second pass, prompted by actually wiring `UsersPage` up as a real
+consumer of this layer rather than a second, separate hand-rolled
+fetch. Re-audited against the "one Search/FilterBar/Sorting/Pagination
+foundation, Users as the first real consumer" framing before touching
+anything, per Engineering Principle §16.
+
+**Already covered, no change** (the frontend half of this was mostly
+right the first time):
+
+- `DataTable`'s `sort`/`onSortChange` and `page`/`totalPages`/`total`/
+  `onPageChange` were already controlled-by-the-caller, which is what
+  "server-side sort/pagination" requires structurally — confirmed by
+  actually wiring a real backend to them for the first time, not just
+  by the shape being controlled.
+- `FilterBar`, `ActiveFilterChips`, `MoreFiltersDisclosure`, `useFilters`
+  — reused for `UsersPage`'s filter row as-is; no gap found on
+  re-inspection.
+- `SortableHeader`/`sort.ts`'s `SortState`/`toggleSort` — reused as-is.
+- `useServerTable` existed but had never actually been exercised against
+  a real endpoint (`UsersPage` originally bypassed it — see below).
+
+**Genuine gaps found, now fixed:**
+
+- **No backend endpoint returned a total, or supported sorting, at
+  all.** `GET /api/users`/`GET /api/teams` used `skip`/`limit` and
+  returned a bare array — `useServerTable`'s `{rows, total}` contract
+  was structurally unsatisfiable by any real endpoint in this codebase
+  until now. This was the actual reason `UsersPage` was originally
+  built with a flat one-shot `limit=200` fetch instead of the hook that
+  already existed for exactly this. Fixed with one standard envelope
+  (`app/schemas/pagination.py`'s `PaginatedResponse` — `data` +
+  `pagination{page,page_size,total,total_pages}`) and one shared
+  primitive (`app/core/list_query.py`'s `paginate`/`apply_sort`),
+  applied to both `GET /api/users` and `GET /api/teams` — proving the
+  contract on two independent resources, not just one.
+- **No safe way to sort by an arbitrary client-supplied field.**
+  `apply_sort` maps an approved `sort_by` string to a real column via a
+  fixed, per-endpoint dict (`_SORT_FIELDS` in each router) — an
+  unrecognized key is a 422 naming the allowed set, never a fallback
+  that silently ignores the request, and never a raw
+  `order_by(getattr(Model, sort_by))` that would let a client order by
+  (or, on some backends, probe the existence of) an arbitrary column
+  such as `password_hash`.
+- **`useServerTable` didn't reset the page on a sort change**, only on
+  a filter change — the previous page number could point past the end
+  of a freshly-resorted result set. Fixed; a matching gap for page-size
+  (there was no way to change it at all) is fixed by the same change.
+- **No stale-response protection.** Only an unmount guard existed; a
+  slower, now-superseded request (e.g. from typing quickly into a
+  search box) could still resolve after a newer one and overwrite
+  fresher rows. Fixed with a request-id ref inside `useServerTable` —
+  only the response matching the latest request is ever applied.
+- **No way to refresh the current page after a mutation** (create,
+  role change, activate/deactivate) without resetting page/sort/filters
+  — `UsersPage` originally re-ran its own one-shot fetch by hand for
+  this. `useServerTable` now exposes `refetch()` for exactly this case.
+- **No reusable search debounce.** `UsersPage` had hand-rolled a
+  `setTimeout`-based debounce inline. Extracted into
+  `useDebouncedValue` — deliberately *not* a new `SearchField`
+  component, since `TextField` (with its existing `leadingIcon`/
+  `trailingSlot` props) already covers the "standard search input"
+  shape; inventing an eleventh field type alongside the ten in
+  `docs/modules/common_ui_components.md` would have duplicated it for
+  no reason.
+- **No standard page-size control.** `Pagination` gained optional
+  `pageSize`/`pageSizeOptions`/`onPageSizeChange` props (and
+  `DataTable` forwards them) — omitted, both behave exactly as before.
+
+**Explicitly not built**, per the same spec's own list: a generic
+query/filter-expression builder, saved filters, an advanced search
+language, Elasticsearch/OpenSearch, infinite scrolling, a new
+client-state framework, or a second table implementation.
+`app/core/list_query.py` takes a page number and an already-validated
+sort key, not an arbitrary expression — it is the same size and shape
+as `app/core/search.py`'s `apply_keyword_filter`, not a query engine.
+
+**Verification**: `UsersPage` is the first real consumer end to end —
+search, sort (both directions), pagination (`Next`/`Previous`), and a
+page-size change all confirmed against a live backend with 26 seeded
+users, checking the actual request parameters sent for each
+interaction (not just that something rendered), including that
+changing page preserves the active sort and that changing sort/search/
+page-size correctly resets to page 1. 16 new backend tests
+(`tests/test_list_query.py`) cover the primitive standalone plus both
+real endpoints; the existing `tests/test_users.py`/`test_teams.py`/
+`test_search.py` suites were updated for the new response envelope,
+not rewritten.

@@ -25,16 +25,23 @@ def test_list_users_returns_only_my_organisation(client, active_user, other_org_
     response = client.get("/api/users", headers=headers)
 
     assert response.status_code == 200
-    usernames = {u["username"] for u in response.json()}
+    usernames = {u["username"] for u in response.json()["data"]}
     assert usernames == {"ada"}
     assert "grace" not in usernames
+
+
+def test_list_users_response_includes_pagination_metadata(client, active_user, other_org_user):
+    headers = _login_headers(client)
+    response = client.get("/api/users", headers=headers)
+
+    assert response.json()["pagination"] == {"page": 1, "page_size": 50, "total": 1, "total_pages": 1}
 
 
 def test_list_users_excludes_password_hash(client, active_user):
     headers = _login_headers(client)
     response = client.get("/api/users", headers=headers)
 
-    for user in response.json():
+    for user in response.json()["data"]:
         assert "password_hash" not in user
         assert "password" not in user
 
@@ -43,11 +50,11 @@ def test_list_users_excludes_inactive_by_default(client, active_user, inactive_u
     headers = _login_headers(client)
     response = client.get("/api/users", headers=headers)
 
-    usernames = {u["username"] for u in response.json()}
+    usernames = {u["username"] for u in response.json()["data"]}
     assert usernames == {"ada"}
 
     include_inactive = client.get("/api/users?include_inactive=true", headers=headers)
-    usernames_with_inactive = {u["username"] for u in include_inactive.json()}
+    usernames_with_inactive = {u["username"] for u in include_inactive.json()["data"]}
     assert usernames_with_inactive == {"ada", "inactive_user"}
 
 

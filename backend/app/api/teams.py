@@ -1,19 +1,30 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import SECURITY_MODULE, TEAM_ADDED, TEAM_REMOVED
 from app.models.notification import INFO
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
+from app.schemas.pagination import PaginatedResponse
 from app.schemas.team import TeamMemberIn, TeamOut
 from app.services import audit_service, notification_service
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
+
+# See app/api/users.py's _SORT_FIELDS for the reasoning.
+_SORT_FIELDS = {
+    "name": Team.name,
+    "code": Team.code,
+    "created_at": Team.created_at,
+}
 
 
 def _get_team_in_org(db: Session, team_id: int, organisation_id: int) -> Team:
@@ -25,24 +36,32 @@ def _get_team_in_org(db: Session, team_id: int, organisation_id: int) -> Team:
     return team
 
 
-@router.get("", response_model=list[TeamOut])
+@router.get("", response_model=PaginatedResponse[TeamOut])
 def list_teams(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    sort_by: str | None = Query(None),
+    sort_direction: Literal["asc", "desc"] = Query("asc"),
     include_inactive: bool = Query(False),
     q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[Team]:
+) -> PaginatedResponse[TeamOut]:
     """Scoped to the caller's own organisation only (docs/modules/teams.md #9).
     q (docs/modules/search.md) searches name/code, applied after the
     organisation/is_active filters -- narrows this same query, never a
-    separate lookup."""
+    separate lookup. page/sort follow the common list contract
+    (docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md)."""
     query = db.query(Team).filter(Team.organisation_id == current_user.organisation_id)
     if not include_inactive:
         query = query.filter(Team.is_active.is_(True))
     query = apply_keyword_filter(query, q, Team.name, Team.code)
-    return query.order_by(Team.id).offset(skip).limit(limit).all()
+    query = apply_sort(query, sort_by, sort_direction, _SORT_FIELDS, default=Team.id)
+
+    teams, pagination = paginate(query, page, page_size)
+    # Explicit ORM -> schema conversion, same as list_users' to_user_out
+    # -- not relied on via response_model coercion of a nested generic.
+    return PaginatedResponse(data=[TeamOut.model_validate(t) for t in teams], pagination=pagination)
 
 
 @router.get("/{team_id}", response_model=TeamOut)

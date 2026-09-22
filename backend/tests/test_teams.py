@@ -30,7 +30,7 @@ def test_list_teams_returns_only_my_organisation(client, active_user, sales_team
     response = client.get("/api/teams", headers=headers)
 
     assert response.status_code == 200
-    team_ids = {t["id"] for t in response.json()}
+    team_ids = {t["id"] for t in response.json()["data"]}
     assert team_ids == {sales_team.id}
 
 
@@ -58,11 +58,11 @@ def test_list_teams_excludes_inactive_by_default(client, active_user, organisati
 
     headers = _login_headers(client)
     response = client.get("/api/teams", headers=headers)
-    names = {t["name"] for t in response.json()}
+    names = {t["name"] for t in response.json()["data"]}
     assert "Retired Team" not in names
 
     with_inactive = client.get("/api/teams?include_inactive=true", headers=headers)
-    names_with_inactive = {t["name"] for t in with_inactive.json()}
+    names_with_inactive = {t["name"] for t in with_inactive.json()["data"]}
     assert "Retired Team" in names_with_inactive
 
 
@@ -126,7 +126,7 @@ def test_users_endpoint_filters_by_team_id_to_view_team_members(client, db_sessi
     response = client.get(f"/api/users?team_id={sales_team.id}", headers=headers)
 
     assert response.status_code == 200
-    usernames = {u["username"] for u in response.json()}
+    usernames = {u["username"] for u in response.json()["data"]}
     assert usernames == {"ada"}
 
 
@@ -142,7 +142,7 @@ def test_users_endpoint_team_filter_from_other_organisation_yields_no_leak(
     response = client.get(f"/api/users?team_id={other_team.id}", headers=headers)
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["data"] == []
 
 
 def test_user_without_team_has_empty_team_ids(client, active_user):

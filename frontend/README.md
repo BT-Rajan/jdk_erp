@@ -240,6 +240,32 @@ across every module).
   No admin gate — every user has their own notifications, scoped
   entirely server-side to `recipient_user_id == current_user.id`.
 
+- **Common list contract** -- `UsersPage` as the first real consumer of
+  `useServerTable` end to end, per the follow-up section in
+  [`../docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md`](../docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md).
+  The hook existed but had never been wired to a backend that returned a
+  total or supported sorting, so `UsersPage` had originally bypassed it
+  with a flat one-shot `limit=200` fetch. `useServerTable` gained:
+  page reset on sort change (previously only filter changes reset the
+  page) and a matching `setPageSize` (there was no way to change it at
+  all); a request-id-ref stale-response guard, so a slower, now-
+  superseded request (e.g. from typing quickly into search) can no
+  longer overwrite fresher rows; `refetch()`, so a mutation (create,
+  role change, activate/deactivate) can refresh the current page without
+  resetting page/sort/filters. New `useDebouncedValue` hook (`src/lib/`)
+  replaces a hand-rolled `setTimeout` debounce that used to live inline
+  in `UsersPage` -- deliberately not a new `SearchField` component, since
+  `TextField`'s existing `leadingIcon`/`trailingSlot` props already cover
+  the "standard search input" shape. `Pagination` gained optional
+  `pageSize`/`pageSizeOptions`/`onPageSizeChange` props (`DataTable`
+  forwards them) for a standard page-size control; omitted, both behave
+  exactly as before. Verified against a live backend with 26 seeded
+  users -- search, sort (both directions), pagination, and a page-size
+  change all checked against the actual request parameters sent,
+  including that changing page preserves the active sort. 11 new tests
+  (`UsersPage.test.tsx`) plus hardening tests added to
+  `useServerTable.test.ts`/`Pagination.test.tsx`.
+
 ## Setup
 
 ```bash

@@ -46,6 +46,11 @@ export interface DataTableProps<T> {
   totalPages?: number
   total?: number
   onPageChange?: (page: number) => void
+  /** Forwarded straight to the internal Pagination -- omit both to
+   * keep the previous Previous/Next-only behaviour. */
+  pageSize?: number
+  pageSizeOptions?: number[]
+  onPageSizeChange?: (pageSize: number) => void
   enableColumnVisibility?: boolean
   /** Renders a checkbox column when combined with `selectedKeys` +
    * `onSelectionChange` -- the row-selection half of bulk actions
@@ -79,6 +84,9 @@ export function DataTable<T>({
   totalPages,
   total,
   onPageChange,
+  pageSize,
+  pageSizeOptions,
+  onPageSizeChange,
   enableColumnVisibility = false,
   selectable = false,
   selectedKeys,
@@ -215,7 +223,15 @@ export function DataTable<T>({
         </div>
       )}
       {showPagination && (
-        <Pagination page={page} totalPages={totalPages} total={total} onPageChange={onPageChange} />
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          onPageChange={onPageChange}
+          pageSize={pageSize}
+          pageSizeOptions={pageSizeOptions}
+          onPageSizeChange={onPageSizeChange}
+        />
       )}
     </div>
   )

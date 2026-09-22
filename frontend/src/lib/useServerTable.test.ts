@@ -61,4 +61,87 @@ describe('useServerTable', () => {
     await waitFor(() => expect(result.current.error).toBe('Network down'))
     expect(result.current.loading).toBe(false)
   })
+
+  it('resets to page 1 when sort changes', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ rows: [], total: 0 })
+    const { result } = renderHook(() => useServerTable<Row, object>({ fetcher, initialFilters: {} }))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    act(() => result.current.setPage(3))
+    await waitFor(() => expect(result.current.page).toBe(3))
+
+    act(() => result.current.setSort({ field: 'name', direction: 'asc' }))
+    expect(result.current.page).toBe(1)
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenLastCalledWith({
+        page: 1,
+        pageSize: 20,
+        sort: { field: 'name', direction: 'asc' },
+        filters: {},
+      }),
+    )
+  })
+
+  it('changing page size resets to page 1 and is passed to the fetcher', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ rows: [], total: 0 })
+    const { result } = renderHook(() => useServerTable<Row, object>({ fetcher, pageSize: 20, initialFilters: {} }))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    act(() => result.current.setPage(2))
+    await waitFor(() => expect(result.current.page).toBe(2))
+
+    act(() => result.current.setPageSize(50))
+    expect(result.current.page).toBe(1)
+    expect(result.current.pageSize).toBe(50)
+    await waitFor(() => expect(fetcher).toHaveBeenLastCalledWith({ page: 1, pageSize: 50, sort: null, filters: {} }))
+  })
+
+  it('totalPages is 0, not 1, when there are no results', async () => {
+    const fetcher = vi.fn().mockResolvedValue({ rows: [], total: 0 })
+    const { result } = renderHook(() => useServerTable<Row, object>({ fetcher, initialFilters: {} }))
+
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.totalPages).toBe(0)
+  })
+
+  it('refetch() re-runs the fetcher without changing page/pageSize/sort/filters', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: 1, name: 'Before edit' }], total: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: 1, name: 'After edit' }], total: 1 })
+    const { result } = renderHook(() => useServerTable<Row, object>({ fetcher, initialFilters: {} }))
+    await waitFor(() => expect(result.current.rows).toEqual([{ id: 1, name: 'Before edit' }]))
+
+    act(() => result.current.refetch())
+    await waitFor(() => expect(result.current.rows).toEqual([{ id: 1, name: 'After edit' }]))
+
+    expect(result.current.page).toBe(1)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[0]).toEqual(fetcher.mock.calls[1])
+  })
+
+  it('discards a slower, now-stale response instead of letting it overwrite newer results', async () => {
+    let resolveFirst!: (value: { rows: Row[]; total: number }) => void
+    const firstRequest = new Promise<{ rows: Row[]; total: number }>((resolve) => {
+      resolveFirst = resolve
+    })
+    const fetcher = vi
+      .fn()
+      .mockReturnValueOnce(firstRequest)
+      .mockResolvedValueOnce({ rows: [{ id: 2, name: 'Fast, newer request' }], total: 1 })
+
+    const { result } = renderHook(() => useServerTable<Row, { search: string }>({ fetcher, initialFilters: { search: '' } }))
+
+    // A second request (e.g. from typing further into a search box)
+    // starts and resolves before the first one does.
+    act(() => result.current.setFilters({ search: 'x' }))
+    await waitFor(() => expect(result.current.rows).toEqual([{ id: 2, name: 'Fast, newer request' }]))
+
+    // The slow first request finally resolves -- its result must not
+    // clobber the newer one already rendered.
+    resolveFirst({ rows: [{ id: 1, name: 'Slow, stale request' }], total: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(result.current.rows).toEqual([{ id: 2, name: 'Fast, newer request' }])
+  })
 })
