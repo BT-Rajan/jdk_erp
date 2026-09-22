@@ -110,7 +110,7 @@ if [ ! -s .env ]; then cp .env.example .env; FRESH_ENV=1; ok "Created .env from 
 export FRESH_ENV
 "$VPY" - <<'PY'
 import os, re, secrets
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote_plus
 
 path = ".env"
 text = open(path).read()
@@ -130,8 +130,21 @@ if not get("JWT_SECRET_KEY"):
     put("JWT_SECRET_KEY", secrets.token_hex(32))
     print("  generated JWT_SECRET_KEY")
 
+def mysql_username(u):
+    m = re.match(r"^mysql\+pymysql://([^:@/]+)", u)
+    return unquote_plus(m.group(1)) if m else None
+
 url = get("DATABASE_URL") or ""
-switch = os.environ["USE_SQLITE"] != "1" and (not url or (url.startswith("sqlite") and os.environ["FRESH_ENV"] == "1"))
+current_user = mysql_username(url)
+# Rewrite DATABASE_URL whenever it's unset, still the sqlite default, or a
+# MySQL URL whose username no longer matches DB_USER -- so re-running
+# install.sh with different DB_* values (e.g. switching root -> app_user)
+# actually takes effect instead of leaving a stale URL from an earlier run.
+switch = os.environ["USE_SQLITE"] != "1" and (
+    not url
+    or url.startswith("sqlite")
+    or (current_user is not None and current_user != os.environ["DB_USER"])
+)
 if switch:
     user = quote_plus(os.environ["DB_USER"])
     pw = quote_plus(os.environ["DB_PASS"])
