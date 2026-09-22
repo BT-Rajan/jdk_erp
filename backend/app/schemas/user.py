@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 from app.core.roles import VALID_ROLES
+from app.core.validation import validate_password_complexity
 
 
 class UserOut(BaseModel):
@@ -34,3 +35,49 @@ class RoleChangeRequest(BaseModel):
         if value not in VALID_ROLES:
             raise ValueError(f"role must be one of {sorted(VALID_ROLES)}")
         return value
+
+
+class UserCreateRequest(BaseModel):
+    """docs/modules/users.md #4/#10 -- an authorised administrator creates
+    a user, assigns a role, and optionally assigns team(s) up front.
+    organisation_id is never part of this payload (#8): the endpoint
+    always takes it from the authenticated admin."""
+
+    full_name: str
+    email: EmailStr
+    username: str
+    password: str
+    role: str
+    team_ids: list[int] = []
+
+    @field_validator("full_name")
+    @classmethod
+    def _check_full_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Full name is required.")
+        return value
+
+    @field_validator("username")
+    @classmethod
+    def _check_username(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Username is required.")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        return validate_password_complexity(value)
+
+    @field_validator("role")
+    @classmethod
+    def _check_role(cls, value: str) -> str:
+        if value not in VALID_ROLES:
+            raise ValueError(f"role must be one of {sorted(VALID_ROLES)}")
+        return value
+
+
+class UserStatusChangeRequest(BaseModel):
+    is_active: bool

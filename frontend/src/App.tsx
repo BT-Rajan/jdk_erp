@@ -5,6 +5,7 @@ import { AuthProvider } from '@/lib/auth/AuthContext'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
+import { UsersPage } from '@/pages/UsersPage'
 
 /** The app's one route table. `/login` is the only public route;
  * everything else renders inside AppLayout, gated by RequireAuth
@@ -24,6 +25,7 @@ export function App() {
           }
         >
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/users" element={<UsersPage />} />
           <Route path="/styleguide" element={<StyleGuidePage />} />
         </Route>
       </Routes>

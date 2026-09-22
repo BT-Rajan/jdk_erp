@@ -205,6 +205,18 @@ across every module).
   Copy `frontend/.env.example` to `.env.local` and set `VITE_API_URL`
   before running `npm run dev` against a real backend.
 
+- **Users** (`src/pages/UsersPage.tsx`) — the first consumer of the RBAC
+  endpoints `roles_rbac.md` built with no UI at all until now
+  (`docs/modules/users.md`). Admin-only: list every user in the
+  organisation, create one (with role and initial team assignment via
+  `POST /api/users`), change role, and activate/deactivate
+  (`PATCH /api/users/{id}/role` / `/status`) from a row's action menu.
+  Nav-gated to `admin`/`super_admin` in `AppLayout.tsx`
+  (`lib/auth/roles.ts`'s `isAdminRole`) — usability only, per Principle 3;
+  a non-admin who reaches `/users` directly sees `AccessDeniedState`
+  instead, since every call still goes through the same admin-gated
+  backend endpoints.
+
 ## Setup
 
 ```bash

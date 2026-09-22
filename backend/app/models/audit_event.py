@@ -18,6 +18,8 @@ PASSWORD_CHANGE = "password_change"
 ROLE_CHANGED = "role_changed"
 TEAM_ADDED = "team_added"
 TEAM_REMOVED = "team_removed"
+USER_CREATED = "user_created"
+USER_STATUS_CHANGED = "user_status_changed"
 
 SECURITY_MODULE = "security"
 

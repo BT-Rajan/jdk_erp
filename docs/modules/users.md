@@ -157,14 +157,16 @@ organisation-scoped user directory and the indexing §9 asks for.
   are now implemented: `role` as a column on `User`, team membership as
   the `user_teams` table `roles_rbac.md` calls for (not a `team_id`
   column — see that document for why one-user-many-teams).
-- The admin API to create/edit/deactivate a user is still **not** fully
-  built — only the role-change and team-membership pieces the RBAC phase
-  explicitly asked for are (see `roles_rbac.md`'s implementation
-  section). Creating a brand-new user and activating/deactivating one
-  still go through `scripts/seed_admin.py` only; acceptance criteria 1
-  and 7 remain deferred for that reason. Criteria 3, 4, 6, 9, 10, 12 are
-  now implemented and tested; 11 stays deferred since no business record
-  yet exists to test "unchanged after a role/team change" against.
+- The admin API to create/edit/deactivate a user was **not** fully built
+  at first — only the role-change and team-membership pieces the RBAC
+  phase explicitly asked for were (see `roles_rbac.md`'s implementation
+  section). `scripts/seed_admin.py` was the only way to create a user or
+  flip `is_active`. **Now resolved**, per the "Implemented now" section
+  below: criteria 1, 5, 6, 7 and 12 are implemented and tested; edit
+  (changing name/email on an existing user) is still not built, since
+  nothing has asked for it yet. Criteria 3, 4, 9, 10 were already
+  implemented; 11 stays deferred since no business record yet exists to
+  test "unchanged after a role/team change" against.
 - **Login identifier uniqueness stays global, not per-organisation.**
   §4 and Organisation §8 both call for uniqueness scoped to the
   organisation. That was deliberately not implemented: today's login
@@ -202,3 +204,28 @@ Authentication) already exist:
   operations RBAC adds (role change, team membership) are gated by role;
   the read directory stays open to any authenticated organisation member,
   unchanged.
+- `POST /api/users` — admin-gated, the one place a `User` row is created
+  outside `scripts/seed_admin.py` now (criterion 1). Takes `full_name`,
+  `email`, `username`, `password`, `role`, and an optional `team_ids` list
+  to assign teams in the same request rather than a separate follow-up
+  call. `organisation_id` is always the authenticated admin's own — never
+  read from the request body (criterion 12). Validates the password
+  policy, the role against the fixed set, the organisation's
+  `email_domain` if one is configured, and that every `team_ids` entry is
+  an active team in the admin's own organisation (criterion 6); rejects a
+  duplicate email or username with `CONFLICT` (criterion 5, keeping the
+  documented global-uniqueness decision above). Logs a `user_created`
+  audit event.
+- `PATCH /api/users/{id}/status` — admin-gated, mirrors
+  `PATCH /api/users/{id}/role`'s shape (criterion 7: activate/
+  deactivate). Deactivating also revokes the user's sessions
+  (`docs/modules/session_security.md` #8), same as a role change already
+  does, so an already-issued access token stops working on its next use.
+  An admin cannot deactivate their own account through this endpoint —
+  there would be no one left to undo it. Logs a `user_status_changed`
+  audit event.
+- A frontend admin screen (`frontend/src/pages/UsersPage.tsx`, nav-gated
+  to `admin`/`super_admin` in `AppLayout.tsx`) consumes all of the above:
+  list, create (with role and team assignment), change role, and
+  activate/deactivate — the first real consumer of the RBAC endpoints
+  built in `roles_rbac.md`, which until now had no UI at all.

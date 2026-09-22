@@ -51,14 +51,15 @@ new.
   `GET /api/users` (paginated, active-only by default, filterable by
   `team_id`) and `GET /api/users/{id}`, both scoped to the caller's own
   organisation (a cross-organisation lookup returns 404, never confirming
-  another organisation's user exists). Matches
+  another organisation's user exists); `POST /api/users` (admin-gated) to
+  create a user with a role and optional initial team assignment, and
+  `PATCH /api/users/{id}/role` / `PATCH /api/users/{id}/status`
+  (admin-gated) to change role or activate/deactivate. Matches
   [`../docs/modules/users.md`](../docs/modules/users.md). Still
-  **excludes** create/edit/deactivate — those need a fuller "authorised
-  administrator" story than the role gate RBAC adds below covers; only
-  `PATCH /api/users/{id}/role` (admin-gated) is built, since that's what
-  the RBAC phase explicitly asked for. `UserOut` (`app/schemas/user.py`)
-  is the one public-safe user shape, shared between `/api/auth/me` and
-  the directory endpoints, carrying `role` and `team_ids`.
+  **excludes** editing an existing user's name/email — nothing has asked
+  for that yet. `UserOut` (`app/schemas/user.py`) is the one public-safe
+  user shape, shared between `/api/auth/me` and the directory endpoints,
+  carrying `role` and `team_ids`.
 - **Teams** (`app/api/teams.py`, `app/models/team.py`) — organisational
   grouping only, no permission data: `GET /api/teams`, `GET
   /api/teams/{id}`, and `GET /api/users?team_id=...` to view a team's
