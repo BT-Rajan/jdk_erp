@@ -44,10 +44,16 @@ def revoke_all_sessions(db: Session, user_id: int) -> None:
 
 
 def _issue_tokens(db: Session, user: User) -> TokenResponse:
+    """Adds the new refresh token to the session but does not commit --
+    issuing a token is part of the same logical operation as whatever
+    business change led to it (a fresh login, a rotation), so the caller
+    commits exactly once for the whole operation
+    (docs/modules/database_transaction_integrity.md #5/#6/#9): if the
+    commit fails, the business change (e.g. "this old token is revoked")
+    is not left committed while the replacement silently never existed."""
     access_token = create_access_token(user.id, user.organisation_id)
     refresh_token, jti, expires_at = create_refresh_token(user.id)
     db.add(RefreshToken(jti=jti, user_id=user.id, expires_at=expires_at))
-    db.commit()
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
 
 
@@ -119,9 +125,14 @@ def login(db: Session, username: str, password: str, ip_address: str | None) -> 
         ip_address=ip_address,
         result="success",
     )
+    # One commit for the whole login: last_login_at, the audit record and
+    # the new refresh token succeed or fail together -- a failure issuing
+    # the token must not leave a committed "login succeeded" audit event
+    # for a login the caller never actually received tokens for
+    # (docs/modules/database_transaction_integrity.md #9/#10).
+    tokens = _issue_tokens(db, user)
     db.commit()
-
-    return _issue_tokens(db, user)
+    return tokens
 
 
 def refresh(db: Session, refresh_token: str) -> TokenResponse:
@@ -156,12 +167,17 @@ def refresh(db: Session, refresh_token: str) -> TokenResponse:
 
     # Rotation: this token is spent the moment it's used, whether or not
     # the caller keeps the new pair -- a replayed refresh token is always
-    # rejected (docs/audit/AUTHENTICATION_AUDIT.md #5).
+    # rejected (docs/audit/AUTHENTICATION_AUDIT.md #5). Revoking the old
+    # token and issuing the new one are one logical operation, committed
+    # once (docs/modules/database_transaction_integrity.md #5/#9): two
+    # separate commits here would let a failure after the first one
+    # revoke the caller's only valid token without ever handing back a
+    # replacement, locking them out.
     record.revoked = True
     db.add(record)
+    tokens = _issue_tokens(db, user)
     db.commit()
-
-    return _issue_tokens(db, user)
+    return tokens
 
 
 def logout(db: Session, refresh_token: str) -> None:

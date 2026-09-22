@@ -236,6 +236,47 @@ user-creation, Quotation, Order, Product, or Material endpoint exists),
 so it's verified standalone (`tests/test_common_validation.py`,
 `tests/test_qr.py`) rather than through a request/response test.
 
+### Database + Transaction Integrity (docs/modules/database_transaction_integrity.md)
+
+A small, strong foundation for every table and every multi-step business
+operation, audited against the seven tables that exist today
+(`docs/audit/DATABASE_TRANSACTION_INTEGRITY_AUDIT.md`):
+
+- **Foreign keys are actually enforced in dev/test, not just declared.**
+  SQLite silently ignores `ForeignKey()` unless `PRAGMA foreign_keys=ON`
+  is set per connection — verified missing, then fixed with a
+  `connect`-event listener on this project's own engine
+  (`app/core/database.py`), so local dev/tests now enforce exactly what
+  MySQL (the one supported production database) already enforces.
+- **Every foreign key has an explicit `ON DELETE` behaviour** — `RESTRICT`
+  for organisation-scoping and the audit trail (never orphan a business
+  record by deleting its parent), `CASCADE` for pure session/membership/
+  grant rows, `SET NULL` for `audit_events.user_id`/`actor_user_id` (the
+  audit row outlives the user it references). A `naming_convention` on
+  `Base.metadata` gives every constraint a deterministic, addressable
+  name going forward (migration `0010`).
+- **One commit per logical operation.** `auth_service.login()` and
+  `refresh()` used to commit the business change (last login / token
+  revocation) and the new refresh token as two separate transactions —
+  a failure between them could leave a false "login succeeded" audit
+  record, or burn a refresh token with no replacement ever issued. Both
+  now commit exactly once for the whole operation, with regression tests
+  that force a failure between the former two commits and assert
+  nothing partially persisted (`tests/test_database_integrity.py`).
+- **Indexed for the query that actually runs.** The login-lockout check
+  (`action` + `username_attempted` + `created_at` range) runs on every
+  login attempt; it now has a matching composite index instead of a
+  standalone one on a single column (migration `0012`).
+- Two small pre-existing issues caught along the way: a schema/model
+  width drift on `audit_events.action` (migration `0011`, found via
+  `alembic check`) and a stale constraint name left over from the
+  `auth_events` → `audit_events` rename.
+
+No `Numeric`/`DECIMAL` columns or atomic stock/quantity updates exist
+yet — there's no Sales/Finance/Products/Materials table to apply them
+to. When one is built, it must use `Numeric`, never `Float`, for money
+or quantities, and reuse `app/core/currency.round_currency` for rounding.
+
 ## Setup
 
 ```bash

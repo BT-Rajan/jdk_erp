@@ -37,20 +37,35 @@ class AuditEvent(Base):
     __table_args__ = (
         Index("ix_audit_events_entity_type_entity_id", "entity_type", "entity_id"),
         Index("ix_audit_events_module_created_at", "module", "created_at"),
+        # The exact shape of auth_service.login()'s lockout-count query
+        # (action + username_attempted equality, created_at range) -- runs
+        # on every login attempt, so this is a real hot path, not a
+        # speculative index (docs/modules/database_transaction_integrity.md
+        # #3). Its leading column (username_attempted) also makes the old
+        # standalone index on that column redundant -- dropped alongside
+        # this one in migration 0012.
+        Index("ix_audit_events_username_attempted_action_created_at", "username_attempted", "action", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # Nullable: an unresolvable login attempt (unknown username) has no
-    # organisation to attribute the event to.
-    organisation_id: Mapped[int | None] = mapped_column(ForeignKey("organisations.id"), nullable=True, index=True)
+    # organisation to attribute the event to. RESTRICT: an audit trail is
+    # exactly the "important business record" #2 says deletion must not
+    # orphan (docs/modules/database_transaction_integrity.md).
+    organisation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organisations.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     action: Mapped[str] = mapped_column(String(30), nullable=False)
     module: Mapped[str] = mapped_column(String(30), nullable=False)
-    # The user this event is *about* (e.g. whose role changed).
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    # The user this event is *about* (e.g. whose role changed). SET NULL,
+    # not RESTRICT: the audit row itself must outlive the user it
+    # references (these columns are already nullable for exactly this
+    # "subject no longer resolvable" case).
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     # Who *performed* the action, when different from user_id (an admin
     # changing someone else's role). None for a not-yet-resolved actor
     # (an unknown-username login attempt) or a system-initiated action.
-    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     entity_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -59,6 +74,6 @@ class AuditEvent(Base):
     # before/after narrative docs/modules/audit_trail.md #5 shows.
     reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    username_attempted: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    username_attempted: Mapped[str | None] = mapped_column(String(50), nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)

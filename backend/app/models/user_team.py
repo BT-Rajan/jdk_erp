@@ -15,7 +15,10 @@ class UserTeam(Base):
     __tablename__ = "user_teams"
     __table_args__ = (UniqueConstraint("user_id", "team_id", name="uq_user_teams_user_id_team_id"),)
 
+    # CASCADE on both sides: a membership row is a pure join record with
+    # no standalone value once either side is gone
+    # (docs/modules/database_transaction_integrity.md #2).
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

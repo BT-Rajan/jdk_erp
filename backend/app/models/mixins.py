@@ -20,4 +20,9 @@ class OrganisationScopedMixin:
     redeclaring the column, so the FK and index can't drift between
     modules."""
 
-    organisation_id: Mapped[int] = mapped_column(ForeignKey("organisations.id"), nullable=False, index=True)
+    # RESTRICT: organisations are deactivated, never deleted, but the
+    # constraint is explicit rather than left to each database's own
+    # default (docs/modules/database_transaction_integrity.md #2).
+    organisation_id: Mapped[int] = mapped_column(
+        ForeignKey("organisations.id", ondelete="RESTRICT"), nullable=False, index=True
+    )

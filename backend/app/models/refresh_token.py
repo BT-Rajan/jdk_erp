@@ -18,7 +18,10 @@ class RefreshToken(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     jti: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    # CASCADE: a session record has no value once its user is gone --
+    # unlike audit_events, this isn't a business/audit record
+    # (docs/modules/database_transaction_integrity.md #2).
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

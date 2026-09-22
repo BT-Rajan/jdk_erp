@@ -17,7 +17,9 @@ class UserPermission(Base, TimestampMixin, OrganisationScopedMixin):
     __table_args__ = (UniqueConstraint("user_id", "module_key", "action", name="uq_user_permissions_scope_key"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    # CASCADE: a per-user override grant has no value once the user is
+    # gone (docs/modules/database_transaction_integrity.md #2).
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     module_key: Mapped[str] = mapped_column(String(50), nullable=False)
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     scope: Mapped[str] = mapped_column(String(10), nullable=False)
