@@ -2,9 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
+import app.jobs  # noqa: F401 -- registers every job handler (docs/modules/background_jobs.md #1)
 from app.api.audit_events import router as audit_events_router
 from app.api.auth import router as auth_router
 from app.api.files import router as files_router
+from app.api.jobs import router as jobs_router
 from app.api.organisations import router as organisations_router
 from app.api.permissions import router as permissions_router
 from app.api.teams import router as teams_router
@@ -50,6 +52,7 @@ app.add_middleware(RequestIDMiddleware)
 app.include_router(audit_events_router)
 app.include_router(auth_router)
 app.include_router(files_router)
+app.include_router(jobs_router)
 app.include_router(organisations_router)
 app.include_router(permissions_router)
 app.include_router(teams_router)

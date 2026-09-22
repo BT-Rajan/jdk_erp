@@ -366,6 +366,56 @@ Storage backup is an operational requirement, not application code: the
 `FILE_STORAGE_ROOT` directory must be included in whatever backs up the
 database, since the database only holds references to the files in it.
 
+### Background Jobs (docs/modules/background_jobs.md)
+
+One database-backed job mechanism for work that shouldn't block a
+request (`docs/audit/BACKGROUND_JOBS_AUDIT.md`):
+
+- **`app/services/job_service.py`**: `dispatch`/`claim_pending_jobs`/
+  `complete_job`/`fail_job`/`recover_abandoned_jobs`/`get_job_stats`.
+  `dispatch()` doesn't commit -- include it in the same transaction as
+  the business change it follows from for the atomic outbox case, or
+  commit it alone right after for a plain "just enqueue this."
+- **Job types are a closed set.** `app/core/job_registry.py` refuses an
+  unregistered `job_type` at dispatch time; there is no endpoint that
+  lets a client choose one. `app/jobs/__init__.py` registers every
+  known handler at import time, the same pattern
+  `app/models/__init__.py` uses for models.
+- **Atomic claiming.** `claim_pending_jobs()` uses a conditional
+  `UPDATE ... WHERE status='pending'` per candidate row, not a
+  read-then-write -- portable to MySQL (this project's one supported
+  production database), which has no `UPDATE ... LIMIT ... RETURNING`.
+- **Retry only what a handler says is safe to retry.** A handler raises
+  `RetryableJobError` for a transient failure; any other exception is
+  non-retryable by default and fails immediately -- exponential backoff
+  and a final `FAILED` state otherwise.
+- **Crash recovery.** A `RUNNING` job whose worker never reported back
+  within `JOB_STALE_RUNNING_MINUTES` is routed through the same
+  retry/backoff logic as an ordinary failure, so a job type that
+  reliably crashes its worker still reaches `FAILED` eventually.
+- **A real transaction-safety bug found and fixed** while wiring a
+  handler's writes into the same session as its job-status update: a
+  handler that wrote something and then raised needed an explicit
+  rollback before the failure was recorded, or that partial write would
+  have been silently committed alongside the `FAILED` status. Covered
+  by a dedicated test.
+- **The one real job type**, not a fabricated demo:
+  `cleanup_expired_refresh_tokens` -- expired refresh tokens have no
+  value once past `expires_at`, and deleting rows that are already gone
+  is naturally idempotent, so it doubles as this module's own
+  idempotency proof.
+- **`scripts/run_worker.py`** runs the one worker process (`python -m
+  scripts.run_worker`); `scripts/enqueue_cleanup.py` is what a
+  deployment's own cron calls once a day, per #10's "use the existing
+  scheduler, don't build one."
+- **`GET /api/jobs/stats`** (admin-gated): pending/running/failed/
+  completed counts, oldest-pending age, last-success time.
+
+Deliberately not built: a generic dispatch endpoint that accepts a
+`job_type` from a client -- that's exactly the "let users arbitrarily
+execute job types" #12 forbids. The worker running with minimum OS/DB
+privileges is a deployment concern, not application code.
+
 ## Setup
 
 ```bash

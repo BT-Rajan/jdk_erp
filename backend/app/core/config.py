@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     # module needing a new type extends this, not app/core/storage.py.
     ALLOWED_UPLOAD_EXTENSIONS: str = "pdf,png,jpg,jpeg,gif,csv,docx,xlsx"
 
+    # Background jobs (docs/modules/background_jobs.md). Defaults here
+    # are per-job overridable (Job.max_attempts is stored per row), so a
+    # specific job type can ask for more/fewer attempts than the default.
+    JOB_MAX_ATTEMPTS: int = 3
+    JOB_RETRY_BASE_DELAY_SECONDS: int = 30
+    # A RUNNING job whose worker died without ever marking it
+    # completed/failed becomes eligible for recovery after this long
+    # (docs/modules/background_jobs.md #5).
+    JOB_STALE_RUNNING_MINUTES: int = 30
+    JOB_WORKER_POLL_INTERVAL_SECONDS: int = 5
+    JOB_WORKER_BATCH_SIZE: int = 5
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
