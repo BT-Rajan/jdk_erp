@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.core.search import apply_keyword_filter
 from app.models.audit_event import SECURITY_MODULE, TEAM_ADDED, TEAM_REMOVED
 from app.models.team import Team
 from app.models.user import User
@@ -28,13 +29,18 @@ def list_teams(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     include_inactive: bool = Query(False),
+    q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[Team]:
-    """Scoped to the caller's own organisation only (docs/modules/teams.md #9)."""
+    """Scoped to the caller's own organisation only (docs/modules/teams.md #9).
+    q (docs/modules/search.md) searches name/code, applied after the
+    organisation/is_active filters -- narrows this same query, never a
+    separate lookup."""
     query = db.query(Team).filter(Team.organisation_id == current_user.organisation_id)
     if not include_inactive:
         query = query.filter(Team.is_active.is_(True))
+    query = apply_keyword_filter(query, q, Team.name, Team.code)
     return query.order_by(Team.id).offset(skip).limit(limit).all()
 
 

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
+from app.core.search import apply_keyword_filter
 from app.core.security import hash_password
 from app.core.validation import validate_company_email_domain
 from app.models.audit_event import ROLE_CHANGED, SECURITY_MODULE, USER_CREATED, USER_STATUS_CHANGED
@@ -23,6 +24,7 @@ def list_users(
     limit: int = Query(50, ge=1, le=200),
     include_inactive: bool = Query(False),
     team_id: int | None = Query(None),
+    q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[UserOut]:
@@ -37,12 +39,18 @@ def list_users(
     without a separate endpoint -- a team_id from another organisation
     just yields an empty list, since the organisation_id filter below
     still applies. Joins user_teams now that membership is many-to-many
-    (docs/modules/roles_rbac.md #1), not a users.team_id column."""
+    (docs/modules/roles_rbac.md #1), not a users.team_id column.
+
+    q (docs/modules/search.md) searches full_name/email/username,
+    applied last -- after organisation_id, is_active and team_id -- so a
+    keyword can only narrow what this endpoint would already return,
+    never widen it."""
     query = db.query(User).filter(User.organisation_id == current_user.organisation_id)
     if not include_inactive:
         query = query.filter(User.is_active.is_(True))
     if team_id is not None:
         query = query.join(UserTeam, UserTeam.user_id == User.id).filter(UserTeam.team_id == team_id)
+    query = apply_keyword_filter(query, q, User.full_name, User.email, User.username)
     users = query.order_by(User.id).offset(skip).limit(limit).all()
 
     team_map = user_service.team_ids_for_users(db, [u.id for u in users])

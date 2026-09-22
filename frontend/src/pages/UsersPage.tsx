@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
+import { FilterBar } from '@/components/ui/FilterBar'
 import { FormDialog } from '@/components/ui/FormDialog'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { MultiSelectField } from '@/components/forms/MultiSelectField'
@@ -72,6 +73,8 @@ export function UsersPage() {
   const [teams, setTeams] = useState<Team[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
 
   const [createOpen, setCreateOpen] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -90,12 +93,16 @@ export function UsersPage() {
 
   const teamsById = useMemo(() => new Map(teams.map((team) => [team.id, team])), [teams])
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (q: string) => {
     setLoading(true)
     setLoadError(undefined)
     try {
+      // q is forwarded to GET /api/users as-is (docs/modules/search.md)
+      // -- the backend applies it to this same organisation-scoped
+      // query, never a separate lookup, so this page can never surface
+      // a user the plain (no-search) list wouldn't already have shown.
       const [usersRes, teamsRes] = await Promise.all([
-        apiClient.get<User[]>('/api/users', { params: { include_inactive: true, limit: 200 } }),
+        apiClient.get<User[]>('/api/users', { params: { include_inactive: true, limit: 200, q: q || undefined } }),
         apiClient.get<Team[]>('/api/teams', { params: { include_inactive: true, limit: 200 } }),
       ])
       setUsers(usersRes.data)
@@ -108,8 +115,16 @@ export function UsersPage() {
   }, [])
 
   useEffect(() => {
-    if (canManage) void loadAll()
-  }, [canManage, loadAll])
+    if (canManage) void loadAll(search)
+  }, [canManage, loadAll, search])
+
+  // Debounced: a keystroke updates `searchInput` immediately for a
+  // responsive input, but only fires the actual request 300ms after
+  // typing pauses, so the backend isn't hit on every keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput), 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
 
   if (!canManage) {
     return (
@@ -131,7 +146,7 @@ export function UsersPage() {
     try {
       await apiClient.post('/api/users', values)
       setCreateOpen(false)
-      await loadAll()
+      await loadAll(search)
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.fields) {
@@ -163,7 +178,7 @@ export function UsersPage() {
     try {
       await apiClient.patch(`/api/users/${statusTarget.id}/status`, { is_active: !statusTarget.is_active })
       setStatusTarget(null)
-      await loadAll()
+      await loadAll(search)
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Failed to change status.')
     } finally {
@@ -226,14 +241,23 @@ export function UsersPage() {
         actions={<Button onClick={openCreate}>New User</Button>}
       />
 
+      <FilterBar>
+        <TextField
+          label="Search"
+          placeholder="Search by name, email or username..."
+          value={searchInput}
+          onChange={(event) => setSearchInput(event.target.value)}
+        />
+      </FilterBar>
+
       <DataTable
         columns={columns}
         rows={users}
         rowKey={(u) => u.id}
         loading={loading}
         error={loadError}
-        emptyTitle="No users yet"
-        emptyMessage="Create the first teammate with the New User button above."
+        emptyTitle={search ? 'No matching users' : 'No users yet'}
+        emptyMessage={search ? 'Try a different search term.' : 'Create the first teammate with the New User button above.'}
       />
 
       <FormDialog
