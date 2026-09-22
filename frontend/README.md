@@ -64,9 +64,10 @@ across every module).
   See [`../docs/audit/COMMON_UI_COMPONENTS_AUDIT.md`](../docs/audit/COMMON_UI_COMPONENTS_AUDIT.md)
   for the full reuse/rebuild verdict per component.
 
-  `src/App.tsx` is a kitchen-sink demo composing every component on one
-  page — useful as a quick visual reference and as a live smoke test
-  (`npm run dev`) until real module screens replace it.
+  `src/pages/StyleGuidePage.tsx` (routed at `/styleguide`) is a
+  kitchen-sink demo composing every component on one page — useful as a
+  quick visual reference and as a live smoke test (`npm run dev`) until
+  real module screens make it redundant.
 
 - **Common UI Components — coverage patch** (same directories) — a
   follow-up pass that audited the phase above and added only what was
@@ -163,6 +164,46 @@ across every module).
       `.refine()`.
     - `lib/timezone.ts`: `formatKuwaitTime` — the one JDK/Kuwait
       timezone conversion path; no component does its own.
+
+- **Frontend integration layer** (`src/lib/apiClient.ts`, `src/lib/auth/`,
+  `src/components/routing/`, `src/components/layout/AppLayout.tsx`,
+  `src/pages/LoginPage.tsx`, `src/pages/DashboardPage.tsx`) — the piece
+  that turns the component library above and the backend's auth API
+  (`docs/modules/authentication.md`) into a running app, so this stays
+  the one place a future module wires in rather than each rebuilding
+  it:
+  - `lib/apiClient.ts`: one `axios` instance every module calls through.
+    Attaches `Authorization: Bearer <token>` on every request; on a 401
+    it refreshes once (concurrent 401s share a single refresh call,
+    since `POST /api/auth/refresh` rotates the refresh token on use)
+    and retries the original request, or clears storage and signals
+    `AuthProvider` if the refresh itself fails. `/api/auth/login` and
+    `/api/auth/refresh` are exempt from this retry so a genuine bad
+    password reaches the caller as the backend's own message, not a
+    swallowed "session expired." Every rejection is an `ApiError`
+    (`.message`, `.code`, `.fields`) built from the backend's one error
+    envelope (`docs/modules/api_error_handling.md`) — never a raw axios
+    error.
+  - `lib/auth/tokenStorage.ts`: the one place tokens are read from /
+    written to `localStorage` (see the file's own comment for the
+    httpOnly-cookie tradeoff this accepts).
+  - `lib/auth/AuthContext.tsx`: `AuthProvider`/`useAuth` — current user,
+    `login()`, `logout()`, and session rehydration from
+    `GET /api/auth/me` on load.
+  - `components/routing/RequireAuth.tsx`: client-side route guard
+    (usability only, per Principle 3 — the backend is the real
+    boundary); redirects to `/login`, preserving the originally
+    requested path so login returns the user there.
+  - `components/layout/AppLayout.tsx`: composes `TopNav` + `Sidebar` +
+    a routed `<Outlet/>` into the one authenticated app shell. A module
+    adds a `<Route>` in `App.tsx` and a nav entry here — not a new
+    layout.
+  - `App.tsx` is now the real route table (`/login` public, everything
+    else behind `RequireAuth`) rather than the kitchen sink itself —
+    see `StyleGuidePage.tsx` above.
+
+  Copy `frontend/.env.example` to `.env.local` and set `VITE_API_URL`
+  before running `npm run dev` against a real backend.
 
 ## Setup
 
