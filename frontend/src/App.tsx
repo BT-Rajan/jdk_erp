@@ -3,6 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { RequireAuth } from '@/components/routing/RequireAuth'
 import { AuthProvider } from '@/lib/auth/AuthContext'
 import { CategoriesPage } from '@/pages/CategoriesPage'
+import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { LoginPage } from '@/pages/LoginPage'
@@ -30,6 +31,7 @@ export function App() {
         >
           <Route path="/" element={<DashboardPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
+          <Route path="/customers" element={<CustomersPage />} />
           <Route path="/units-of-measure" element={<UnitsOfMeasurePage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />

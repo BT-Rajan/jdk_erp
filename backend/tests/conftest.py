@@ -25,7 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.database import Base, SessionLocal, engine
-from app.core.roles import ADMIN
+from app.core.roles import ADMIN, MANAGER
 from app.core.security import hash_password
 from app.core.storage import default_storage
 from app.main import app
@@ -149,6 +149,23 @@ def electronics_category(db_session, organisation):
     db_session.commit()
     db_session.refresh(category)
     return category
+
+
+@pytest.fixture()
+def manager_user(db_session, organisation):
+    user = User(
+        organisation_id=organisation.id,
+        role=MANAGER,
+        full_name="Manager Person",
+        email="manager@example.com",
+        username="manager_person",
+        password_hash=hash_password("Str0ng!Pass"),
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
 
 
 @pytest.fixture()

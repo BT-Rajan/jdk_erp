@@ -322,6 +322,33 @@ across every module).
   (`UnitsOfMeasurePage.test.tsx`), same coverage shape as
   `CategoriesPage.test.tsx`.
 
+- **Customers** (`src/pages/CustomersPage.tsx`) -- the frontend for
+  `backend/app/api/customers.py`
+  (`docs/modules/customers.md`/`docs/audit/CUSTOMERS_AUDIT.md`), the
+  first master-data page with a real ownership/visibility model rather
+  than a flat admin/everyone split. Composed from the same list
+  foundation as `CategoriesPage`/`UnitsOfMeasurePage`
+  (`DataTable`/`FilterBar`/`useServerTable`/`useDebouncedValue`/
+  `FormDialog`/`ConfirmDialog`/`ActionMenu`), but never re-implements
+  visibility client-side -- the backend already returns only the rows
+  the caller's resolved scope permits, so this page just renders
+  whatever it receives. Any authenticated user can create a customer;
+  the Edit/Deactivate actions render only for an admin and Assign only
+  for an admin or manager (`isAdminRole`/`role === 'manager'`) -- a
+  usability courtesy on top of the real server-side gate, not the
+  enforcement itself. The Assigned-To column resolves a name via the
+  existing organisation-wide `GET /api/users` (only fetched for
+  admin/manager, who are the only roles with an Assign action to use it
+  for) rather than a new lookup endpoint. 13 new tests
+  (`CustomersPage.test.tsx`): load, assignee-name resolution, role-based
+  action visibility (team_member sees none, manager sees Assign only,
+  admin sees all three), error state, debounced search, create, edit,
+  deactivate, and assign (including explicitly un-assigning). Verified
+  live with four real users (admin, manager, and two salespeople) against
+  a real backend: each saw exactly the customers their resolved
+  OWN/TEAM/ALL scope predicts, and assign/deactivate actions updated the
+  list correctly.
+
 ## Setup
 
 ```bash

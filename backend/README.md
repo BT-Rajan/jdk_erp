@@ -653,6 +653,80 @@ of truth.
   blank/missing name or code rejected (422), code normalization on edit,
   and audit events for every mutation.
 
+### Master Data: Customers (`app/api/customers.py`, `app/services/customer_scope.py`)
+
+Third entity of Phase 2 (`docs/modules/customers.md`), and the first
+high-volume operational master with a real ownership/visibility model,
+audited first (`docs/audit/CUSTOMERS_AUDIT.md`) -- unlike Categories/
+Units, jdk_clean has substantial, well-factored prior art here worth
+reusing (a single nullable `assigned_to` FK, `created_by` deliberately
+excluded from visibility, a consistently-applied scoping layer across
+every Sales-adjacent module) alongside a ~50-column field set the large
+majority of which jdk_clean's own comments admit has "no consumer
+anywhere in this app" -- none of that bloat is reused; the Customer
+model here carries only code/name/contact_person/phone/email/address/
+assigned_to_user_id/is_active.
+
+- **The permission-scope engine already existed and had never been
+  used**: `docs/modules/permissions.md` had already built
+  `role_permissions`/`user_permissions` (with a working `own`/`team`/`all`
+  `scope` column), `authorization_service.get_effective_scope()`/`can()`/
+  `get_user_team_ids()`, and a full admin-gated management API --
+  genuinely working, tested code with zero callers, by that module's own
+  explicit design ("no module exists yet to consult it"). Customers is
+  the first real consumer: `app/services/customer_scope.py`'s
+  `resolve_view_scope()`/`visible_customer_filter()`/`can_view_customer()`
+  call that engine directly, adding only the Customer-specific mapping
+  (OWN = `assigned_to_user_id == self`; TEAM = assigned to anyone sharing
+  a team with the caller, via the existing `get_user_team_ids()` +
+  a `user_teams` join) it was designed for but never had built.
+- **View-scope defaults, not hardcoded rules**: `permissions.md` §4's
+  own role-default table (Manager -> TEAM, Team Member -> OWN) is
+  applied only as a fallback when no explicit `role_permissions`/
+  `user_permissions` row exists for `module_key="customers"` -- an admin
+  can override any role's or individual user's scope at any time via the
+  existing permissions API, and that explicit grant always wins.
+  `admin`/`super_admin` bypass unconditionally, the same as every other
+  admin-gated action in this codebase.
+- **Mutation authorization mirrors jdk_clean's own real, deliberately
+  strict choice**: `GET`/`POST` (view/create) are open to any
+  authenticated organisation member -- onboarding a customer is ordinary
+  sales work -- but `PATCH .../{id}` (edit) and `PATCH .../{id}/status`
+  are `require_admin`-gated, same as every other master-data mutation;
+  even a manager cannot edit or deactivate an existing customer record,
+  exactly matching jdk_clean's own `strict_write_guard=require_role("admin")`.
+  Reassignment (`PATCH .../{id}/assign`) is the one narrow exception:
+  admin-or-manager via a plain role check (`_require_can_assign`), not a
+  new scope-table action -- directly adopted from jdk_clean's real
+  `is_admin OR is_department_head` gate.
+- A `team_member`'s new customer is always auto-assigned to themselves,
+  silently overriding any client-supplied `assigned_to_user_id` -- they
+  can create their own customers but can never assign one to someone
+  else. A customer outside the caller's view scope 404s (never 403s)
+  from `GET /api/customers/{id}` -- adopted directly from jdk_clean's
+  own deliberate "never confirm existence" choice here.
+- `code` is auto-generated (`app/core/id_formats.py`'s new `CUSTOMER_ID`
+  format, reusing the existing prefix+digits utility rather than a
+  parallel one) and never client-supplied. `phone` is normalized to
+  digits-only **at write time** and DB-unique per organisation -- fixing
+  jdk_clean's real, flagged defect (`_check_duplicate_phone` re-scanned
+  every existing customer row in Python on every write). `name` is
+  deliberately not deduplicated (external real-world data, matching
+  jdk_clean's own actual behaviour, unlike Category/Team's internally
+  curated labels).
+- 34 new tests (`tests/test_customers.py`): organisation isolation,
+  default OWN/TEAM/ALL scope resolution (including a manager correctly
+  excluding a salesperson not on their team), explicit permission-table
+  overrides of the default (proving real engine reuse), create
+  auto-assignment and cross-organisation assignee rejection, phone/code
+  uniqueness, admin-only edit/status-change (403 for manager and
+  team_member), admin-or-manager assign (403 for team_member), 404-not-403
+  for an out-of-scope record, and audit events for every mutation.
+  Verified live with four real users (admin, manager, and two
+  salespeople -- one on the manager's team, one not): each saw exactly
+  the customers their resolved scope predicts, confirmed against actual
+  HTTP responses, not just unit-level assertions.
+
 ## Setup
 
 ```bash

@@ -7,6 +7,7 @@ from app.api.audit_events import router as audit_events_router
 from app.api.auth import router as auth_router
 from app.api.categories import router as categories_router
 from app.api.communication import router as communication_router
+from app.api.customers import router as customers_router
 from app.api.files import router as files_router
 from app.api.jobs import router as jobs_router
 from app.api.notifications import router as notifications_router
@@ -57,6 +58,7 @@ app.include_router(audit_events_router)
 app.include_router(auth_router)
 app.include_router(categories_router)
 app.include_router(communication_router)
+app.include_router(customers_router)
 app.include_router(files_router)
 app.include_router(jobs_router)
 app.include_router(notifications_router)
