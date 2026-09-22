@@ -2,6 +2,7 @@ import { Route, Routes } from 'react-router-dom'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { RequireAuth } from '@/components/routing/RequireAuth'
 import { AuthProvider } from '@/lib/auth/AuthContext'
+import { CategoriesPage } from '@/pages/CategoriesPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { LoginPage } from '@/pages/LoginPage'
@@ -27,6 +28,7 @@ export function App() {
           }
         >
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

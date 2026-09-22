@@ -29,6 +29,7 @@ from app.core.roles import ADMIN
 from app.core.security import hash_password
 from app.core.storage import default_storage
 from app.main import app
+from app.models.category import Category
 from app.models.organisation import Organisation
 from app.models.team import Team
 from app.models.user import User
@@ -138,6 +139,15 @@ def sales_team(db_session, organisation):
     db_session.commit()
     db_session.refresh(team)
     return team
+
+
+@pytest.fixture()
+def electronics_category(db_session, organisation):
+    category = Category(organisation_id=organisation.id, name="Electronics", code="ELEC", is_active=True)
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+    return category
 
 
 @pytest.fixture()

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Home, Menu, Settings } from 'lucide-react'
+import { Boxes, Home, Menu, Settings } from 'lucide-react'
 import { Outlet } from 'react-router-dom'
 import { ActionMenu } from '@/components/ui/ActionMenu'
 import { IconButton } from '@/components/ui/IconButton'
@@ -16,7 +16,19 @@ import { isAdminRole } from '@/lib/auth/roles'
 // Sidebar and TopNav both already accept and own no state of their own.
 // UI visibility only (Principle 3) -- every page under Settings still
 // enforces the same admin check server-side, via each endpoint it calls.
-const NAV_ENTRIES: NavEntry[] = [{ type: 'leaf', label: 'Dashboard', to: '/', icon: <Home size={16} /> }]
+// Master Data sits in the general nav, not ADMIN_NAV_ENTRIES below --
+// its read endpoints are open to any authenticated organisation member
+// (docs/modules/categories.md #5), same as Teams/Users; only the
+// mutating actions on each page are admin-gated, enforced server-side.
+const NAV_ENTRIES: NavEntry[] = [
+  { type: 'leaf', label: 'Dashboard', to: '/', icon: <Home size={16} /> },
+  {
+    type: 'group',
+    label: 'Master Data',
+    icon: <Boxes size={16} />,
+    items: [{ label: 'Categories', to: '/categories' }],
+  },
+]
 const ADMIN_NAV_ENTRIES: NavEntry[] = [
   {
     type: 'group',

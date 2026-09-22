@@ -291,6 +291,26 @@ across every module).
   (`UsersPage.test.tsx`) plus hardening tests added to
   `useServerTable.test.ts`/`Pagination.test.tsx`.
 
+- **Categories** (`src/pages/CategoriesPage.tsx`) -- the frontend for
+  `backend/app/api/categories.py`, the first module of Phase 2 (Master
+  Data, `docs/modules/categories.md`), composed exactly like `UsersPage`:
+  `DataTable` + `FilterBar` + `useServerTable` + `useDebouncedValue` for
+  the list, `FormDialog` for create/edit, `ConfirmDialog` for
+  activate/deactivate. Nav-gated under a new **Master Data** group in
+  `AppLayout.tsx` -- deliberately in the general nav, not the admin-only
+  `ADMIN_NAV_ENTRIES` group Settings uses, since reading the category
+  list is open to any authenticated organisation member (only the
+  mutating actions are admin-gated). `isAdminRole(currentUser?.role)`
+  hides the New Category button, the row action menu, and the
+  form/confirm dialogs for a non-admin -- a usability courtesy on top of
+  the real server-side boundary, not the enforcement itself; a non-admin
+  still sees the full list, including inactive categories. 10 new tests
+  (`CategoriesPage.test.tsx`): load, the non-admin read-only view (list
+  renders, no mutating controls), error state, empty-vs-no-match states,
+  debounced search, create (success and a server-side name conflict
+  surfacing as a form error), edit (pre-filled form, PATCH), and
+  deactivate (confirm-then-call, plus its error path).
+
 ## Setup
 
 ```bash

@@ -1,0 +1,204 @@
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Query, Request, status
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user, require_admin
+from app.core.database import get_db
+from app.core.errors import ConflictError, NotFoundError
+from app.core.list_query import apply_sort, paginate
+from app.core.search import apply_keyword_filter
+from app.models.audit_event import (
+    CATEGORY_CREATED,
+    CATEGORY_STATUS_CHANGED,
+    CATEGORY_UPDATED,
+    MASTER_DATA_MODULE,
+)
+from app.models.category import Category
+from app.models.user import User
+from app.schemas.category import (
+    CategoryCreateRequest,
+    CategoryOut,
+    CategoryStatusChangeRequest,
+    CategoryUpdateRequest,
+)
+from app.schemas.pagination import PaginatedResponse
+from app.services import audit_service
+
+router = APIRouter(prefix="/api/categories", tags=["categories"])
+
+# See app/api/users.py's _SORT_FIELDS for the reasoning.
+_SORT_FIELDS = {
+    "name": Category.name,
+    "code": Category.code,
+    "created_at": Category.created_at,
+}
+
+
+def _get_category_in_org(db: Session, category_id: int, organisation_id: int) -> Category:
+    category = (
+        db.query(Category)
+        .filter(Category.id == category_id, Category.organisation_id == organisation_id)
+        .first()
+    )
+    if category is None:
+        # 404 whether the id doesn't exist at all or belongs to another
+        # organisation -- never confirm another organisation's category id
+        # (docs/modules/organisation.md #3).
+        raise NotFoundError("Category not found.")
+    return category
+
+
+@router.get("", response_model=PaginatedResponse[CategoryOut])
+def list_categories(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    sort_by: str | None = Query(None),
+    sort_direction: Literal["asc", "desc"] = Query("asc"),
+    include_inactive: bool = Query(False),
+    q: str | None = Query(None, max_length=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PaginatedResponse[CategoryOut]:
+    """Scoped to the caller's own organisation only (docs/modules/categories.md #4).
+    Open to any authenticated organisation member, same as Teams/Users --
+    it's read-only reference data every module that assigns a category
+    needs to look up, not a privileged action. q searches name/code,
+    applied after the organisation/is_active filters -- narrows this same
+    query, never a separate lookup. page/sort follow the common list
+    contract (docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md)."""
+    query = db.query(Category).filter(Category.organisation_id == current_user.organisation_id)
+    if not include_inactive:
+        query = query.filter(Category.is_active.is_(True))
+    query = apply_keyword_filter(query, q, Category.name, Category.code)
+    query = apply_sort(query, sort_by, sort_direction, _SORT_FIELDS, default=Category.id)
+
+    categories, pagination = paginate(query, page, page_size)
+    return PaginatedResponse(data=[CategoryOut.model_validate(c) for c in categories], pagination=pagination)
+
+
+@router.get("/{category_id}", response_model=CategoryOut)
+def get_category(
+    category_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> Category:
+    return _get_category_in_org(db, category_id, current_user.organisation_id)
+
+
+@router.post("", response_model=CategoryOut, status_code=status.HTTP_201_CREATED)
+def create_category(
+    payload: CategoryCreateRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Category:
+    """Admin-gated (docs/modules/categories.md #5), the same RBAC gate
+    Teams/Users mutations already use -- no category-specific
+    authorization layer. organisation_id always comes from the
+    authenticated admin, never the request body."""
+    category = Category(
+        organisation_id=admin.organisation_id,
+        name=payload.name,
+        code=payload.code,
+        description=payload.description,
+    )
+    db.add(category)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ConflictError("A category with this name or code already exists.") from exc
+
+    audit_service.log_event(
+        db,
+        action=CATEGORY_CREATED,
+        module=MASTER_DATA_MODULE,
+        organisation_id=admin.organisation_id,
+        actor_user_id=admin.id,
+        entity_type="category",
+        entity_id=category.id,
+        result="success",
+        details=f"name: {category.name}",
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@router.patch("/{category_id}", response_model=CategoryOut)
+def update_category(
+    category_id: int,
+    payload: CategoryUpdateRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Category:
+    """Admin-gated partial update, same shape as
+    PATCH /api/organisations/me. is_active is deliberately not editable
+    here -- see change_category_status below."""
+    category = _get_category_in_org(db, category_id, admin.organisation_id)
+
+    updates = payload.model_dump(exclude_unset=True)
+    before = {field: getattr(category, field) for field in updates}
+    for field, value in updates.items():
+        setattr(category, field, value)
+    db.add(category)
+
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ConflictError("A category with this name or code already exists.") from exc
+
+    changes = audit_service.diff_fields(before, updates)
+    if changes:
+        audit_service.log_event(
+            db,
+            action=CATEGORY_UPDATED,
+            module=MASTER_DATA_MODULE,
+            organisation_id=admin.organisation_id,
+            actor_user_id=admin.id,
+            entity_type="category",
+            entity_id=category.id,
+            result="success",
+            details=audit_service.format_changes(changes),
+            ip_address=request.client.host if request.client else None,
+        )
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@router.patch("/{category_id}/status", response_model=CategoryOut)
+def change_category_status(
+    category_id: int,
+    payload: CategoryStatusChangeRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> Category:
+    """Admin-gated activate/deactivate (docs/modules/categories.md #6).
+    No self-lockout concern here (unlike a user or an organisation
+    deactivating themselves) -- deactivating a category only affects
+    whether it can be picked for new records, never anyone's ability to
+    sign in or use the system."""
+    category = _get_category_in_org(db, category_id, admin.organisation_id)
+    category.is_active = payload.is_active
+    db.add(category)
+
+    audit_service.log_event(
+        db,
+        action=CATEGORY_STATUS_CHANGED,
+        module=MASTER_DATA_MODULE,
+        organisation_id=admin.organisation_id,
+        actor_user_id=admin.id,
+        entity_type="category",
+        entity_id=category.id,
+        result="success",
+        details=f"is_active: {payload.is_active}",
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(category)
+    return category

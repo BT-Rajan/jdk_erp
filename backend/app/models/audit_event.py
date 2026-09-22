@@ -23,10 +23,18 @@ USER_STATUS_CHANGED = "user_status_changed"
 EMAIL_ACCOUNT_UPDATED = "email_account_updated"
 ORGANISATION_UPDATED = "organisation_updated"
 ORGANISATION_STATUS_CHANGED = "organisation_status_changed"
+CATEGORY_CREATED = "category_created"
+CATEGORY_UPDATED = "category_updated"
+CATEGORY_STATUS_CHANGED = "category_status_changed"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"
 ORGANISATION_MODULE = "organisation"
+# Shared by every Phase 2 master-data entity (Categories, then Units of
+# Measure, Products, ...) -- one module name for "master data changed",
+# not a new constant invented per entity (docs/ENGINEERING_PRINCIPLES.md
+# #2 one source of truth).
+MASTER_DATA_MODULE = "master_data"
 
 
 class AuditEvent(Base):

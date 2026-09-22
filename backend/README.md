@@ -579,6 +579,45 @@ plus both real endpoints; `tests/test_users.py`/`test_teams.py`/
 `test_search.py` were updated for the new response envelope, not
 rewritten.
 
+### Master Data: Categories (`app/api/categories.py`)
+
+First entity of Phase 2 -- Master Data (`docs/modules/categories.md`),
+audited against `jdk_clean` first (`docs/audit/CATEGORIES_AUDIT.md`):
+`jdk_clean` has no category mechanism at all, just an unvalidated
+free-text `category` string independently duplicated on three unrelated
+tables with no dedup -- nothing to reuse from there. Built fresh,
+structurally mirroring `Team` (`OrganisationScopedMixin`/`TimestampMixin`,
+name/code/description/is_active, per-organisation unique constraints on
+name and code, no hierarchy) but with a full admin-gated CRUD API from
+the start, since RBAC already exists (Team's own create/edit API was
+deferred to a later phase for exactly that reason when Team was first
+built).
+
+- `GET /api/categories`/`GET /api/categories/{id}` -- open to any
+  authenticated organisation member (read-only reference data, not a
+  privileged view), same list contract as Teams/Users
+  (`list_query.py`/`search.py`/`PaginatedResponse`).
+- `POST /api/categories`, `PATCH /api/categories/{id}` (partial update),
+  `PATCH /api/categories/{id}/status` (activate/deactivate) --
+  `require_admin`-gated, no new authorization layer. Name/code conflicts
+  raise `ConflictError` (409) via the same flush-then-catch-`IntegrityError`
+  pattern `PATCH /api/organisations/me` established, not a pre-check
+  query. Audit-logged (`category_created`/`category_updated`/
+  `category_status_changed`) under a new shared `MASTER_DATA_MODULE`
+  constant -- every future Phase 2 master-data entity (Units of Measure
+  next) logs under this same module name rather than growing a new
+  constant per entity.
+- No delete endpoint -- categories are deactivated, never hard-deleted,
+  matching Users/Teams/Organisation.
+- 24 new tests (`tests/test_categories.py`): list/get org-scoping and
+  cross-org 404s, per-organisation name/code uniqueness at the DB level,
+  admin-gated create/edit/status-change (403 for non-admin), duplicate
+  name/code on create and edit (409), an `id`/`organisation_id` field in
+  a PATCH payload being silently ignored, and audit events for every
+  mutation. Verified live: create, a duplicate-name conflict rendering
+  inline, edit, deactivate/reactivate, and the non-admin read-only view
+  (list visible, no create/edit/status controls) against a real backend.
+
 ## Setup
 
 ```bash
