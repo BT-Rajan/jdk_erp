@@ -67,6 +67,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("auth_events")
     op.drop_table("refresh_tokens")
-    op.drop_index("ix_users_organisation_id", table_name="users")
+    # No separate drop_index for ix_users_organisation_id: it backs the FK
+    # on users.organisation_id, and MySQL rejects DROP INDEX on an index a
+    # foreign key still needs (error 1553). DROP TABLE removes the index,
+    # the FK, and everything else on the table atomically, so it's dropped
+    # here without a preceding index drop.
     op.drop_table("users")
     op.drop_table("organisations")

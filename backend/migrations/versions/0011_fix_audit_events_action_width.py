@@ -22,9 +22,25 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("audit_events") as batch_op:
-        batch_op.alter_column("action", existing_type=sa.String(length=20), type_=sa.String(length=30))
+        # MySQL's CHANGE COLUMN (what alter_column compiles to here) needs
+        # the full column definition restated, nullability included, or it
+        # silently drops NOT NULL -- exactly the drift this migration exists
+        # to fix, so it can't itself introduce another one.
+        batch_op.alter_column(
+            "action",
+            existing_type=sa.String(length=20),
+            type_=sa.String(length=30),
+            existing_nullable=False,
+            nullable=False,
+        )
 
 
 def downgrade() -> None:
     with op.batch_alter_table("audit_events") as batch_op:
-        batch_op.alter_column("action", existing_type=sa.String(length=30), type_=sa.String(length=20))
+        batch_op.alter_column(
+            "action",
+            existing_type=sa.String(length=30),
+            type_=sa.String(length=20),
+            existing_nullable=False,
+            nullable=False,
+        )

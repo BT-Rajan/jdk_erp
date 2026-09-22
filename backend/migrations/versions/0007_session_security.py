@@ -28,6 +28,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("auth_events") as batch_op:
+        # Same FK-before-column/index rule as 0005/0008: MySQL implicitly
+        # needs the FK gone before it will drop the column that carries it.
+        batch_op.drop_constraint("fk_auth_events_actor_user_id", type_="foreignkey")
         batch_op.drop_column("actor_user_id")
 
     with op.batch_alter_table("refresh_tokens") as batch_op:

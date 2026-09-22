@@ -45,6 +45,9 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("users") as batch_op:
+        # Same FK-before-index rule as 0005/0007/0008: MySQL rejects DROP
+        # INDEX on an index a foreign key still needs (error 1553).
+        batch_op.drop_constraint("fk_users_team_id", type_="foreignkey")
         batch_op.drop_index("ix_users_team_id")
         batch_op.drop_column("team_id")
     op.drop_table("teams")
