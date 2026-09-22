@@ -4,7 +4,7 @@
 #   bash install.sh
 #
 # Env overrides:
-#   BRANCH PORT FRONTEND_PORT HOST WORKERS APP_NAME HEALTH_TIMEOUT
+#   BRANCH PORT FRONTEND_PORT HOST PUBLIC_HOST WORKERS APP_NAME HEALTH_TIMEOUT
 #   DB_HOST DB_PORT DB_NAME DB_USER DB_PASS   MySQL/MariaDB settings, applied when backend/.env is first created
 #   USE_SQLITE=1                              keep the .env.example SQLite default instead of switching to MySQL
 set -Eeuo pipefail
@@ -14,6 +14,10 @@ FRONTEND_APP_NAME="${FRONTEND_APP_NAME:-${APP_NAME}-frontend}"
 REPO_URL="${REPO_URL:-https://github.com/BT-Rajan/jdk_erp.git}"
 BRANCH="${BRANCH:-main}"
 HOST="${HOST:-0.0.0.0}"
+# What the *browser* uses to reach this box -- HOST is a bind address
+# (0.0.0.0 isn't a valid URL host), so CORS_ORIGINS and VITE_API_URL are
+# derived from this instead. Override for a real domain/IP deployment.
+PUBLIC_HOST="${PUBLIC_HOST:-localhost}"
 PORT="${PORT:-8989}"
 FRONTEND_PORT="${FRONTEND_PORT:-7173}"
 WORKERS="${WORKERS:-1}"
@@ -43,7 +47,7 @@ if [ -z "${APP_DIR:-}" ]; then
 fi
 
 # ───────────────────────── 1. prerequisites ─────────────────────────
-step "1/7 Prerequisites"
+step "1/8 Prerequisites"
 need git; need curl; need node; need npm
 PYBIN="$(command -v python3 || command -v python)" || die "Python 3.11+ not found"
 "$PYBIN" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
@@ -52,7 +56,7 @@ if ! command -v pm2 >/dev/null 2>&1; then warn "pm2 not found — installing glo
 ok "git, node $(node -v), $("$PYBIN" -V 2>&1), pm2 $(pm2 -v)"
 
 # ───────────────────────── 2. git pull ─────────────────────────
-step "2/7 Git pull ($BRANCH)"
+step "2/8 Git pull ($BRANCH)"
 if [ -d "$APP_DIR/.git" ]; then
   cd "$APP_DIR"
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -70,8 +74,8 @@ ok "At $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
 BACKEND="$APP_DIR/backend"
 [ -f "$BACKEND/requirements.txt" ] || die "backend/requirements.txt not found in $APP_DIR"
 
-# ───────────────────────── 3. deploy (deps) ─────────────────────────
-step "3/7 Deploy backend dependencies"
+# ───────────────────────── 3. install dependencies ─────────────────────────
+step "3/8 Install dependencies"
 cd "$BACKEND"
 [ -d .venv ] || "$PYBIN" -m venv .venv
 VPY=""
@@ -85,33 +89,31 @@ ok "Python dependencies installed"
 
 FRONTEND="$APP_DIR/frontend"
 HAS_FRONTEND=0
-FRONTEND_MODE=""  # "preview" (built, served via vite preview/serve) or "dev"
+FRONTEND_MODE=""  # "preview" (built, served via vite preview) or "dev"
 if [ -f "$FRONTEND/package.json" ]; then
   HAS_FRONTEND=1
   script_exists() { node -e 'process.exit(((require("./package.json").scripts)||{})[process.argv[1]]?0:1)' "$1"; }
   ( cd "$FRONTEND"
-    if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi
-    if script_exists build; then
-      npm run build
-      echo "FRONTEND_MODE=preview" > .install-sh-mode
-    else
-      echo "FRONTEND_MODE=dev" > .install-sh-mode
-    fi )
-  FRONTEND_MODE="$(cut -d= -f2 "$FRONTEND/.install-sh-mode")"; rm -f "$FRONTEND/.install-sh-mode"
-  ok "Frontend dependencies installed ($([ "$FRONTEND_MODE" = preview ] && echo built || echo "no build script — will run dev server"))"
+    if [ -f package-lock.json ]; then npm ci || npm install; else npm install; fi )
+  if ( cd "$FRONTEND" && script_exists build ); then FRONTEND_MODE="preview"; else FRONTEND_MODE="dev"; fi
+  ok "Frontend dependencies installed ($([ "$FRONTEND_MODE" = preview ] && echo "will build" || echo "no build script — will run dev server"))"
 else
   warn "frontend/ has no package.json yet — skipping"
 fi
 
 # ───────────────────────── 4. environment ─────────────────────────
-step "4/7 Environment (backend/.env)"
+step "4/8 Environment (.env files)"
+cd "$BACKEND"
 FRESH_ENV=0
-if [ ! -s .env ]; then cp .env.example .env; FRESH_ENV=1; ok "Created .env from .env.example"; fi
+if [ ! -s .env ]; then cp .env.example .env; FRESH_ENV=1; ok "Created backend/.env from .env.example"; fi
 export FRESH_ENV
-"$VPY" - <<'PY'
-import os, re, secrets
+FRONTEND_ORIGIN="http://${PUBLIC_HOST}:${FRONTEND_PORT}"
+BACKEND_URL="http://${PUBLIC_HOST}:${PORT}"
+"$VPY" - "$FRONTEND_ORIGIN" <<'PY'
+import os, re, secrets, sys
 from urllib.parse import quote_plus, unquote_plus
 
+frontend_origin = sys.argv[1]
 path = ".env"
 text = open(path).read()
 
@@ -152,13 +154,71 @@ if switch:
     put("DATABASE_URL", f"mysql+pymysql://{cred}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}")
     print("  DATABASE_URL set to MySQL")
 
+# Without this, CORSMiddleware's allow_origins stays [] (the
+# .env.example default) and every browser request the frontend makes is
+# blocked by CORS even though the two services can reach each other fine
+# over plain HTTP -- the "frontend can't talk to backend" symptom this
+# script exists to prevent. Only fill it in when unset so a
+# manually-customized value (e.g. a real domain in production) is never
+# clobbered by a re-run.
+if not get("CORS_ORIGINS"):
+    put("CORS_ORIGINS", frontend_origin)
+    print(f"  CORS_ORIGINS set to {frontend_origin}")
+
 open(path, "w").write(text)
 PY
 chmod 600 .env 2>/dev/null || true
-ok ".env ready"
+ok "backend/.env ready"
 
-# ───────────────────────── 5. database ─────────────────────────
-step "5/7 Database"
+if [ "$HAS_FRONTEND" = "1" ]; then
+  cd "$FRONTEND"
+  if [ ! -s .env ]; then cp .env.example .env; ok "Created frontend/.env from .env.example"; fi
+  "$VPY" - "$BACKEND_URL" <<'PY'
+import re, sys
+
+backend_url = sys.argv[1]
+path = ".env"
+text = open(path).read()
+
+def get(k):
+    m = re.search(rf"^{k}=(.*)$", text, re.M)
+    return m.group(1).strip() if m else None
+
+def put(k, v):
+    global text
+    if re.search(rf"^{k}=", text, re.M):
+        text = re.sub(rf"^{k}=.*$", lambda _: f"{k}={v}", text, flags=re.M)
+    else:
+        text += ("" if text.endswith("\n") else "\n") + f"{k}={v}\n"
+
+# Vite inlines VITE_API_URL at build time -- if this is left unset (or
+# stuck on the .env.example placeholder while PORT was overridden), the
+# built/dev frontend silently calls its own origin instead of the
+# backend and every API request 404s or hits the wrong server. Only
+# fill it in when unset, same rule as backend/.env above, so a
+# manually-customized value survives a re-run.
+if not get("VITE_API_URL"):
+    put("VITE_API_URL", backend_url)
+    print(f"  VITE_API_URL set to {backend_url}")
+
+open(path, "w").write(text)
+PY
+  ok "frontend/.env ready"
+fi
+
+# ───────────────────────── 5. build frontend ─────────────────────────
+if [ "$HAS_FRONTEND" = "1" ] && [ "$FRONTEND_MODE" = "preview" ]; then
+  step "5/8 Build frontend"
+  ( cd "$FRONTEND" && npm run build )
+  ok "Frontend built"
+else
+  step "5/8 Build frontend"
+  ok "Skipped (dev server mode)"
+fi
+
+# ───────────────────────── 6. database ─────────────────────────
+step "6/8 Database"
+cd "$BACKEND"
 "$VPY" - <<'PY'
 import re
 from sqlalchemy import create_engine, text
@@ -209,26 +269,54 @@ else
   ok "$USERS user(s) already exist — skipping admin seed"
 fi
 
-# ───────────────────────── 6. pm2 ─────────────────────────
-step "6/7 Start with pm2"
+# ───────────────────────── 7. pm2 ─────────────────────────
+step "7/8 Start with pm2"
+# Both processes are declared in one ecosystem file instead of two
+# independent ad-hoc `pm2 start` invocations, so `pm2 start/restart/stop
+# ecosystem.config.json` (or `pm2 restart all` after `pm2 save`) manages
+# backend + frontend together as one unit rather than two processes that
+# drift apart. Regenerated every run so path/port overrides always take
+# effect; it holds only local absolute paths, so it's gitignored, not
+# committed.
+ECOSYSTEM="$APP_DIR/ecosystem.config.json"
+"$VPY" - "$ECOSYSTEM" "$APP_NAME" "$BACKEND" "$VPY" "$HOST" "$PORT" "$WORKERS" \
+  "$HAS_FRONTEND" "$FRONTEND_APP_NAME" "$FRONTEND" "$FRONTEND_MODE" "$FRONTEND_PORT" <<'PY'
+import json, sys
+
+(ecosystem, app_name, backend, vpy, host, port, workers,
+ has_frontend, frontend_app_name, frontend, frontend_mode, frontend_port) = sys.argv[1:13]
+
+apps = [{
+    "name": app_name,
+    "cwd": backend,
+    "script": vpy,
+    "interpreter": "none",
+    "args": ["-m", "uvicorn", "app.main:app", "--host", host, "--port", port, "--workers", workers],
+    "autorestart": True,
+}]
+if has_frontend == "1":
+    vite_script = "preview" if frontend_mode == "preview" else "dev"
+    apps.append({
+        "name": frontend_app_name,
+        "cwd": frontend,
+        "script": "npm",
+        "args": ["run", vite_script, "--", "--host", host, "--port", frontend_port, "--strictPort"],
+        "autorestart": True,
+    })
+
+with open(ecosystem, "w") as f:
+    json.dump({"apps": apps}, f, indent=2)
+PY
+ok "Wrote $(basename "$ECOSYSTEM")"
+
 pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
-pm2 start "$VPY" --name "$APP_NAME" --cwd "$BACKEND" --interpreter none -- \
-  -m uvicorn app.main:app --host "$HOST" --port "$PORT" --workers "$WORKERS"
-ok "pm2 process '$APP_NAME' started on $HOST:$PORT"
-
-if [ "$HAS_FRONTEND" = "1" ]; then
-  pm2 delete "$FRONTEND_APP_NAME" >/dev/null 2>&1 || true
-  if [ "$FRONTEND_MODE" = "preview" ]; then
-    pm2 start npm --name "$FRONTEND_APP_NAME" --cwd "$FRONTEND" -- run preview -- --host "$HOST" --port "$FRONTEND_PORT" --strictPort
-  else
-    pm2 start npm --name "$FRONTEND_APP_NAME" --cwd "$FRONTEND" -- run dev -- --host "$HOST" --port "$FRONTEND_PORT" --strictPort
-  fi
-  ok "pm2 process '$FRONTEND_APP_NAME' started on $HOST:$FRONTEND_PORT ($FRONTEND_MODE)"
-fi
+[ "$HAS_FRONTEND" = "1" ] && { pm2 delete "$FRONTEND_APP_NAME" >/dev/null 2>&1 || true; }
+pm2 start "$ECOSYSTEM"
 pm2 save --force >/dev/null
+ok "pm2 started from ecosystem.config.json"
 
-# ───────────────────────── 7. health check ─────────────────────────
-step "7/7 Health check"
+# ───────────────────────── 8. health check ─────────────────────────
+step "8/8 Health check"
 pm2_state() {
   pm2 jlist 2>/dev/null | node -e '
     let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
@@ -248,7 +336,7 @@ for ((i = 0; i < HEALTH_TIMEOUT; i += 2)); do
   case "$body" in *'"ok"'*) HEALTHY=1; break ;; esac
   sleep 2
 done
-if [ -z "$HEALTHY" ]; then fail_logs; die "No healthy response from $HEALTH_URL within ${HEALTH_TIMEOUT}s"; fi
+if [ -z "$HEALTHY" ]; then fail_logs "$APP_NAME"; die "No healthy response from $HEALTH_URL within ${HEALTH_TIMEOUT}s"; fi
 ok "GET /health -> $body"
 
 sleep 2
@@ -266,6 +354,7 @@ MIGR="$(cd "$BACKEND" && "$VPY" -m alembic current 2>&1 | tail -1)"
 case "$MIGR" in *"(head)"*) ok "DB schema at head: $MIGR" ;; *) die "DB schema not at head: $MIGR" ;; esac
 
 printf '\n\033[1;32mDeploy complete\033[0m  %s @ %s\n' "$APP_NAME" "$(git -C "$APP_DIR" rev-parse --short HEAD)"
-printf '  Backend:  http://localhost:%s  (docs: /docs)\n' "$PORT"
-[ "$HAS_FRONTEND" = "1" ] && printf '  Frontend: http://localhost:%s\n' "$FRONTEND_PORT"
+printf '  Backend:  %s  (docs: /docs)\n' "$BACKEND_URL"
+[ "$HAS_FRONTEND" = "1" ] && printf '  Frontend: %s\n' "$FRONTEND_ORIGIN"
+echo "  Manage both processes together:  pm2 restart ecosystem.config.json   # or: pm2 restart all"
 echo "  Survive reboots (once):  pm2 startup   # then run the command it prints"
