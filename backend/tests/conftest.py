@@ -32,6 +32,7 @@ from app.main import app
 from app.models.category import Category
 from app.models.organisation import Organisation
 from app.models.team import Team
+from app.models.unit import UnitOfMeasure
 from app.models.user import User
 
 
@@ -148,6 +149,15 @@ def electronics_category(db_session, organisation):
     db_session.commit()
     db_session.refresh(category)
     return category
+
+
+@pytest.fixture()
+def kilogram_unit(db_session, organisation):
+    unit = UnitOfMeasure(organisation_id=organisation.id, name="Kilogram", code="KG", is_active=True)
+    db_session.add(unit)
+    db_session.commit()
+    db_session.refresh(unit)
+    return unit
 
 
 @pytest.fixture()

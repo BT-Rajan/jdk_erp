@@ -8,6 +8,7 @@ import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
+import { UnitsOfMeasurePage } from '@/pages/UnitsOfMeasurePage'
 import { UsersPage } from '@/pages/UsersPage'
 
 /** The app's one route table. `/login` is the only public route;
@@ -29,6 +30,7 @@ export function App() {
         >
           <Route path="/" element={<DashboardPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
+          <Route path="/units-of-measure" element={<UnitsOfMeasurePage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

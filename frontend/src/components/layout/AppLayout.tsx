@@ -26,7 +26,10 @@ const NAV_ENTRIES: NavEntry[] = [
     type: 'group',
     label: 'Master Data',
     icon: <Boxes size={16} />,
-    items: [{ label: 'Categories', to: '/categories' }],
+    items: [
+      { label: 'Categories', to: '/categories' },
+      { label: 'Units of Measure', to: '/units-of-measure' },
+    ],
   },
 ]
 const ADMIN_NAV_ENTRIES: NavEntry[] = [

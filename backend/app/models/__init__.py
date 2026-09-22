@@ -8,6 +8,7 @@ from app.models.organisation import Organisation
 from app.models.refresh_token import RefreshToken
 from app.models.role_permission import RolePermission
 from app.models.team import Team
+from app.models.unit import UnitOfMeasure
 from app.models.user import User
 from app.models.user_permission import UserPermission
 from app.models.user_team import UserTeam
@@ -16,6 +17,7 @@ __all__ = [
     "Organisation",
     "Category",
     "Team",
+    "UnitOfMeasure",
     "User",
     "UserTeam",
     "RolePermission",

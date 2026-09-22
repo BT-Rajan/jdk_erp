@@ -311,6 +311,17 @@ across every module).
   surfacing as a form error), edit (pre-filled form, PATCH), and
   deactivate (confirm-then-call, plus its error path).
 
+- **Units of Measure** (`src/pages/UnitsOfMeasurePage.tsx`) -- the
+  frontend for `backend/app/api/units.py`
+  (`docs/modules/units_of_measure.md`), composed identically to
+  `CategoriesPage` and nav-gated alongside it under **Master Data**. No
+  conversion UI of any kind (see the module's own audit -- jdk_clean
+  tried that once and removed it). The Code field's hint text ("Stored
+  upper-case") reflects the backend's normalization rather than
+  duplicating it client-side. 10 new tests
+  (`UnitsOfMeasurePage.test.tsx`), same coverage shape as
+  `CategoriesPage.test.tsx`.
+
 ## Setup
 
 ```bash

@@ -618,6 +618,41 @@ built).
   inline, edit, deactivate/reactivate, and the non-admin read-only view
   (list visible, no create/edit/status controls) against a real backend.
 
+### Master Data: Units of Measure (`app/api/units.py`)
+
+Second entity of Phase 2 (`docs/modules/units_of_measure.md`), audited
+first (`docs/audit/UNITS_OF_MEASURE_AUDIT.md`) -- jdk_clean's own history
+here is decisive, not just absent like Categories: it built a real
+`units_of_measure` table with a `factor_to_base` conversion column,
+removed it within a week for conflating a true physical ratio (ton->kg)
+with a business-specific packaging assumption (bag->kg, its own seed
+comment admitting "a configurable assumption") in one field, then landed
+on a hardcoded DB `ENUM` with no conversion at all -- duplicated three
+times (Python tuple, DB enum, frontend TS const) with no single source
+of truth.
+
+- Structurally identical to Categories (`OrganisationScopedMixin`,
+  same admin-gated CRUD shape, same `MASTER_DATA_MODULE` audit
+  constant/`GET` open-read pattern) with two deliberate differences:
+  `code` is **required** (Category's is optional) and normalized to
+  **upper-case** on every create/update -- both directly informed by the
+  audit's `"kg"`/`"Kg"`/`"KGS"` drift finding, via `app/schemas/unit.py`'s
+  `_normalize_code`.
+- **No conversion mechanism of any kind** -- no `factor_to_base`, no unit
+  category, no ratio field. An explicit, evidence-based decision
+  documented in the audit and the module doc, not an oversight.
+  Organisation-scoped like every other master-data table here, also an
+  explicit decision (jdk_clean's global list reflects having no
+  organisation concept at all, not a considered "units should be global"
+  design).
+- 27 new tests (`tests/test_units.py`): list/get org-scoping and cross-org
+  404s, per-organisation name/code uniqueness at the DB level,
+  admin-gated create/edit/status-change (403 for non-admin), duplicate
+  name/code on create and edit (409, including a case-insensitive code
+  collision proving normalization runs before the uniqueness check),
+  blank/missing name or code rejected (422), code normalization on edit,
+  and audit events for every mutation.
+
 ## Setup
 
 ```bash

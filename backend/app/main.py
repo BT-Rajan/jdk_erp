@@ -13,6 +13,7 @@ from app.api.notifications import router as notifications_router
 from app.api.organisations import router as organisations_router
 from app.api.permissions import router as permissions_router
 from app.api.teams import router as teams_router
+from app.api.units import router as units_router
 from app.api.users import router as users_router
 from app.core.config import settings
 from app.core.error_handlers import register_exception_handlers
@@ -62,6 +63,7 @@ app.include_router(notifications_router)
 app.include_router(organisations_router)
 app.include_router(permissions_router)
 app.include_router(teams_router)
+app.include_router(units_router)
 app.include_router(users_router)
 
 
