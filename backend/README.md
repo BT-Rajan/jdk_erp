@@ -277,6 +277,55 @@ yet — there's no Sales/Finance/Products/Materials table to apply them
 to. When one is built, it must use `Numeric`, never `Float`, for money
 or quantities, and reuse `app/core/currency.round_currency` for rounding.
 
+### Logging + Request Tracing (docs/modules/logging_request_tracing.md)
+
+One structured, JSON-lines logger for the whole application, correlated
+by request ID (`docs/audit/LOGGING_REQUEST_TRACING_AUDIT.md`):
+
+- **`app/core/logging.py`** is the one place logging is configured —
+  `get_logger(name)` for any module, `log(logger, level, message,
+  **fields)` for a structured line. Every line always carries
+  `timestamp`/`level`/`request_id`/`user_id`/`organisation_id`/`module`/
+  `message`, plus whatever structured fields the call site adds
+  (`action`, `duration_ms`, `error_code`, ...). `redact()` masks any
+  field whose key looks sensitive (password, token, secret, ...) before
+  it's ever written, as a safety net on top of never passing one in the
+  first place.
+- **`RequestLoggingMiddleware`** logs one line per completed request —
+  method, route, status, `duration_ms`, the error code an exception
+  handler left on `request.state` (if any) — at `INFO` normally, `WARN`
+  above `SLOW_REQUEST_THRESHOLD_MS` (default 1000ms), `ERROR` on a 5xx
+  — including when the handler itself crashes (see below).
+- **Two real propagation bugs found while wiring this in**, both fixed:
+  FastAPI runs synchronous dependencies/route handlers in a worker
+  thread, so a `ContextVar` mutation made inside one (like
+  `get_current_user` setting user identity) never propagates back to
+  sibling code such as an exception handler — only `request.state`
+  reliably crosses that boundary, so `user_id`/`organisation_id` are
+  read from there, not the ContextVar, everywhere a `request` is
+  available. Separately, a converted-to-response exception can
+  re-propagate raw through a stacked `BaseHTTPMiddleware`'s own
+  `call_next()` (a known Starlette quirk) — left unhandled, this
+  silently dropped the completion log line for exactly the crashed
+  requests that matter most; fixed by logging before re-raising.
+- `request_id` itself is unaffected by either bug — set once in the
+  outermost middleware before any thread/task is spawned, so it
+  correctly reaches every descendant, verified by a test asserting the
+  same id appears in the error-handler log line, the request-completion
+  log line, the `X-Request-ID` response header, and the JSON error
+  body's own `request_id` field, all for one request.
+- Business audit trail (`audit_events`) and technical logs stay two
+  separate concerns, unchanged by this phase: audit is what happened to
+  business data and who did it; logs are what the application did while
+  processing it.
+
+Deliberately not built: no background-job system exists in this repo,
+so #9's job-ID/originating-request-id chaining has no caller yet — the
+mechanism it should reuse (`get_request_id()`/`set_request_id()`)
+already exists. Log storage/rotation/retention is the deploying
+platform's job (stdout + a log driver/aggregator), not application
+code — `LOG_LEVEL` is the one piece of that this app owns directly.
+
 ## Setup
 
 ```bash

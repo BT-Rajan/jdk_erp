@@ -10,8 +10,12 @@ from app.api.teams import router as teams_router
 from app.api.users import router as users_router
 from app.core.config import settings
 from app.core.error_handlers import register_exception_handlers
+from app.core.logging import configure_logging
 from app.core.request_id_middleware import RequestIDMiddleware
+from app.core.request_logging_middleware import RequestLoggingMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
+
+configure_logging()
 
 app = FastAPI(title="JDK ERP API")
 
@@ -20,8 +24,12 @@ register_exception_handlers(app)
 # Order matters: middleware runs outside-in on the request, inside-out on
 # the response -- Starlette applies them in the reverse of this add
 # order, so the *last* one added here is the *first* to see the request.
-# RequestIDMiddleware goes last so the request id is set before anything
-# else (including the exception handlers above) can run.
+# RequestIDMiddleware goes last so the request id (and user/organisation
+# context reset) is set before anything else, including the exception
+# handlers above and RequestLoggingMiddleware, can run. RequestLoggingMiddleware
+# goes second-to-last so it wraps the whole request (including exception
+# handling) and its duration_ms covers the full lifecycle
+# (docs/modules/logging_request_tracing.md #2/#4).
 if settings.FORCE_HTTPS:
     app.add_middleware(HTTPSRedirectMiddleware)
 
@@ -35,6 +43,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
 app.include_router(audit_events_router)

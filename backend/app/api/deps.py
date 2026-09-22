@@ -1,9 +1,10 @@
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.errors import AccessDeniedError, AuthError
+from app.core.request_context import set_user_context
 from app.core.roles import ADMIN_ROLES
 from app.core.security import decode_token
 from app.models.organisation import Organisation
@@ -13,6 +14,7 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
@@ -42,6 +44,19 @@ def get_current_user(
     )
     if user is None:
         raise AuthError("User not found or inactive.")
+
+    # The one place identity resolves -- every structured log line for
+    # the rest of this request can now carry user_id/organisation_id
+    # with no request object in scope (docs/modules/logging_request_tracing.md #3).
+    set_user_context(user.id, user.organisation_id)
+    # Also on request.state: RequestLoggingMiddleware's one-line-per-request
+    # log runs *outside* this request's own asyncio task (Starlette's
+    # BaseHTTPMiddleware spawns call_next in a separate task), so a
+    # ContextVar set here is invisible to it -- request.state is a plain
+    # shared object, not copied per task, so it's the one thing that
+    # actually crosses that boundary (the same reason error_code does).
+    request.state.user_id = user.id
+    request.state.organisation_id = user.organisation_id
 
     return user
 

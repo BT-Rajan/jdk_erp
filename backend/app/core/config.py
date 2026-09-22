@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     # (docs/modules/session_security.md acceptance criterion 14).
     FORCE_HTTPS: bool = False
 
+    # DEBUG is development-only (docs/modules/logging_request_tracing.md
+    # #1/#10) -- production sets this to INFO (the default) so verbose
+    # diagnostic logging never runs unintentionally in production.
+    LOG_LEVEL: str = "INFO"
+
+    # A request slower than this logs at WARN with its duration, so a
+    # slow endpoint is greppable without a profiler
+    # (docs/modules/logging_request_tracing.md #8/#11).
+    SLOW_REQUEST_THRESHOLD_MS: int = 1000
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
