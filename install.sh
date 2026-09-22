@@ -23,7 +23,7 @@ DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-3306}"
 DB_NAME="${DB_NAME:-jdk_erp}"
 DB_USER="${DB_USER:-root}"
-DB_PASS="${DB_PASS:-}"
+DB_PASS="${DB_PASS:-Chennai#44}"
 export USE_SQLITE DB_HOST DB_PORT DB_NAME DB_USER DB_PASS
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
