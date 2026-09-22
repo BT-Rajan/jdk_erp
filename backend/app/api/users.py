@@ -10,7 +10,7 @@ from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.core.security import hash_password
 from app.core.validation import validate_company_email_domain
-from app.models.audit_event import ROLE_CHANGED, SECURITY_MODULE, USER_CREATED, USER_STATUS_CHANGED
+from app.models.audit_event import ROLE_CHANGED, SECURITY_MODULE, TEAM_ADDED, USER_CREATED, USER_STATUS_CHANGED
 from app.models.notification import INFO
 from app.models.organisation import Organisation
 from app.models.team import Team
@@ -108,13 +108,14 @@ def create_user(
         raise ConflictError("A user with this email or username already exists.")
 
     team_ids = set(payload.team_ids)
+    teams: list[Team] = []
     if team_ids:
-        found_ids = {
-            row[0]
-            for row in db.query(Team.id)
+        teams = (
+            db.query(Team)
             .filter(Team.organisation_id == admin.organisation_id, Team.id.in_(team_ids), Team.is_active.is_(True))
             .all()
-        }
+        )
+        found_ids = {team.id for team in teams}
         if found_ids != team_ids:
             # Criterion 6: invalid team assignment is rejected -- an id
             # that doesn't exist, belongs to another organisation, or is
@@ -133,8 +134,8 @@ def create_user(
     db.add(user)
     db.flush()  # assigns user.id for the UserTeam rows and audit event below
 
-    for team_id in team_ids:
-        db.add(UserTeam(user_id=user.id, team_id=team_id))
+    for team in teams:
+        db.add(UserTeam(user_id=user.id, team_id=team.id))
 
     audit_service.log_event(
         db,
@@ -149,6 +150,24 @@ def create_user(
         details=f"role: {user.role}",
         ip_address=request.client.host if request.client else None,
     )
+    # Audit-trail parity with the standalone add_team_member flow
+    # (app/api/teams.py) -- a membership assigned at creation time is
+    # exactly as auditable as one assigned afterward, same action/detail
+    # shape, not a second event type invented for this call site.
+    for team in teams:
+        audit_service.log_event(
+            db,
+            action=TEAM_ADDED,
+            module=SECURITY_MODULE,
+            organisation_id=admin.organisation_id,
+            user_id=user.id,
+            actor_user_id=admin.id,
+            entity_type="user",
+            entity_id=user.id,
+            result="success",
+            details=f"team: {team.name} (id={team.id})",
+            ip_address=request.client.host if request.client else None,
+        )
     # One commit for the whole operation -- the user row, its team
     # memberships and the audit event succeed or fail together
     # (docs/modules/database_transaction_integrity.md #5/#6/#9).
@@ -180,13 +199,18 @@ def change_user_role(
 ) -> None:
     """Admin-gated (docs/modules/roles_rbac.md #4), scoped to the admin's
     own organisation -- an Admin from Organisation A cannot change
-    Organisation B's users, and a user can never change their own role
-    (there's no self-service path here at all). Also revokes the user's
-    sessions and records who made the change
+    Organisation B's users. No non-admin can reach this endpoint at all
+    (there's no self-service path here), and an admin can never target
+    their own row through it either, mirroring change_user_status below
+    -- otherwise an admin could self-demote out of every admin screen,
+    or self-promote, with nothing stopping either. Also revokes the
+    user's sessions and records who made the change
     (docs/modules/session_security.md #8/#14, docs/modules/audit_trail.md)."""
     user = db.query(User).filter(User.id == user_id, User.organisation_id == admin.organisation_id).first()
     if user is None:
         raise NotFoundError("User not found.")
+    if user.id == admin.id:
+        raise BusinessRuleError("You cannot change your own role.")
 
     old_role = user.role
     user.role = payload.role

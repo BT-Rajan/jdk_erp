@@ -6,7 +6,15 @@ queries) is already covered by test_auth.py -- see
 docs/audit/SESSION_SECURITY_AUDIT.md's section-by-section table."""
 from datetime import datetime, timedelta
 
-from app.models.audit_event import LOGIN_SUCCESS, LOGOUT, ROLE_CHANGED, TEAM_ADDED, TEAM_REMOVED, AuditEvent
+from app.models.audit_event import (
+    LOGIN_SUCCESS,
+    LOGOUT,
+    ROLE_CHANGED,
+    TEAM_ADDED,
+    TEAM_REMOVED,
+    USER_STATUS_CHANGED,
+    AuditEvent,
+)
 from app.models.refresh_token import RefreshToken
 from app.models.team import Team
 from app.models.user_team import UserTeam
@@ -109,6 +117,22 @@ def test_role_change_is_logged_with_actor(client, admin_user, active_user, db_se
     assert event.details == "role: team_member -> manager"
 
 
+def test_status_change_is_logged_with_actor(client, admin_user, active_user, db_session):
+    admin_headers = _headers(client, "admin_person")
+    client.patch(f"/api/users/{active_user.id}/status", json={"is_active": False}, headers=admin_headers)
+
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == USER_STATUS_CHANGED, AuditEvent.user_id == active_user.id)
+        .first()
+    )
+    assert event is not None
+    assert event.actor_user_id == admin_user.id
+    assert event.entity_type == "user"
+    assert event.entity_id == active_user.id
+    assert event.details == "is_active: False"
+
+
 # --- team membership audit trail ------------------------------------------
 
 
@@ -143,6 +167,41 @@ def test_team_membership_changes_are_logged_with_actor(client, admin_user, activ
     )
     assert removed_event is not None
     assert removed_event.actor_user_id == admin_user.id
+
+
+def test_team_membership_assigned_at_user_creation_is_logged(client, admin_user, organisation, db_session):
+    """Audit-trail parity: a membership assigned in the same call as
+    POST /api/users must produce the same TEAM_ADDED event a membership
+    added afterward via POST /api/teams/{id}/members already does."""
+    team = Team(organisation_id=organisation.id, name="Sales", is_active=True)
+    db_session.add(team)
+    db_session.commit()
+    db_session.refresh(team)
+
+    admin_headers = _headers(client, "admin_person")
+    create_response = client.post(
+        "/api/users",
+        json={
+            "full_name": "New Hire",
+            "email": "newhire@example.com",
+            "username": "new_hire",
+            "password": "Str0ng!Pass1",
+            "role": "team_member",
+            "team_ids": [team.id],
+        },
+        headers=admin_headers,
+    )
+    assert create_response.status_code == 201
+    new_user_id = create_response.json()["id"]
+
+    added_event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == TEAM_ADDED, AuditEvent.user_id == new_user_id)
+        .first()
+    )
+    assert added_event is not None
+    assert added_event.actor_user_id == admin_user.id
+    assert added_event.details == f"team: {team.name} (id={team.id})"
 
 
 def test_login_and_logout_record_actor(client, active_user, db_session):

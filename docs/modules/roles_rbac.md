@@ -164,9 +164,14 @@ correction landed. `users.team_id` is removed; a `user_teams` table
   `GET /api/users?team_id=...` — no new endpoint needed for a read that
   was already safe to expose (Principle 5).
 - A user cannot add themselves to a team or change their own role (§4):
-  true by construction — no self-service endpoint touches `role` or
-  `user_teams`, and the admin-gated ones reject a non-admin caller
-  regardless of whose membership they're trying to change.
+  no self-service endpoint touches `role` or `user_teams`, and the
+  admin-gated ones reject a non-admin caller regardless of whose
+  membership they're trying to change. An admin targeting their *own*
+  row is a separate case those two facts don't cover on their own --
+  `PATCH /api/users/{id}/role` explicitly rejects `id == admin.id` too
+  (mirroring the same guard `PATCH /api/users/{id}/status` already had),
+  so an admin can't self-promote or self-demote out of every admin
+  screen with nothing to stop them either way.
 
 **Deliberately not built:**
 

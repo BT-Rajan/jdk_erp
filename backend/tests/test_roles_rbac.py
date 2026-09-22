@@ -151,6 +151,20 @@ def test_admin_cannot_change_role_of_user_in_other_organisation(client, admin_us
     assert response.status_code == 404
 
 
+def test_admin_cannot_change_own_role(client, admin_user, db_session):
+    """Mirrors test_users.py::test_admin_cannot_deactivate_own_account --
+    the sibling status-change endpoint already blocked an admin from
+    targeting their own row; role-change had no such guard until this
+    hardening pass, which would have let an admin self-promote or
+    self-demote with nothing to stop them."""
+    headers = _headers(client, "admin_person")
+    response = client.patch(f"/api/users/{admin_user.id}/role", json={"role": "super_admin"}, headers=headers)
+    assert response.status_code == 400
+
+    db_session.refresh(admin_user)
+    assert admin_user.role == "admin"
+
+
 def test_new_user_defaults_to_team_member_role(active_user):
     assert active_user.role == TEAM_MEMBER
 

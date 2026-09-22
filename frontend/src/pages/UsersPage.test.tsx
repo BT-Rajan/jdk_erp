@@ -225,4 +225,23 @@ describe('UsersPage', () => {
 
     expect(await screen.findByText('Failed to change role.')).toBeInTheDocument()
   })
+
+  it("disables every role option and Deactivate on the current admin's own row", async () => {
+    // Default makeUser() is id: 1 / role: 'admin', matching ADMIN above --
+    // this row is the signed-in admin's own account. The backend rejects
+    // both self-role-change and self-deactivation (app/api/users.py); this
+    // pins down that the UI reflects the same rule, not just relies on it.
+    render(<UsersPage />)
+    await screen.findByText('Ada Lovelace')
+
+    const row = screen.getByText('Ada Lovelace').closest('tr')!
+    await userEvent.click(within(row).getByRole('button', { name: /Actions for/ }))
+
+    const roleOptions = await screen.findAllByRole('menuitem', { name: /Set role:/ })
+    expect(roleOptions.length).toBeGreaterThan(0)
+    for (const option of roleOptions) {
+      expect(option).toBeDisabled()
+    }
+    expect(screen.getByRole('menuitem', { name: 'Deactivate' })).toBeDisabled()
+  })
 })

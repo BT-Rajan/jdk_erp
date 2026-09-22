@@ -229,3 +229,30 @@ Authentication) already exist:
   list, create (with role and team assignment), change role, and
   activate/deactivate — the first real consumer of the RBAC endpoints
   built in `roles_rbac.md`, which until now had no UI at all.
+
+**Hardening pass** (audit-first, no parallel implementation -- every
+item below is a fix to the mechanisms above, not a new one):
+
+- **`PATCH /api/users/{id}/role` had no guard against an admin
+  targeting their own row.** §11 above ("Never allow a user to modify
+  their own role or organisation") was already enforced for status
+  change (line 224) but not for role change, despite that endpoint's
+  own docstring and `roles_rbac.md` both already claiming it was. Fixed
+  by adding the same `user.id == admin.id` check `PATCH
+  /api/users/{id}/status` already had — an admin can no longer
+  self-promote or self-demote through this endpoint. The frontend's
+  existing `isSelf` disable on the role-change menu options
+  (`UsersPage.tsx`) was only ever a UI courtesy; the real boundary is
+  now this server-side check, matching Principle 3.
+- **Team memberships assigned at user-creation time produced no
+  `team_added` audit event**, unlike the same membership added
+  afterward via `POST /api/teams/{id}/members`. Fixed by logging
+  `team_added` per assigned team inside `POST /api/users`, reusing the
+  exact action/detail shape `teams.py` already uses rather than
+  inventing a second one.
+
+**Genuine gaps this pass leaves as-is** (real, but out of scope for a
+hardening pass -- adding them means new capability, not fixing existing
+capability): editing an existing user's `full_name`/`email`/`username`,
+and an admin-forced password reset. Both still require nothing has
+asked for them yet, same as line 166 already said.
