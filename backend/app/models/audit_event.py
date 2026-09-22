@@ -21,9 +21,12 @@ TEAM_REMOVED = "team_removed"
 USER_CREATED = "user_created"
 USER_STATUS_CHANGED = "user_status_changed"
 EMAIL_ACCOUNT_UPDATED = "email_account_updated"
+ORGANISATION_UPDATED = "organisation_updated"
+ORGANISATION_STATUS_CHANGED = "organisation_status_changed"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"
+ORGANISATION_MODULE = "organisation"
 
 
 class AuditEvent(Base):

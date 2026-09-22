@@ -503,6 +503,46 @@ exactly that.
   building its own widget. Polls the unread-count endpoint instead of
   holding a push connection open.
 
+### Organisation (`app/api/organisations.py`)
+
+The top-level data and access boundary (`docs/modules/organisation.md`),
+audited before this pass touched anything -- the model, the
+`OrganisationScopedMixin`/FK/index pattern every organisation-owned
+table already follows, the DB-authoritative organisation context on
+every request (`get_current_user` joins and filters
+`Organisation.is_active`, never trusting the JWT's own unused `org`
+claim), and deactivation blocking login/refresh/every request were all
+already correct and are unchanged.
+
+- **The one genuine gap**: no admin API to edit or activate/deactivate
+  an organisation, because RBAC didn't exist yet when the module was
+  first built. RBAC exists now, so `PATCH /api/organisations/me`
+  (name/code/contact/address/currency/timezone, partial-update
+  semantics) and `PATCH /api/organisations/me/status` (activate/
+  deactivate) were added, gated with the existing `require_admin`
+  dependency -- not a new super_admin-only tier, since `app/core/roles.py`
+  already documents super_admin and admin as identical within their own
+  organisation today. Both audit-log (`ORGANISATION_UPDATED`/
+  `ORGANISATION_STATUS_CHANGED`) and are scoped to `admin.organisation_id`
+  only -- there is no `organisation_id` field in either request schema
+  to escape that scope with.
+- **Deliberately still not built**: organisation creation via API.
+  Creation stays bootstrap-only (`scripts/seed_admin.py`), per the
+  module's own "don't build a tenant provisioning system or public
+  registration" guidance -- unchanged by this pass. A consequence worth
+  stating plainly: reactivating a deactivated organisation is
+  unreachable through the new status endpoint too, since none of its
+  users (the admin who deactivated it included) can authenticate once
+  it's inactive -- reactivation is an operator action (direct database
+  access) today, the same as creation already is.
+- 10 new tests in `tests/test_organisation.py`: edit success/audit,
+  non-admin 403, invalid timezone/currency (422), a code collision with
+  another organisation (409, and the row is unchanged), an `id`/
+  `organisation_id` field in the request body being silently ignored,
+  organisation name uniqueness (mirroring the existing code-uniqueness
+  test), an explicit cross-organisation isolation check on `/me` itself,
+  and deactivate-locks-out-the-acting-admin via the new endpoint.
+
 ### Common list contract (`app/core/list_query.py`, `app/schemas/pagination.py`)
 
 A follow-up to the Tables/Forms/Modals/Filters audit

@@ -240,6 +240,31 @@ across every module).
   No admin gate — every user has their own notifications, scoped
   entirely server-side to `recipient_user_id == current_user.id`.
 
+- **Organisation settings** (`src/pages/OrganisationSettingsPage.tsx`) --
+  the frontend for `backend/app/api/organisations.py`'s new edit/status
+  endpoints (`docs/modules/organisation.md` #6). Admin-only: view and
+  edit the organisation's own record (name, code, contact details,
+  address, company email domain, currency, timezone) via a plain form,
+  and activate/deactivate it below via a `Badge` + a danger `Button`
+  behind a `ConfirmDialog` -- the same activate/deactivate shape
+  `UsersPage` already uses, not a new pattern. The confirm dialog spells
+  out the real consequence in plain language (every user, the acting
+  admin included, is signed out immediately and reactivating is an
+  operator action, not something this page can undo), since deactivating
+  an organisation is a strictly bigger blast radius than deactivating
+  one user. Deliberately minimal per that module's own "not a
+  tenant-management framework" principle -- no dashboard, no hierarchy,
+  no branch/subsidiary management. Nav-gated under **Settings** next to
+  Users and Email, same admin check. 7 tests
+  (`OrganisationSettingsPage.test.tsx`): access-denied, load, load
+  error, save (request payload + re-render from the response), a
+  server-side field conflict surfacing on the right field, and the full
+  deactivate confirm-then-call-then-badge-updates flow plus its error
+  path. Verified live: edit + save, an invalid-timezone validation error
+  rendering inline, and deactivating actually invalidating the acting
+  admin's own session (`GET /api/auth/me` and a fresh login both 401
+  immediately after) against a real backend.
+
 - **Common list contract** -- `UsersPage` as the first real consumer of
   `useServerTable` end to end, per the follow-up section in
   [`../docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md`](../docs/audit/TABLES_FORMS_MODALS_FILTERS_AUDIT.md).

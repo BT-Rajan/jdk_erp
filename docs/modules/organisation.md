@@ -182,15 +182,9 @@ It has no organisation concept at all (confirmed single-tenant), so there
 is nothing to port forward here; this module is built fresh, directly
 against this spec.
 
-Two things this module deliberately does **not** do yet, because they
-belong to layers not built yet:
+One thing this module deliberately still does **not** do, because it
+belongs to a layer not built yet:
 
-- **No admin API to create/edit/deactivate an organisation.** §6 requires
-  a Super Admin role to gate that, and RBAC doesn't exist yet. Building
-  an unauthorized write endpoint just to call this "done" would violate
-  Principle 3 (server-side authority) — so for now, the only way to
-  create an organisation is the `seed_admin` script, and the write API
-  is a tracked follow-up once RBAC lands.
 - **No cross-module query enforcement.** §3/§8 apply to every future
   organisation-owned table (customers, products, orders, ...), which
   don't exist yet either. What exists now is the *pattern* every one of
@@ -199,7 +193,7 @@ belong to layers not built yet:
   definition of "how a table belongs to an organisation," not a new one
   invented per module.
 
-What *is* implemented now, because both dependencies already exist:
+What *is* implemented:
 
 - The full organisation record (§2).
 - `GET /api/organisations/me` — the one place "which organisation am I
@@ -209,3 +203,22 @@ What *is* implemented now, because both dependencies already exist:
   in `auth_service.login`, and also in current-user resolution so an
   already-issued token stops working on the next request once the
   organisation goes inactive, not just at the next login.
+- **`PATCH /api/organisations/me`** and **`PATCH /api/organisations/me/status`**
+  (edit and activate/deactivate, §6) — added once RBAC actually existed
+  to gate them, closing the one gap the original pass above left open.
+  Gated with the existing `require_admin` dependency, the same one
+  `app/api/users.py` already uses, rather than a new super_admin-only
+  tier: `app/core/roles.py`'s own comment says super_admin and admin
+  behave identically within their own organisation today (its
+  cross-organisation capability isn't built), so a finer split here
+  would be organisation-specific permission logic invented for its own
+  sake, not a reuse of what RBAC already models. There is still no
+  create endpoint — organisation creation stays bootstrap-only via
+  `scripts/seed_admin.py`, deliberately, per this module's own §5/§9
+  ("don't build a tenant provisioning system or public registration").
+  Reactivating a deactivated organisation is consequently unreachable
+  through this API too: once inactive, none of its users (the admin who
+  deactivated it included) can authenticate to call it, so reactivation
+  is an operator action (direct database access) today, the same way
+  creation already is — not a bug, a direct consequence of §7's "its
+  users cannot log in" applying without exception.

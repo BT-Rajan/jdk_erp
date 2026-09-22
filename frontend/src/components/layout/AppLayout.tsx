@@ -23,6 +23,7 @@ const ADMIN_NAV_ENTRIES: NavEntry[] = [
     label: 'Settings',
     icon: <Settings size={16} />,
     items: [
+      { label: 'Organisation', to: '/settings/organisation' },
       { label: 'Users', to: '/users' },
       { label: 'Email', to: '/settings/email' },
     ],
