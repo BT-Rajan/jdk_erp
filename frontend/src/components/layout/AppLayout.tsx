@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Home, Menu, Users } from 'lucide-react'
+import { Home, Menu, Settings } from 'lucide-react'
 import { Outlet } from 'react-router-dom'
 import { ActionMenu } from '@/components/ui/ActionMenu'
 import { IconButton } from '@/components/ui/IconButton'
@@ -13,10 +13,20 @@ import { isAdminRole } from '@/lib/auth/roles'
 // The starting nav tree -- each future module (docs/ROADMAP.md Phase 2+)
 // adds its own entries here as it's built, the same NavEntry[] shape
 // Sidebar and TopNav both already accept and own no state of their own.
-// UI visibility only (Principle 3) -- /users itself still enforces the
-// same admin check server-side, via each endpoint it calls.
+// UI visibility only (Principle 3) -- every page under Settings still
+// enforces the same admin check server-side, via each endpoint it calls.
 const NAV_ENTRIES: NavEntry[] = [{ type: 'leaf', label: 'Dashboard', to: '/', icon: <Home size={16} /> }]
-const ADMIN_NAV_ENTRIES: NavEntry[] = [{ type: 'leaf', label: 'Users', to: '/users', icon: <Users size={16} /> }]
+const ADMIN_NAV_ENTRIES: NavEntry[] = [
+  {
+    type: 'group',
+    label: 'Settings',
+    icon: <Settings size={16} />,
+    items: [
+      { label: 'Users', to: '/users' },
+      { label: 'Email', to: '/settings/email' },
+    ],
+  },
+]
 
 /** The one authenticated app shell every protected route renders
  * inside -- composes Sidebar + TopNav exactly as

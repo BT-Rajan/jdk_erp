@@ -417,6 +417,49 @@ Deliberately not built: a generic dispatch endpoint that accepts a
 execute job types" #12 forbids. The worker running with minimum OS/DB
 privileges is a deployment concern, not application code.
 
+### Communication -- Email (`app/api/communication.py`)
+
+One admin-configured mailbox per organisation, used both to verify a
+real IMAP/POP3 connection and to send mail via SMTP. Ported from
+`jdk_clean`'s single shared account (see `BT-Rajan/jdk_clean`'s
+`app/services/email_account_service.py`/`email_service.py`) onto this
+project's own foundations rather than copied as-is:
+organisation-scoped like every other business table here
+(`app/models/mixins.py`'s `OrganisationScopedMixin`, not a single
+global row), `app/core/errors.py`'s `AppError` subclasses instead of a
+separate exception hierarchy, and `app/core/validation.py`'s
+`validate_email_format` reused rather than re-validated ad hoc.
+
+- **`app/core/crypto.py`**: Fernet encrypt/decrypt for secrets that,
+  unlike a login password, must be recoverable in plaintext to actually
+  open a connection later. The key derives from `JWT_SECRET_KEY`
+  instead of a second secret in `.env`.
+- **`app/models/email_account.py`**: provider, address, encrypted
+  password, IMAP/POP3/SMTP host+port+encryption settings, and the last
+  test's result -- one row per organisation (`uq_email_accounts_organisation_id`),
+  lazily created with Gmail's preset defaults on first read.
+- **`GET /api/communication/email/providers`**: preset host/port values
+  per provider (Gmail, Outlook, Yahoo, iCloud, custom) for the
+  frontend's picker to fill the form with.
+- **`GET`/`PUT /api/communication/email`** (admin-gated): read/save the
+  organisation's mailbox. Saving validates the password policy is *not*
+  re-applied here (a mailbox password isn't a login password) but does
+  reject an IMAP/POP3 port that contradicts its own encryption setting
+  (993/995 are SSL/TLS-only, 143/110 never are) and logs a
+  `email_account_updated` audit event. `password: null` keeps the
+  existing one; `password: ""` clears it -- distinct outcomes a single
+  optional field couldn't otherwise express.
+- **`POST /api/communication/email/test`**: opens and immediately
+  closes a real IMAP/POP3 + SMTP connection with the saved settings.
+  Never raises -- a failure comes back as `{"ok": false, "message"}` so
+  the UI can show it inline.
+- **`app/services/email_service.py`** / **`POST /api/communication/email/send-test`**:
+  the one place any future module (quotations, orders, ...) sends an
+  email from, rather than each rolling its own SMTP code -- `send-test`
+  exercises the exact same `send_email()` a real business document
+  would use, proving the whole pipeline works, not just that
+  credentials open a socket.
+
 ## Setup
 
 ```bash

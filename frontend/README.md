@@ -211,11 +211,24 @@ across every module).
   organisation, create one (with role and initial team assignment via
   `POST /api/users`), change role, and activate/deactivate
   (`PATCH /api/users/{id}/role` / `/status`) from a row's action menu.
-  Nav-gated to `admin`/`super_admin` in `AppLayout.tsx`
-  (`lib/auth/roles.ts`'s `isAdminRole`) — usability only, per Principle 3;
-  a non-admin who reaches `/users` directly sees `AccessDeniedState`
-  instead, since every call still goes through the same admin-gated
-  backend endpoints.
+
+- **Email settings** (`src/pages/EmailSettingsPage.tsx`) — the frontend
+  for `backend/app/api/communication.py`'s mailbox endpoints. A form for
+  the organisation's mailbox (provider picker that autofills
+  host/port/encryption from `GET /api/communication/email/providers`,
+  IMAP/POP3 fields shown based on the chosen incoming protocol, SMTP
+  fields, a password field that keeps the saved one when left blank and
+  a checkbox to explicitly clear it instead), plus two independent
+  checks below it: **Test connection** (opens/closes a real connection,
+  never sends anything) and **Send test email** (actually sends one
+  through the saved mailbox — proves the whole pipeline, not just that
+  the credentials open a socket).
+
+  Both admin screens above are nav-gated under a **Settings** group in
+  `AppLayout.tsx` (`lib/auth/roles.ts`'s `isAdminRole`) — usability only,
+  per Principle 3; a non-admin who reaches either route directly sees
+  `AccessDeniedState` instead, since every call still goes through the
+  same admin-gated backend endpoints.
 
 ## Setup
 

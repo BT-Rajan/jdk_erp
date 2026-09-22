@@ -3,6 +3,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { RequireAuth } from '@/components/routing/RequireAuth'
 import { AuthProvider } from '@/lib/auth/AuthContext'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
 import { UsersPage } from '@/pages/UsersPage'
@@ -26,6 +27,7 @@ export function App() {
         >
           <Route path="/" element={<DashboardPage />} />
           <Route path="/users" element={<UsersPage />} />
+          <Route path="/settings/email" element={<EmailSettingsPage />} />
           <Route path="/styleguide" element={<StyleGuidePage />} />
         </Route>
       </Routes>

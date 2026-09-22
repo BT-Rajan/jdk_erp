@@ -14,3 +14,8 @@ python-dotenv>=1.0
 email-validator>=2.2
 qrcode[pil]>=7.4
 python-multipart>=0.0.12
+# Fernet encryption for secrets that must be recoverable in plaintext
+# (a saved mailbox password, app/core/crypto.py) -- declared directly
+# rather than relying on it arriving transitively via
+# python-jose[cryptography] above.
+cryptography>=41
