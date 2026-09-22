@@ -8,12 +8,13 @@ from app.core.search import apply_keyword_filter
 from app.core.security import hash_password
 from app.core.validation import validate_company_email_domain
 from app.models.audit_event import ROLE_CHANGED, SECURITY_MODULE, USER_CREATED, USER_STATUS_CHANGED
+from app.models.notification import INFO
 from app.models.organisation import Organisation
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
 from app.schemas.user import RoleChangeRequest, UserCreateRequest, UserOut, UserStatusChangeRequest
-from app.services import audit_service, auth_service, user_service
+from app.services import audit_service, auth_service, notification_service, user_service
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -181,6 +182,18 @@ def change_user_role(
         result="success",
         details=f"role: {old_role} -> {payload.role}",
         ip_address=request.client.host if request.client else None,
+    )
+    # An "important status change" (docs/modules/notifications.md #8) --
+    # one of this module's two proof-of-concept call sites. No email by
+    # default (#8's spam guidance applies doubly to email).
+    notification_service.notify(
+        db,
+        user,
+        type=INFO,
+        title="Your role was changed",
+        message=f"Your role is now {payload.role}.",
+        entity_type="user",
+        entity_id=user.id,
     )
     db.commit()
 

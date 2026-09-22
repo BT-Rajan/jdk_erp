@@ -460,6 +460,49 @@ separate exception hierarchy, and `app/core/validation.py`'s
   would use, proving the whole pipeline works, not just that
   credentials open a socket.
 
+### Notifications (`app/api/notifications.py`)
+
+One notification service every module calls (`docs/modules/notifications.md`)
+instead of rolling its own -- `notification_service.notify(db, user_or_users,
+...)` creates the record(s); this module owns read-status too. Never
+becomes the data-discovery backdoor it easily could: every read/write
+endpoint is scoped to `recipient_user_id == current_user.id`, always
+-- no admin/role gate needed, because a user's own notifications are
+exactly that.
+
+- **`app/models/notification.py`**: type (`INFO`/`ACTION_REQUIRED`/
+  `SUCCESS`/`WARNING`/`ERROR`), title, message, an optional entity
+  reference + `target_url` (a pointer, never a copy of the business
+  record), read/unread + timestamps. Not organisation-scoped via the
+  usual `OrganisationScopedMixin` -- every real query filters by
+  recipient, not organisation; `organisation_id` is stored only for the
+  email job's benefit.
+- **`GET /api/notifications`**, **`GET /api/notifications/unread-count`**,
+  **`PATCH /api/notifications/{id}/read`**, **`POST /api/notifications/mark-all-read`**.
+- **Email is optional and goes through the existing job system, never
+  inline**: `notify(..., send_email=True)` dispatches
+  `app/jobs/send_notification_email.py` (registered the same way
+  `cleanup_expired_refresh_tokens` is), which reuses
+  `email_service.send_email` -- the same body a document email would
+  use, no separate richer template. A missing mailbox is a no-op, not a
+  failure; a real SMTP failure retries via `RetryableJobError`, same as
+  any other job.
+- **Retention**: `app/jobs/cleanup_old_read_notifications.py` +
+  `NOTIFICATION_RETENTION_DAYS` (default 90) purges read notifications
+  past the window; unread ones are never auto-deleted. Important
+  business history stays in the audit trail, which has no such sweep.
+- **Two real call sites**, not left as unexercised infrastructure:
+  `PATCH /api/users/{id}/role` and `POST /api/teams/{id}/members` each
+  notify the affected user (an "important status change" and an
+  "assignment" per the module's own examples) -- neither sends email by
+  default.
+- **Frontend**: `frontend/src/components/ui/NotificationBell.tsx` in
+  `TopNav`'s actions slot -- the one standard in-app UI (bell, unread
+  count, list, mark read/mark all read, click-through to `target_url`)
+  every module's `notify()` call surfaces through, rather than each
+  building its own widget. Polls the unread-count endpoint instead of
+  holding a push connection open.
+
 ## Setup
 
 ```bash

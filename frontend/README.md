@@ -230,6 +230,16 @@ across every module).
   `AccessDeniedState` instead, since every call still goes through the
   same admin-gated backend endpoints.
 
+- **Notifications** (`src/components/ui/NotificationBell.tsx`) — the one
+  standard notification UI every module's `notify()` call surfaces
+  through (`docs/modules/notifications.md`), not a per-module widget.
+  Sits in `TopNav`'s actions slot next to the account menu: an unread
+  badge (polled every 30s from `GET /api/notifications/unread-count`,
+  not a push connection), a dropdown list, mark one/mark all read, and
+  clicking a notification navigates to its `target_url` if it has one.
+  No admin gate — every user has their own notifications, scoped
+  entirely server-side to `recipient_user_id == current_user.id`.
+
 ## Setup
 
 ```bash

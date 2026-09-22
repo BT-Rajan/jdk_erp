@@ -3,6 +3,7 @@ import { Home, Menu, Settings } from 'lucide-react'
 import { Outlet } from 'react-router-dom'
 import { ActionMenu } from '@/components/ui/ActionMenu'
 import { IconButton } from '@/components/ui/IconButton'
+import { NotificationBell } from '@/components/ui/NotificationBell'
 import { Sidebar } from '@/components/ui/Sidebar'
 import { TopNav } from '@/components/ui/TopNav'
 import { UserChip } from '@/components/ui/UserChip'
@@ -60,6 +61,7 @@ export function AppLayout() {
         entries={entries}
         actions={
           <div className="flex items-center gap-3">
+            <NotificationBell />
             <UserChip name={user?.full_name ?? ''} subtitle={user?.role} />
             <ActionMenu
               label="Account"

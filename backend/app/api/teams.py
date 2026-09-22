@@ -6,11 +6,12 @@ from app.core.database import get_db
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import SECURITY_MODULE, TEAM_ADDED, TEAM_REMOVED
+from app.models.notification import INFO
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
 from app.schemas.team import TeamMemberIn, TeamOut
-from app.services import audit_service
+from app.services import audit_service, notification_service
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -87,6 +88,17 @@ def add_team_member(
         result="success",
         details=f"team: {team.name} (id={team.id})",
         ip_address=request.client.host if request.client else None,
+    )
+    # An "assignment" (docs/modules/notifications.md #8) -- this
+    # module's other proof-of-concept call site. No email by default.
+    notification_service.notify(
+        db,
+        user,
+        type=INFO,
+        title="You were added to a team",
+        message=f"You were added to the {team.name} team.",
+        entity_type="team",
+        entity_id=team.id,
     )
     db.commit()
 

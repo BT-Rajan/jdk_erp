@@ -8,6 +8,7 @@ from app.api.auth import router as auth_router
 from app.api.communication import router as communication_router
 from app.api.files import router as files_router
 from app.api.jobs import router as jobs_router
+from app.api.notifications import router as notifications_router
 from app.api.organisations import router as organisations_router
 from app.api.permissions import router as permissions_router
 from app.api.teams import router as teams_router
@@ -55,6 +56,7 @@ app.include_router(auth_router)
 app.include_router(communication_router)
 app.include_router(files_router)
 app.include_router(jobs_router)
+app.include_router(notifications_router)
 app.include_router(organisations_router)
 app.include_router(permissions_router)
 app.include_router(teams_router)

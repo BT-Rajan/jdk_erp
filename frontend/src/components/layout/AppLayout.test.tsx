@@ -4,14 +4,21 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppLayout } from './AppLayout'
 
-const { useAuthMock, logoutMock } = vi.hoisted(() => ({
+const { useAuthMock, logoutMock, apiGetMock } = vi.hoisted(() => ({
   useAuthMock: vi.fn(),
   logoutMock: vi.fn(),
+  apiGetMock: vi.fn(),
 }))
 vi.mock('@/lib/auth/AuthContext', () => ({ useAuth: useAuthMock }))
+// AppLayout renders NotificationBell, which polls
+// GET /api/notifications/unread-count on mount -- mocked here so this
+// test exercises the layout, not a real network call against a backend
+// that doesn't exist in this environment.
+vi.mock('@/lib/apiClient', () => ({ apiClient: { get: apiGetMock, post: vi.fn(), patch: vi.fn() } }))
 
 beforeEach(() => {
   logoutMock.mockReset()
+  apiGetMock.mockReset().mockResolvedValue({ data: { count: 0 } })
   useAuthMock.mockReturnValue({ user: { id: 1, full_name: 'Ada Lovelace', role: 'admin' }, logout: logoutMock })
 })
 

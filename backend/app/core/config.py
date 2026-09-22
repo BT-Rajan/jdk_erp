@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     JOB_WORKER_POLL_INTERVAL_SECONDS: int = 5
     JOB_WORKER_BATCH_SIZE: int = 5
 
+    # Notifications (docs/modules/notifications.md #9) -- read
+    # notifications older than this are purged by
+    # app/jobs/cleanup_old_read_notifications.py. Unread ones are never
+    # auto-deleted; important business history belongs in the audit
+    # trail, not here.
+    NOTIFICATION_RETENTION_DAYS: int = 90
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
