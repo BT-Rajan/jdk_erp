@@ -9,6 +9,8 @@ import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { ProductsPage } from '@/pages/ProductsPage'
+import { MachinesPage } from '@/pages/MachinesPage'
+import { ProductionLinesPage } from '@/pages/ProductionLinesPage'
 import { RawMaterialsPage } from '@/pages/RawMaterialsPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
 import { SuppliersPage } from '@/pages/SuppliersPage'
@@ -39,6 +41,8 @@ export function App() {
           <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/raw-materials" element={<RawMaterialsPage />} />
+          <Route path="/production-lines" element={<ProductionLinesPage />} />
+          <Route path="/machines" element={<MachinesPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

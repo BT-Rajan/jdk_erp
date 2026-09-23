@@ -31,7 +31,9 @@ from app.core.storage import default_storage
 from app.main import app
 from app.models.category import Category
 from app.models.organisation import Organisation
+from app.models.machine import Machine
 from app.models.product import Product
+from app.models.production_line import ProductionLine
 from app.models.raw_material import RawMaterial
 from app.models.supplier import Supplier
 from app.models.team import Team
@@ -220,6 +222,33 @@ def cement_raw_material(db_session, organisation, electronics_category, kilogram
     db_session.commit()
     db_session.refresh(material)
     return material
+
+
+@pytest.fixture()
+def line_1(db_session, organisation):
+    line = ProductionLine(organisation_id=organisation.id, code="LINE1", name="Production Line 1", is_active=True)
+    db_session.add(line)
+    db_session.commit()
+    db_session.refresh(line)
+    return line
+
+
+@pytest.fixture()
+def machine_1(db_session, organisation, line_1, kilogram_unit):
+    machine = Machine(
+        organisation_id=organisation.id,
+        code="M-001",
+        name="Machine 1",
+        production_line_id=line_1.id,
+        capacity_quantity=2,
+        capacity_unit_of_measure_id=kilogram_unit.id,
+        capacity_period_hours=1,
+        is_active=True,
+    )
+    db_session.add(machine)
+    db_session.commit()
+    db_session.refresh(machine)
+    return machine
 
 
 @pytest.fixture()

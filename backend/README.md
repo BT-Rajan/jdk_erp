@@ -910,6 +910,77 @@ in jdk_erp today.
   `SupplierMaterial`, 404 for a cross-organisation id, and audit events
   for every mutation on both `RawMaterial` and `SupplierMaterial`.
 
+### Master Data: Machines & Production Lines (`app/api/machines.py`, `app/api/production_lines.py`)
+
+Seventh entity of Phase 2 (`docs/modules/machines.md`) -- the
+authoritative configuration of JDK's physical production resource. JDK
+currently has exactly 1 machine, 1 production line, and a configured
+capacity of ~2 tonnes/hour, so the master itself is deliberately tiny;
+the one thing that had to be modeled properly is a real, structured,
+configurable production rate.
+
+Audited first (`docs/audit/MACHINES_AUDIT.md`): jdk_clean conflates
+Machine and Production Line into a single, hard-singleton-enforced
+`machines` table (its model docstring literally says the UI calls it
+"Production Line" while the schema keeps the name "machine") whose only
+capacity-shaped field is an *availability window*
+(`capacity_hours_per_day`), not a rate. The real per-unit throughput
+rate (`production_hours_per_unit`) lives entirely on jdk_clean's
+Product, not on Machine, and there is no Machine<->Product rate join
+table at all.
+
+- **Machine and ProductionLine are built as genuinely separate
+  entities**, unlike jdk_clean -- a deliberate departure per the user's
+  own explicit instruction to distinguish them "even if there is
+  currently only one." No singleton constraint is enforced either:
+  ordinary admin-gated CRUD already produces "exactly one" today without
+  a business rule that would need relaxing the moment a second line or
+  machine is added.
+- **Capacity is stored structurally as three columns on Machine**
+  (`capacity_quantity` / `capacity_unit_of_measure_id` /
+  `capacity_period_hours`), reusing jdk_erp's own existing UnitOfMeasure
+  master rather than a free-text unit string or jdk_clean's
+  availability-only scalar. Together these represent "quantity per
+  period hours" -- e.g. 2 tonnes per 1 hour -- reconfigurable by an
+  authorised user via a plain `PATCH` with no code change.
+- **No Machine<->Product rate relationship is built.** The audit found
+  jdk_clean's schema is *capable* of a per-product rate but found no
+  evidence JDK's actual business has different real rates for different
+  products -- only that the schema technically allows it. Per the user's
+  own explicit instruction (build that relationship only if proven
+  necessary; otherwise keep one configuration at the machine/line level)
+  and because jdk_erp's own Product model deliberately carries no rate
+  field at all, capacity is modeled once, at the Machine level. If real
+  per-product rate variance is ever proven, that relationship is added
+  then, against its own audit.
+- Same admin-gated CRUD shape as every other master (no ownership
+  dimension), not jdk_clean's own department-permission-matrix gate for
+  this module. `production_line_id` and `capacity_unit_of_measure_id`
+  are validated active-and-same-organisation on every write, the same
+  treatment already given to Product/RawMaterial's Category/UoM FKs --
+  as a direct query returning a uniform 422 for missing, inactive, *and*
+  cross-organisation references alike, never a 404 that would leak
+  whether a cross-org id exists.
+- **No production-time calculation engine, no Feasibility integration
+  code, and no historical capacity snapshotting are built** -- Feasibility
+  and Production Scheduling don't exist in jdk_erp yet. jdk_clean's own
+  formula (`required_hours = quantity * production_hours_per_unit`,
+  fractional hours used directly, never rounded to whole hours) and its
+  confirmed live-read-only design (no snapshotting anywhere) are both
+  documented in the module spec as binding targets for whenever those
+  modules are built, rather than implemented speculatively now.
+- `code` is caller-supplied and immutable on both Machine and
+  ProductionLine (no update path for it at all), the same treatment
+  already given to Product/RawMaterial's manually-assigned codes.
+- 37 new tests (`tests/test_production_lines.py`, `tests/test_machines.py`):
+  organisation isolation, code/name uniqueness, immutable code,
+  active-and-same-organisation validation for production line and
+  capacity unit (422 for missing/inactive/cross-organisation), strictly-
+  positive capacity validation, reconfiguring capacity without a code
+  change, admin-only create/edit/status-change (403 for non-admin), 404
+  for a cross-organisation id, and audit events for every mutation on
+  both `Machine` and `ProductionLine`.
+
 ## Setup
 
 ```bash

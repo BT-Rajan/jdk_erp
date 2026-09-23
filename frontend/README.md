@@ -415,6 +415,31 @@ across every module).
   resolved supplier names), adding a relationship, and removing one
   (with confirmation).
 
+- **Production Lines** (`src/pages/ProductionLinesPage.tsx`) and
+  **Machines** (`src/pages/MachinesPage.tsx`) -- the frontend for
+  `backend/app/api/production_lines.py`/`machines.py`
+  (`docs/modules/machines.md`/`docs/audit/MACHINES_AUDIT.md`), the
+  authoritative configuration of JDK's physical production resource (1
+  machine, 1 line, ~2 tonnes/hour today). Two genuinely separate flat
+  pages, matching the user's own instruction to distinguish the two
+  concepts even at this scale -- `ProductionLinesPage` is a plain
+  admin-gated list composed identically to `CategoriesPage` (Code field
+  visibly disabled on Edit, same treatment as `ProductsPage`'s
+  manually-assigned code). `MachinesPage` composes identically to
+  `ProductsPage`: a Production Line select dropdown plays the same role
+  Product's Category dropdown does, and a Capacity Unit dropdown reuses
+  `GET /api/units-of-measure`. Production capacity renders as three
+  separate fields (Production Capacity / Capacity Unit / Capacity
+  Period) -- never a single free-text string -- and the list column
+  formats them together (e.g. "2.0000 TON / hour") purely for display,
+  never as a second source of truth. 17 new tests
+  (`ProductionLinesPage.test.tsx`, `MachinesPage.test.tsx`): the same
+  coverage shape as `CategoriesPage.test.tsx`/`ProductsPage.test.tsx` --
+  load, lookup-name resolution, non-admin read-only view, error state,
+  empty-vs-no-match states, create (including a client-side
+  non-positive-capacity rejection), edit (code field disabled,
+  reconfiguring capacity without touching code), and deactivate.
+
 ## Setup
 
 ```bash
