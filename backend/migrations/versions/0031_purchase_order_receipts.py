@@ -93,7 +93,9 @@ def upgrade() -> None:
             sa.ForeignKey(
                 "purchase_order_receipts.id",
                 ondelete="CASCADE",
-                name="fk_purchase_order_receipt_lines_receipt_id_purchase_order_receipts",
+                # Shortened from fk_purchase_order_receipt_lines_receipt_id_purchase_order_receipts
+                # (66 chars) -- MySQL rejects any identifier over 64 characters.
+                name="fk_purchase_order_receipt_lines_receipt_id_po_receipts",
             ),
             nullable=False,
         ),
@@ -103,7 +105,10 @@ def upgrade() -> None:
             sa.ForeignKey(
                 "purchase_order_lines.id",
                 ondelete="RESTRICT",
-                name="fk_purchase_order_receipt_lines_purchase_order_line_id_purchase_order_lines",
+                # Shortened from
+                # fk_purchase_order_receipt_lines_purchase_order_line_id_purchase_order_lines
+                # (75 chars) -- MySQL rejects any identifier over 64 characters.
+                name="fk_po_receipt_lines_purchase_order_line_id_purchase_order_lines",
             ),
             nullable=False,
         ),

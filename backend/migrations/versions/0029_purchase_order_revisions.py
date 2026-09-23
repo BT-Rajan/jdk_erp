@@ -90,7 +90,9 @@ def upgrade() -> None:
             sa.ForeignKey(
                 "purchase_order_revisions.id",
                 ondelete="CASCADE",
-                name="fk_purchase_order_revision_lines_revision_id_purchase_order_revisions",
+                # Shortened from fk_purchase_order_revision_lines_revision_id_purchase_order_revisions
+                # (69 chars) -- MySQL rejects any identifier over 64 characters.
+                name="fk_purchase_order_revision_lines_revision_id_po_revisions",
             ),
             nullable=False,
         ),
