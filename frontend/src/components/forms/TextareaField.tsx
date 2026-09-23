@@ -9,16 +9,20 @@ export interface TextareaFieldProps extends TextareaHTMLAttributes<HTMLTextAreaE
   label: string
   error?: string
   hint?: string
+  /** Spans both grid columns by default -- a textarea cramped into a
+   * half-width column defeats the point of it being multi-line. Pass
+   * `false` to allow it to share a row when a form genuinely wants that. */
+  fullWidth?: boolean
 }
 
 export const TextareaField = forwardRef<HTMLTextAreaElement, TextareaFieldProps>(function TextareaField(
-  { label, error, hint, id, className, rows = 3, required, ...props },
+  { label, error, hint, id, className, rows = 3, required, fullWidth = true, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required} fullWidth={fullWidth}>
       <textarea
         ref={ref}
         id={fieldId}

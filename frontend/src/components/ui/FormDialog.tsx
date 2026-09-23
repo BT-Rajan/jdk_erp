@@ -49,7 +49,13 @@ export function FormDialog({
         />
       }
     >
-      <form id={formId} onSubmit={onSubmit} className="flex flex-col gap-4">
+      {/* Two columns on sm+ so a modal with several fields uses the
+       * uniform modal width well instead of stacking everything into one
+       * narrow strip; individual fields opt into spanning both columns
+       * via their `fullWidth` prop (see FieldShell) when a field -- a
+       * textarea, a file upload, an alert banner -- genuinely needs the
+       * full row. */}
+      <form id={formId} onSubmit={onSubmit} className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
         {children}
       </form>
     </Modal>

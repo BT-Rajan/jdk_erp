@@ -10,16 +10,17 @@ export interface DateFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
   hint?: string
   /** Renders a datetime-local input instead of a date-only input. */
   withTime?: boolean
+  fullWidth?: boolean
 }
 
 export const DateField = forwardRef<HTMLInputElement, DateFieldProps>(function DateField(
-  { label, error, hint, withTime = false, id, className, required, ...props },
+  { label, error, hint, withTime = false, id, className, required, fullWidth, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required} fullWidth={fullWidth}>
       <input
         ref={ref}
         id={fieldId}

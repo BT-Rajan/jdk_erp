@@ -8,6 +8,7 @@ export interface NumberFieldProps extends Omit<InputHTMLAttributes<HTMLInputElem
   label: string
   error?: string
   hint?: string
+  fullWidth?: boolean
 }
 
 /** Clamps into [min,max] on blur when both are set -- built into the
@@ -16,7 +17,7 @@ export interface NumberFieldProps extends Omit<InputHTMLAttributes<HTMLInputElem
  * applied it manually per call site rather than baking it into a
  * NumberField, since no such field existed). */
 export const NumberField = forwardRef<HTMLInputElement, NumberFieldProps>(function NumberField(
-  { label, error, hint, min, max, onBlur, id, className, required, ...props },
+  { label, error, hint, min, max, onBlur, id, className, required, fullWidth, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
@@ -35,7 +36,7 @@ export const NumberField = forwardRef<HTMLInputElement, NumberFieldProps>(functi
   }
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required} fullWidth={fullWidth}>
       <input
         ref={ref}
         id={fieldId}

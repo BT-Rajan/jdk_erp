@@ -26,7 +26,11 @@ const VARIANT_ICONS: Record<AlertVariant, typeof Info> = {
 
 /** Renders nothing when `children` is falsy, so callers can write
  * `<Alert variant="danger">{error}</Alert>` unconditionally instead of
- * `{error && <Alert>...}` at every call site. */
+ * `{error && <Alert>...}` at every call site. `sm:col-span-2` is a
+ * no-op outside a grid container and lets an Alert dropped straight
+ * into a two-column FormDialog (its most common use -- a form-level
+ * error banner) span the full row instead of squeezing into one
+ * column. */
 export function Alert({ variant = 'info', children, className }: AlertProps) {
   if (!children) return null
   const Icon = VARIANT_ICONS[variant]
@@ -34,7 +38,7 @@ export function Alert({ variant = 'info', children, className }: AlertProps) {
   return (
     <div
       role="alert"
-      className={cn('flex items-start gap-2 rounded-md border px-3 py-2 text-sm', VARIANT_CLASSES[variant], className)}
+      className={cn('flex items-start gap-2 rounded-md border px-3 py-2 text-sm sm:col-span-2', VARIANT_CLASSES[variant], className)}
     >
       <Icon size={18} className="mt-0.5 shrink-0" aria-hidden="true" />
       <span className="text-gold-100">{children}</span>
