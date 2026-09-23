@@ -4,14 +4,25 @@ from app.models.category import Category
 from app.models.customer import Customer
 from app.models.email_account import EmailAccount
 from app.models.file import FileRecord
+from app.models.inventory import RawMaterialInventory, StockMovement
 from app.models.job import Job
 from app.models.machine import Machine
 from app.models.notification import Notification
 from app.models.organisation import Organisation
 from app.models.product import Product
 from app.models.production_line import ProductionLine
+from app.models.purchase_order import (
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseOrderPayment,
+    PurchaseOrderReceipt,
+    PurchaseOrderReceiptLine,
+    PurchaseOrderRevision,
+    PurchaseOrderRevisionLine,
+)
 from app.models.raw_material import RawMaterial
 from app.models.refresh_token import RefreshToken
+from app.models.rfq import Rfq, RfqLine, RfqResponse
 from app.models.role_permission import RolePermission
 from app.models.supplier import Supplier
 from app.models.supplier_material import SupplierMaterial
@@ -47,4 +58,16 @@ __all__ = [
     "Warehouse",
     "Bom",
     "BomComponent",
+    "PurchaseOrder",
+    "PurchaseOrderLine",
+    "PurchaseOrderRevision",
+    "PurchaseOrderRevisionLine",
+    "PurchaseOrderPayment",
+    "PurchaseOrderReceipt",
+    "PurchaseOrderReceiptLine",
+    "StockMovement",
+    "RawMaterialInventory",
+    "Rfq",
+    "RfqLine",
+    "RfqResponse",
 ]

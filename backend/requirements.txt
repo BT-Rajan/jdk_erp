@@ -19,3 +19,9 @@ python-multipart>=0.0.12
 # rather than relying on it arriving transitively via
 # python-jose[cryptography] above.
 cryptography>=41
+# The one PDF-generation dependency in this codebase -- used only for
+# rendering the official Purchase Order document (docs/modules/purchase_orders.md
+# #17), a real, evidenced need (the task's own explicit A4/PDF/email
+# requirement), not speculative. A well-established, pure-Python library
+# with no system-level dependency (no wkhtmltopdf/headless-browser).
+reportlab>=4.0
