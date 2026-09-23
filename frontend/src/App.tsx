@@ -12,6 +12,7 @@ import { ProductsPage } from '@/pages/ProductsPage'
 import { MachinesPage } from '@/pages/MachinesPage'
 import { ProductionLinesPage } from '@/pages/ProductionLinesPage'
 import { RawMaterialsPage } from '@/pages/RawMaterialsPage'
+import { WarehousesPage } from '@/pages/WarehousesPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
 import { SuppliersPage } from '@/pages/SuppliersPage'
 import { UnitsOfMeasurePage } from '@/pages/UnitsOfMeasurePage'
@@ -43,6 +44,7 @@ export function App() {
           <Route path="/raw-materials" element={<RawMaterialsPage />} />
           <Route path="/production-lines" element={<ProductionLinesPage />} />
           <Route path="/machines" element={<MachinesPage />} />
+          <Route path="/warehouses" element={<WarehousesPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

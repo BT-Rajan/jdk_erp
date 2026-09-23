@@ -18,6 +18,7 @@ from app.api.production_lines import router as production_lines_router
 from app.api.products import router as products_router
 from app.api.raw_material_suppliers import router as raw_material_suppliers_router
 from app.api.raw_materials import router as raw_materials_router
+from app.api.warehouses import router as warehouses_router
 from app.api.suppliers import router as suppliers_router
 from app.api.teams import router as teams_router
 from app.api.units import router as units_router
@@ -76,6 +77,7 @@ app.include_router(products_router)
 app.include_router(raw_material_suppliers_router)
 app.include_router(raw_materials_router)
 app.include_router(suppliers_router)
+app.include_router(warehouses_router)
 app.include_router(teams_router)
 app.include_router(units_router)
 app.include_router(users_router)

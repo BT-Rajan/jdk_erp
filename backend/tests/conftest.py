@@ -36,6 +36,7 @@ from app.models.product import Product
 from app.models.production_line import ProductionLine
 from app.models.raw_material import RawMaterial
 from app.models.supplier import Supplier
+from app.models.warehouse import Warehouse
 from app.models.team import Team
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
@@ -249,6 +250,22 @@ def machine_1(db_session, organisation, line_1, kilogram_unit):
     db_session.commit()
     db_session.refresh(machine)
     return machine
+
+
+@pytest.fixture()
+def warehouse_1(db_session, organisation, kilogram_unit):
+    warehouse = Warehouse(
+        organisation_id=organisation.id,
+        code="WH-001",
+        name="Factory Warehouse",
+        total_usable_storage_area=5000,
+        storage_area_unit_of_measure_id=kilogram_unit.id,
+        is_active=True,
+    )
+    db_session.add(warehouse)
+    db_session.commit()
+    db_session.refresh(warehouse)
+    return warehouse
 
 
 @pytest.fixture()

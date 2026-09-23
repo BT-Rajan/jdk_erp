@@ -981,6 +981,60 @@ table at all.
   for a cross-organisation id, and audit events for every mutation on
   both `Machine` and `ProductionLine`.
 
+### Master Data: Warehouses (`app/api/warehouses.py`)
+
+Eighth entity of Phase 2 (`docs/modules/warehouses.md`) -- the
+authoritative physical storage location inside the JDK factory and its
+configured total storage capacity. JDK has exactly 1 warehouse; this is
+explicitly not a Warehouse Management System.
+
+Audited first (`docs/audit/WAREHOUSES_AUDIT.md`): jdk_clean has **no
+warehouse/location entity at all** -- "warehouse" there is only one row
+in its generic `departments` table, used purely to gate which users see
+warehouse-scoped dashboard notifications, never a data row with its own
+identity or capacity. Confirmed via exhaustive grep: no storage-area/
+capacity/footprint/volume concept exists anywhere in jdk_clean either,
+except one confirmed-dead free-text field
+(`raw_materials.storage_location`, explicitly commented as "not read by
+any business logic").
+
+- **A genuinely new master, not a jdk_clean refactor** -- there was
+  nothing to reuse or diverge from for the entity itself.
+- **Structured, configurable total capacity**: `total_usable_storage_area`
+  + `storage_area_unit_of_measure_id`, reusing jdk_erp's own existing
+  UnitOfMeasure master (validated active and same-organisation, the same
+  treatment Machine gives its own capacity unit) -- reconfigurable via a
+  plain `PATCH`, no code change, mirroring Machine's own capacity-
+  reconfiguration pattern exactly.
+- **No per-material/per-product storage-requirement field, and no
+  required/available-area calculation are built.** The audit found zero
+  evidence anywhere in jdk_clean of a real storage-area-per-unit
+  business rule, and even if one existed, the calculation is
+  uncomputable today regardless -- there is no Inventory/Stock Ledger in
+  this codebase yet to supply live stock quantities. Both are documented
+  in the module spec as deferred decisions for whenever Inventory is
+  built and the need can be evaluated against real usage.
+- **No warehouse-in/out, stock ledger, hierarchical locations
+  (zone/aisle/rack/bin), or geographic/logistics fields are built** --
+  none exist in jdk_clean either, and Procurement/Production/Sales/
+  Delivery all have zero prerequisite infrastructure in jdk_erp. Every
+  boundary (Warehouse never owns stock quantities/movements; a future
+  Inventory module is the sole authority) is documented as binding for
+  whenever those modules land.
+- Same admin-gated CRUD shape as every other master -- there's no
+  jdk_clean gate to diverge from here either, since "warehouse" in
+  jdk_clean is a permission label, not an entity with its own access
+  rule.
+- `code` is caller-supplied and immutable, the same treatment already
+  given to Product/RawMaterial/Machine's own stable identifiers.
+- 21 new tests (`tests/test_warehouses.py`): organisation isolation,
+  code/name uniqueness, immutable code, active-and-same-organisation
+  validation for the storage-area unit (422 for missing/inactive/
+  cross-organisation), strictly-positive area validation, reconfiguring
+  capacity without a code change, admin-only create/edit/status-change
+  (403 for non-admin), 404 for a cross-organisation id, and audit events
+  for every mutation.
+
 ## Setup
 
 ```bash

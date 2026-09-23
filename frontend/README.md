@@ -440,6 +440,22 @@ across every module).
   non-positive-capacity rejection), edit (code field disabled,
   reconfiguring capacity without touching code), and deactivate.
 
+- **Warehouses** (`src/pages/WarehousesPage.tsx`) -- the frontend for
+  `backend/app/api/warehouses.py`
+  (`docs/modules/warehouses.md`/`docs/audit/WAREHOUSES_AUDIT.md`), the
+  authoritative physical storage location inside the JDK factory (1
+  warehouse today). A configuration-level master, not an operational
+  dashboard -- composed identically to `MachinesPage`, with a single
+  Storage Area Unit dropdown (reusing `GET /api/units-of-measure`) in
+  place of Machine's three-part capacity. No stock/utilisation summaries
+  are shown -- Inventory doesn't exist yet to source them from. 9 new
+  tests (`WarehousesPage.test.tsx`): the same coverage shape as
+  `MachinesPage.test.tsx` -- load, capacity-unit resolution from the
+  lookup list, non-admin read-only view, error state, empty-vs-no-match
+  states, create (including a client-side non-positive-area rejection),
+  edit (code field disabled, reconfiguring capacity without touching
+  code), and deactivate.
+
 ## Setup
 
 ```bash
