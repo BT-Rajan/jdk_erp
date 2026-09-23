@@ -9,16 +9,17 @@ export interface SelectFieldProps extends SelectHTMLAttributes<HTMLSelectElement
   error?: string
   hint?: string
   children: ReactNode
+  fullWidth?: boolean
 }
 
 export const SelectField = forwardRef<HTMLSelectElement, SelectFieldProps>(function SelectField(
-  { label, error, hint, id, className, children, required, ...props },
+  { label, error, hint, id, className, children, required, fullWidth, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required} fullWidth={fullWidth}>
       <select
         ref={ref}
         id={fieldId}

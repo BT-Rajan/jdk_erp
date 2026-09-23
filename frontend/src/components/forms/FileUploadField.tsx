@@ -16,6 +16,9 @@ export interface FileUploadFieldProps {
   onChange: (files: File[]) => void
   id?: string
   disabled?: boolean
+  /** Defaults to spanning both grid columns -- the drag-and-drop target
+   * and selected-file list need more than half a modal's width. */
+  fullWidth?: boolean
 }
 
 /** One shared drag-and-drop/click-to-browse file picker with a
@@ -31,6 +34,7 @@ export function FileUploadField({
   onChange,
   id,
   disabled,
+  fullWidth = true,
 }: FileUploadFieldProps) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -52,7 +56,7 @@ export function FileUploadField({
   }
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} fullWidth={fullWidth}>
       <div
         role="button"
         tabIndex={disabled ? -1 : 0}

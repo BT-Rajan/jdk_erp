@@ -13,6 +13,7 @@ export interface RadioGroupFieldProps extends Omit<InputHTMLAttributes<HTMLInput
   options: RadioGroupOption[]
   error?: string
   hint?: string
+  fullWidth?: boolean
 }
 
 /** react-hook-form's `register(name)` returns one `ref` -- every radio
@@ -21,13 +22,13 @@ export interface RadioGroupFieldProps extends Omit<InputHTMLAttributes<HTMLInput
  * the checked value). Forwarding this component's ref to every `<input>`
  * below is intentional, not a bug. */
 export const RadioGroupField = forwardRef<HTMLInputElement, RadioGroupFieldProps>(function RadioGroupField(
-  { label, options, error, hint, name, id, className, required, ...props },
+  { label, options, error, hint, name, id, className, required, fullWidth, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={cn('flex flex-col gap-1.5', fullWidth && 'sm:col-span-2')}>
       <span
         id={fieldId}
         className={cn('text-sm font-medium text-gold-100', required && "after:ml-0.5 after:text-danger-500 after:content-['*']")}

@@ -13,9 +13,15 @@ export interface ModalProps {
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
-  /** 'default' (max-w-md) for a short confirmation/simple form, 'wide'
-   * (max-w-2xl) for a form with several fields, 'fullPage' for content
-   * that needs most of the viewport (a detail view, a big table). */
+  /** All popup modals ('default' and 'wide') share ONE uniform width
+   * (max-w-3xl) -- wide enough to lay form fields out two-per-row and
+   * to give a table or detail list room to breathe, whether the modal
+   * holds two fields or ten. 'wide' is kept only as a source-compatible
+   * alias so existing call sites don't need to change; it now resolves
+   * to the exact same class as 'default'. 'fullPage' remains the one
+   * deliberate exception -- it isn't a popup, it's a near-viewport
+   * surface for content that needs most of the screen (a detail view,
+   * a big table), so it keeps its own size. */
   size?: ModalSize
   /** Focus this instead of the first focusable element on open -- e.g. a
    * destructive dialog should default focus to Cancel, not whichever
@@ -23,9 +29,11 @@ export interface ModalProps {
   initialFocusRef?: RefObject<HTMLElement | null>
 }
 
+const UNIFORM_POPUP_WIDTH = 'max-w-3xl'
+
 const SIZE_CLASSES: Record<ModalSize, string> = {
-  default: 'max-w-md',
-  wide: 'max-w-2xl',
+  default: UNIFORM_POPUP_WIDTH,
+  wide: UNIFORM_POPUP_WIDTH,
   fullPage: 'h-[90vh] w-[95vw] max-w-6xl',
 }
 

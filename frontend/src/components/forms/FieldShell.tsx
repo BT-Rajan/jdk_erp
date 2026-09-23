@@ -21,6 +21,14 @@ export interface FieldShellProps {
    * prop is that one validation path -- native HTML5 validation is a
    * second, uncoordinated one this deliberately avoids triggering. */
   required?: boolean
+  /** Spans both columns of the two-column form grid (FormDialog) on
+   * sm+ instead of sharing a row with the next field. Fields that are
+   * naturally wide (textarea, file upload, multi-select, a from/to date
+   * pair, a radio group) default this to true themselves; any field can
+   * still be forced full-width from the call site when a page wants it
+   * to stand alone. No effect outside a grid container (a page that
+   * isn't inside FormDialog's grid). */
+  fullWidth?: boolean
   children: ReactNode
 }
 
@@ -28,9 +36,9 @@ export interface FieldShellProps {
  * implementation instead of each field re-declaring the same
  * label+message markup (jdk_clean's fields all followed this same
  * convention, but each one carried its own copy of the JSX). */
-export function FieldShell({ label, fieldId, hintId, errorId, hint, error, required, children }: FieldShellProps) {
+export function FieldShell({ label, fieldId, hintId, errorId, hint, error, required, fullWidth, children }: FieldShellProps) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={cn('flex flex-col gap-1.5', fullWidth && 'sm:col-span-2')}>
       <label
         htmlFor={fieldId}
         className={cn(

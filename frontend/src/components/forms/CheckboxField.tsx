@@ -7,16 +7,17 @@ export interface CheckboxFieldProps extends Omit<InputHTMLAttributes<HTMLInputEl
   label: string
   error?: string
   hint?: string
+  fullWidth?: boolean
 }
 
 export const CheckboxField = forwardRef<HTMLInputElement, CheckboxFieldProps>(function CheckboxField(
-  { label, error, hint, id, className, required, ...props },
+  { label, error, hint, id, className, required, fullWidth, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={cn('flex flex-col gap-1.5', fullWidth && 'sm:col-span-2')}>
       <label
         htmlFor={fieldId}
         className={cn(

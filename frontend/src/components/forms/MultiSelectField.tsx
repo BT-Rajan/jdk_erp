@@ -12,6 +12,9 @@ export interface MultiSelectFieldProps extends Omit<SelectHTMLAttributes<HTMLSel
   children: ReactNode
   /** Visible option rows before scrolling; default 4. */
   size?: number
+  /** Defaults to spanning both grid columns -- a multi-row select needs
+   * more than half a modal's width to stay legible. */
+  fullWidth?: boolean
 }
 
 /** A native multi-select, sized to show several rows -- correct
@@ -20,13 +23,13 @@ export interface MultiSelectFieldProps extends Omit<SelectHTMLAttributes<HTMLSel
  * reasonable future upgrade if the native control's look becomes a
  * problem, but isn't needed to satisfy the requirement today. */
 export const MultiSelectField = forwardRef<HTMLSelectElement, MultiSelectFieldProps>(function MultiSelectField(
-  { label, error, hint, id, className, children, size = 4, required, ...props },
+  { label, error, hint, id, className, children, size = 4, required, fullWidth = true, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required} fullWidth={fullWidth}>
       <select
         ref={ref}
         id={fieldId}

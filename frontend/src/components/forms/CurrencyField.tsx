@@ -11,6 +11,7 @@ export interface CurrencyFieldProps extends Omit<InputHTMLAttributes<HTMLInputEl
   error?: string
   hint?: string
   currency?: string
+  fullWidth?: boolean
 }
 
 /** A numeric input with a currency-symbol prefix and a decimal step
@@ -21,7 +22,7 @@ export interface CurrencyFieldProps extends Omit<InputHTMLAttributes<HTMLInputEl
  * currency formatting is the separate `Currency` component
  * (`components/ui/Currency.tsx`). */
 export const CurrencyField = forwardRef<HTMLInputElement, CurrencyFieldProps>(function CurrencyField(
-  { label, error, hint, currency = DEFAULT_CURRENCY, id, className, required, step, ...props },
+  { label, error, hint, currency = DEFAULT_CURRENCY, id, className, required, step, fullWidth, ...props },
   ref,
 ) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
@@ -36,7 +37,7 @@ export const CurrencyField = forwardRef<HTMLInputElement, CurrencyFieldProps>(fu
       .find((part) => part.type === 'currency')?.value ?? currency
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required} fullWidth={fullWidth}>
       <div className="relative flex items-center">
         <span className="pointer-events-none absolute left-3 text-sm text-gold-100/40">{symbol}</span>
         <input
