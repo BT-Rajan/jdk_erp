@@ -59,6 +59,23 @@ describe('SearchSelectField', () => {
     expect(screen.getByText('No matches')).toBeInTheDocument()
   })
 
+  it('closes the list and moves focus to the next field on Tab', async () => {
+    render(
+      <div>
+        <Fixture />
+        <button type="button">Next field</button>
+      </div>,
+    )
+    const input = screen.getByRole('combobox', { name: 'Customer' })
+    await userEvent.click(input)
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+
+    await userEvent.tab()
+
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next field' })).toHaveFocus()
+  })
+
   it('reverts the typed query back to the selected label on outside click without selecting', async () => {
     render(
       <div>

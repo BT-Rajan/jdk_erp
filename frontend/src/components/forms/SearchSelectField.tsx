@@ -118,6 +118,10 @@ export function SearchSelectField({
             setActiveIndex(0)
           }}
           onFocus={() => setOpen(true)}
+          onBlur={() => {
+            setOpen(false)
+            setQuery(selected?.label ?? '')
+          }}
           onKeyDown={handleKeyDown}
           className={inputClasses(!!error)}
         />
