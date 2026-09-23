@@ -6,6 +6,7 @@ import { ActionMenu, type ActionMenuOption } from '@/components/ui/ActionMenu'
 import { Alert } from '@/components/ui/Alert'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { FormDialog } from '@/components/ui/FormDialog'
@@ -39,6 +40,32 @@ interface PurchaseOrderRevisionLine {
   quantity: string
   unit_price: string
   line_total: string
+}
+
+interface PurchaseOrderReceiptLine {
+  id: number
+  purchase_order_line_id: number
+  raw_material_id: number
+  quantity: string
+}
+
+type PurchaseOrderReceiptStatus = 'draft' | 'posted' | 'cancelled' | 'reversed'
+
+interface PurchaseOrderReceipt {
+  id: number
+  receipt_number: string
+  purchase_order_id: number
+  warehouse_id: number
+  receipt_date: string
+  status: PurchaseOrderReceiptStatus
+  supplier_delivery_reference: string | null
+  notes: string | null
+  posted_at: string | null
+  reversed_at: string | null
+  reversal_reason: string | null
+  created_at: string
+  lines: PurchaseOrderReceiptLine[]
+  documents: PurchaseFile[]
 }
 
 interface PurchaseFile {
@@ -106,6 +133,7 @@ interface PurchaseOrder {
   revisions: PurchaseOrderRevision[]
   documents: PurchaseFile[]
   payments: PurchaseOrderPayment[]
+  receipts: PurchaseOrderReceipt[]
 }
 
 interface LookupOption {
@@ -141,6 +169,20 @@ const STATUS_TONES: Record<PurchaseOrderStatus, BadgeTone> = {
   partially_received: 'warning',
   fully_received: 'success',
   cancelled: 'danger',
+}
+
+const RECEIPT_STATUS_LABELS: Record<PurchaseOrderReceiptStatus, string> = {
+  draft: 'Draft',
+  posted: 'Posted',
+  cancelled: 'Cancelled',
+  reversed: 'Reversed',
+}
+
+const RECEIPT_STATUS_TONES: Record<PurchaseOrderReceiptStatus, BadgeTone> = {
+  draft: 'info',
+  posted: 'success',
+  cancelled: 'danger',
+  reversed: 'warning',
 }
 
 const DECIMAL_RE = /^\d+(\.\d+)?$/
@@ -215,6 +257,26 @@ const cancelPaymentSchema = z.object({
 })
 
 type CancelPaymentFormValues = z.infer<typeof cancelPaymentSchema>
+
+const createReceiptSchema = z.object({
+  receipt_date: z.string().min(1, 'Receipt date is required'),
+  supplier_delivery_reference: z.string(),
+  notes: z.string(),
+})
+
+type CreateReceiptFormValues = z.infer<typeof createReceiptSchema>
+
+const emptyCreateReceiptDefaults: CreateReceiptFormValues = {
+  receipt_date: new Date().toISOString().slice(0, 10),
+  supplier_delivery_reference: '',
+  notes: '',
+}
+
+const reverseReceiptSchema = z.object({
+  reason: z.string().min(1, 'A reason is required to reverse a goods receipt.'),
+})
+
+type ReverseReceiptFormValues = z.infer<typeof reverseReceiptSchema>
 
 async function fetchPurchaseOrders({
   page,
@@ -298,8 +360,20 @@ export function PurchaseOrdersPage() {
   const [cancelPaymentError, setCancelPaymentError] = useState<string | null>(null)
 
   const [receiveQuantities, setReceiveQuantities] = useState<Record<number, string>>({})
-  const [receiveBusy, setReceiveBusy] = useState(false)
-  const [receiveError, setReceiveError] = useState<string | null>(null)
+  const [createReceiptFiles, setCreateReceiptFiles] = useState<File[]>([])
+  const [createReceiptBusy, setCreateReceiptBusy] = useState(false)
+  const [createReceiptError, setCreateReceiptError] = useState<string | null>(null)
+
+  const [expandedReceipt, setExpandedReceipt] = useState<number | null>(null)
+  const [postReceiptBusy, setPostReceiptBusy] = useState(false)
+  const [postReceiptError, setPostReceiptError] = useState<string | null>(null)
+
+  const [cancelReceiptTarget, setCancelReceiptTarget] = useState<PurchaseOrderReceipt | null>(null)
+  const [cancelReceiptBusy, setCancelReceiptBusy] = useState(false)
+  const [cancelReceiptError, setCancelReceiptError] = useState<string | null>(null)
+
+  const [reverseReceiptTarget, setReverseReceiptTarget] = useState<PurchaseOrderReceipt | null>(null)
+  const [reverseReceiptError, setReverseReceiptError] = useState<string | null>(null)
 
   const {
     register,
@@ -318,6 +392,14 @@ export function PurchaseOrdersPage() {
   const paymentForm = useForm<PaymentFormValues>({ resolver: zodResolver(paymentSchema), defaultValues: emptyPaymentDefaults })
   const cancelPaymentForm = useForm<CancelPaymentFormValues>({
     resolver: zodResolver(cancelPaymentSchema),
+    defaultValues: { reason: '' },
+  })
+  const createReceiptForm = useForm<CreateReceiptFormValues>({
+    resolver: zodResolver(createReceiptSchema),
+    defaultValues: emptyCreateReceiptDefaults,
+  })
+  const reverseReceiptForm = useForm<ReverseReceiptFormValues>({
+    resolver: zodResolver(reverseReceiptSchema),
     defaultValues: { reason: '' },
   })
 
@@ -414,8 +496,12 @@ export function PurchaseOrdersPage() {
     setConfirmSupplierOpen(false)
     setPaymentFormOpen(false)
     setReceiveQuantities({})
-    setReceiveError(null)
+    setCreateReceiptFiles([])
+    setCreateReceiptError(null)
+    createReceiptForm.reset(emptyCreateReceiptDefaults)
     setExpandedRevision(null)
+    setExpandedReceipt(null)
+    setPostReceiptError(null)
   }
 
   function closeDetail() {
@@ -617,32 +703,103 @@ export function PurchaseOrdersPage() {
     [cancelPaymentTarget, detailTarget, refreshDetail],
   )
 
-  async function submitReceive() {
-    if (!detailTarget) return
-    const lines = Object.entries(receiveQuantities)
-      .filter(([, qty]) => qty && Number(qty) > 0)
-      .map(([lineId, qty]) => ({ purchase_order_line_id: Number(lineId), quantity: qty }))
-    if (lines.length === 0) {
-      setReceiveError('Enter a quantity for at least one line.')
-      return
-    }
-    setReceiveBusy(true)
-    setReceiveError(null)
-    try {
-      await apiClient.post(`/api/purchase-orders/${detailTarget.id}/receive`, { lines })
-      await refreshDetail(detailTarget.id)
-    } catch (err) {
-      setReceiveError(err instanceof ApiError ? err.message : 'Failed to receive materials.')
-    } finally {
-      setReceiveBusy(false)
-    }
-  }
+  const onCreateReceiptSubmit = useCallback(
+    async (values: CreateReceiptFormValues) => {
+      if (!detailTarget) return
+      const lines = Object.entries(receiveQuantities)
+        .filter(([, qty]) => qty && Number(qty) > 0)
+        .map(([lineId, qty]) => ({ purchase_order_line_id: Number(lineId), quantity: qty }))
+      if (lines.length === 0) {
+        setCreateReceiptError('Enter a quantity for at least one line.')
+        return
+      }
+      setCreateReceiptBusy(true)
+      setCreateReceiptError(null)
+      try {
+        const fileIds: number[] = []
+        for (const file of createReceiptFiles) {
+          const form = new FormData()
+          form.append('upload', file)
+          const { data } = await apiClient.post<{ id: number }>('/api/files', form)
+          fileIds.push(data.id)
+        }
+        await apiClient.post(`/api/purchase-orders/${detailTarget.id}/receipts`, {
+          receipt_date: values.receipt_date,
+          supplier_delivery_reference: values.supplier_delivery_reference || null,
+          notes: values.notes || null,
+          lines,
+          file_ids: fileIds,
+        })
+        setReceiveQuantities({})
+        setCreateReceiptFiles([])
+        createReceiptForm.reset(emptyCreateReceiptDefaults)
+        await refreshDetail(detailTarget.id)
+      } catch (err) {
+        setCreateReceiptError(err instanceof ApiError ? err.message : 'Failed to create goods receipt.')
+      } finally {
+        setCreateReceiptBusy(false)
+      }
+    },
+    [createReceiptFiles, createReceiptForm, detailTarget, receiveQuantities, refreshDetail],
+  )
 
   function defaultReceiveQuantity(line: PurchaseOrderLine): string {
     if (receiveQuantities[line.id] !== undefined) return receiveQuantities[line.id]
     const remaining = lineRemaining(line)
     return remaining > 0 ? String(remaining) : ''
   }
+
+  async function postReceipt(receipt: PurchaseOrderReceipt) {
+    if (!detailTarget) return
+    setPostReceiptBusy(true)
+    setPostReceiptError(null)
+    try {
+      await apiClient.post(`/api/purchase-orders/${detailTarget.id}/receipts/${receipt.id}/post`)
+      await refreshDetail(detailTarget.id)
+    } catch (err) {
+      setPostReceiptError(err instanceof ApiError ? err.message : 'Failed to post goods receipt.')
+    } finally {
+      setPostReceiptBusy(false)
+    }
+  }
+
+  async function confirmCancelReceipt() {
+    if (!detailTarget || !cancelReceiptTarget) return
+    setCancelReceiptBusy(true)
+    setCancelReceiptError(null)
+    try {
+      await apiClient.post(`/api/purchase-orders/${detailTarget.id}/receipts/${cancelReceiptTarget.id}/cancel`)
+      setCancelReceiptTarget(null)
+      await refreshDetail(detailTarget.id)
+    } catch (err) {
+      setCancelReceiptError(err instanceof ApiError ? err.message : 'Failed to cancel goods receipt.')
+    } finally {
+      setCancelReceiptBusy(false)
+    }
+  }
+
+  function openReverseReceipt(receipt: PurchaseOrderReceipt) {
+    setReverseReceiptTarget(receipt)
+    reverseReceiptForm.reset({ reason: '' })
+    setReverseReceiptError(null)
+  }
+
+  const onReverseReceiptSubmit = useCallback(
+    async (values: ReverseReceiptFormValues) => {
+      if (!detailTarget || !reverseReceiptTarget) return
+      setReverseReceiptError(null)
+      try {
+        await apiClient.post(`/api/purchase-orders/${detailTarget.id}/receipts/${reverseReceiptTarget.id}/reverse`, {
+          reason: values.reason,
+        })
+        setReverseReceiptTarget(null)
+        await refreshDetail(detailTarget.id)
+      } catch (err) {
+        setReverseReceiptError(err instanceof ApiError ? err.message : 'Failed to reverse goods receipt.')
+      }
+    },
+    [detailTarget, refreshDetail, reverseReceiptTarget],
+  )
 
   async function downloadFile(file: PurchaseFile) {
     try {
@@ -784,9 +941,6 @@ export function PurchaseOrdersPage() {
                 <Button variant="secondary" onClick={reopenForRevision}>Create Revision</Button>
               </>
             )}
-            {canManage && canReceive && (
-              <Button onClick={submitReceive} isLoading={receiveBusy}>Receive</Button>
-            )}
             {canManage && canCancelStatus && (
               <Button variant="danger" onClick={() => detailTarget && openCancel(detailTarget)}>Cancel...</Button>
             )}
@@ -797,7 +951,6 @@ export function PurchaseOrdersPage() {
         {detailTarget && (
           <div className="flex flex-col gap-6">
             <Alert variant="danger">{detailError}</Alert>
-            <Alert variant="danger">{receiveError}</Alert>
 
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
               <div><span className="text-gold-100/50">Supplier: </span>{suppliersById.get(detailTarget.supplier_id)?.name ?? `#${detailTarget.supplier_id}`}</div>
@@ -911,7 +1064,132 @@ export function PurchaseOrdersPage() {
                   </div>
                 </form>
               )}
+
+              {canManage && canReceive && (
+                <form onSubmit={createReceiptForm.handleSubmit(onCreateReceiptSubmit)} className="mt-4 flex flex-col gap-4 rounded-md border border-ink-700 p-4">
+                  <h4 className="text-xs uppercase tracking-wide text-gold-100/50">New Goods Receipt</h4>
+                  <Alert variant="danger">{createReceiptError}</Alert>
+                  <p className="text-sm text-gold-100/70">
+                    Enter what actually arrived in the "Receive Now" column above, then create the receipt as a
+                    draft here -- it has no effect on stock until it's posted below.
+                  </p>
+                  <DateField
+                    label="Receipt Date"
+                    required
+                    {...createReceiptForm.register('receipt_date')}
+                    error={createReceiptForm.formState.errors.receipt_date?.message}
+                  />
+                  <TextField
+                    label="Supplier Delivery Reference"
+                    hint="Optional -- the supplier's own delivery note / DN number, if available."
+                    {...createReceiptForm.register('supplier_delivery_reference')}
+                  />
+                  <FileUploadField
+                    label="Evidence (delivery note, packing slip, photo, etc.)"
+                    multiple
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    value={createReceiptFiles}
+                    onChange={setCreateReceiptFiles}
+                  />
+                  <TextareaField label="Notes" {...createReceiptForm.register('notes')} />
+                  <div>
+                    <Button type="submit" isLoading={createReceiptBusy}>Create Receipt</Button>
+                  </div>
+                </form>
+              )}
             </div>
+
+            {/* Goods Receipts */}
+            {detailTarget.receipts.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Goods Receipts</h3>
+                <Alert variant="danger">{postReceiptError}</Alert>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
+                      <th className="py-2 pr-3">Receipt No.</th>
+                      <th className="py-2 pr-3">Date</th>
+                      <th className="py-2 pr-3">Delivery Ref.</th>
+                      <th className="py-2 pr-3">Status</th>
+                      <th className="py-2 pr-3">Documents</th>
+                      <th className="py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailTarget.receipts.map((receipt) => (
+                      <>
+                        <tr key={receipt.id} className="border-t border-ink-700 align-top">
+                          <td className="py-2 pr-3">{receipt.receipt_number}</td>
+                          <td className="py-2 pr-3">{receipt.receipt_date}</td>
+                          <td className="py-2 pr-3">{receipt.supplier_delivery_reference ?? '—'}</td>
+                          <td className="py-2 pr-3">
+                            <Badge tone={RECEIPT_STATUS_TONES[receipt.status]}>{RECEIPT_STATUS_LABELS[receipt.status]}</Badge>
+                            {receipt.status === 'reversed' && receipt.reversal_reason && (
+                              <div className="mt-1 text-xs text-gold-100/50">{receipt.reversal_reason}</div>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3">
+                            <div className="flex flex-wrap gap-1">
+                              {receipt.documents.map((file) => (
+                                <button
+                                  key={file.id}
+                                  type="button"
+                                  onClick={() => downloadFile(file)}
+                                  className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400"
+                                >
+                                  {file.original_filename}
+                                </button>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-2 text-right">
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="secondary"
+                                onClick={() => setExpandedReceipt(expandedReceipt === receipt.id ? null : receipt.id)}
+                              >
+                                {expandedReceipt === receipt.id ? 'Hide Lines' : 'View Lines'}
+                              </Button>
+                              {canManage && receipt.status === 'draft' && (
+                                <>
+                                  <Button isLoading={postReceiptBusy} onClick={() => postReceipt(receipt)}>Post</Button>
+                                  <Button variant="secondary" onClick={() => setCancelReceiptTarget(receipt)}>Cancel</Button>
+                                </>
+                              )}
+                              {canManage && receipt.status === 'posted' && (
+                                <Button variant="danger" onClick={() => openReverseReceipt(receipt)}>Reverse...</Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {expandedReceipt === receipt.id && (
+                          <tr key={`${receipt.id}-lines`} className="border-t border-ink-700 bg-ink-900/40">
+                            <td colSpan={6} className="py-2 pr-3">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="text-left uppercase tracking-wide text-gold-100/40">
+                                    <th className="py-1 pr-3">Raw Material</th>
+                                    <th className="py-1 pr-3">Quantity</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {receipt.lines.map((line) => (
+                                    <tr key={line.id}>
+                                      <td className="py-1 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
+                                      <td className="py-1 pr-3">{line.quantity}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Payments */}
             {detailTarget.status !== 'draft' && (
@@ -1125,6 +1403,54 @@ export function PurchaseOrdersPage() {
             {cancelPaymentTarget && `${cancelPaymentTarget.payment_number} — ${cancelPaymentTarget.amount} stays visible in history; only its status changes.`}
           </p>
           <TextareaField label="Reason" required {...cancelPaymentForm.register('reason')} error={cancelPaymentForm.formState.errors.reason?.message} />
+        </form>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!cancelReceiptTarget}
+        title="Cancel Goods Receipt"
+        message={
+          cancelReceiptError ??
+          (cancelReceiptTarget
+            ? `${cancelReceiptTarget.receipt_number} will be discarded -- it never had any effect on stock.`
+            : '')
+        }
+        confirmLabel="Cancel Receipt"
+        danger
+        busy={cancelReceiptBusy}
+        onConfirm={confirmCancelReceipt}
+        onCancel={() => setCancelReceiptTarget(null)}
+      />
+
+      <Modal
+        open={!!reverseReceiptTarget}
+        title="Reverse Goods Receipt"
+        onClose={() => setReverseReceiptTarget(null)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setReverseReceiptTarget(null)}>Keep Receipt</Button>
+            <Button
+              variant="danger"
+              onClick={reverseReceiptForm.handleSubmit(onReverseReceiptSubmit)}
+              isLoading={reverseReceiptForm.formState.isSubmitting}
+            >
+              Reverse Receipt
+            </Button>
+          </>
+        }
+      >
+        <form className="flex flex-col gap-4">
+          <Alert variant="danger">{reverseReceiptError}</Alert>
+          <p className="text-sm text-gold-100/70">
+            {reverseReceiptTarget &&
+              `${reverseReceiptTarget.receipt_number} stays visible in history with its original quantities; this creates an offsetting stock movement and reduces the purchase order's received quantity. To correct the amount, reverse then create a new receipt.`}
+          </p>
+          <TextareaField
+            label="Reason"
+            required
+            {...reverseReceiptForm.register('reason')}
+            error={reverseReceiptForm.formState.errors.reason?.message}
+          />
         </form>
       </Modal>
 
