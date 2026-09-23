@@ -394,6 +394,27 @@ across every module).
   server-side code-conflict surfacing as a form error), edit (code field
   disabled and excluded from the PATCH payload), and deactivate.
 
+- **Raw Materials** (`src/pages/RawMaterialsPage.tsx`) -- the frontend
+  for `backend/app/api/raw_materials.py`/`raw_material_suppliers.py`
+  (`docs/modules/raw_materials.md`/`docs/audit/RAW_MATERIALS_AUDIT.md`).
+  The material master itself is composed identically to `ProductsPage`
+  (Category/UoM select dropdowns, a visibly disabled Code field on Edit)
+  -- the one addition is a **Manage Suppliers** row action opening a
+  `Modal` (not `FormDialog`, since it holds a list plus a separate
+  add/edit form rather than one single form -- nesting a `<form>` inside
+  `FormDialog`'s own `<form>` would be invalid HTML) that lists, adds,
+  edits, and removes that material's `SupplierMaterial` relationships
+  inline: supplier (resolved by name from `GET /api/suppliers`),
+  supplier's own material code, purchase price, lead time, MOQ, max
+  supply quantity, and a Preferred toggle. This is the one place this
+  module needed more than a flat form, matching the user's own framing
+  that the relational depth belongs on the relationship, not the master.
+  14 new tests (`RawMaterialsPage.test.tsx`): the same coverage shape as
+  `ProductsPage.test.tsx` for the master record itself, plus opening the
+  Manage Suppliers dialog (empty state and a populated list with
+  resolved supplier names), adding a relationship, and removing one
+  (with confirmation).
+
 ## Setup
 
 ```bash

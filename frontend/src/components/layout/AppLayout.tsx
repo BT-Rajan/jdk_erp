@@ -32,6 +32,7 @@ const NAV_ENTRIES: NavEntry[] = [
       { label: 'Customers', to: '/customers' },
       { label: 'Suppliers', to: '/suppliers' },
       { label: 'Products', to: '/products' },
+      { label: 'Raw Materials', to: '/raw-materials' },
     ],
   },
 ]

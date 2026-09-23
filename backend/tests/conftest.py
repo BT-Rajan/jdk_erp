@@ -32,6 +32,7 @@ from app.main import app
 from app.models.category import Category
 from app.models.organisation import Organisation
 from app.models.product import Product
+from app.models.raw_material import RawMaterial
 from app.models.supplier import Supplier
 from app.models.team import Team
 from app.models.unit import UnitOfMeasure
@@ -203,6 +204,22 @@ def widget_product(db_session, organisation, electronics_category, kilogram_unit
     db_session.commit()
     db_session.refresh(product)
     return product
+
+
+@pytest.fixture()
+def cement_raw_material(db_session, organisation, electronics_category, kilogram_unit):
+    material = RawMaterial(
+        organisation_id=organisation.id,
+        code="RM001",
+        name="Cement",
+        category_id=electronics_category.id,
+        unit_of_measure_id=kilogram_unit.id,
+        is_active=True,
+    )
+    db_session.add(material)
+    db_session.commit()
+    db_session.refresh(material)
+    return material
 
 
 @pytest.fixture()

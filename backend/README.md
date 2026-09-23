@@ -836,6 +836,80 @@ row so a later Product change can never rewrite history).
   always reflects Product's live price -- the obligation for whichever
   Quotation/Order module is built next to snapshot price itself.
 
+### Master Data: Raw Materials (`app/api/raw_materials.py`, `app/api/raw_material_suppliers.py`)
+
+Sixth entity of Phase 2 (`docs/modules/raw_materials.md`) -- the
+authoritative material identity bridging Supplier -> Purchase Order ->
+Receipt -> Inventory on one side, and BOM -> Production on the other.
+Unlike every prior master, the user asked for this one to be "as
+detailed as Product, but with the detail concentrated on relationships
+rather than generic ERP fields" -- Raw Material itself stays as lean as
+Category/Unit/Supplier (~5 materials expected); the depth goes entirely
+into a new `SupplierMaterial` join table.
+
+Audited first (`docs/audit/RAW_MATERIALS_AUDIT.md`): jdk_clean has a
+real, disciplined ~15-field Raw Material and a well-designed (if
+under-consumed) `supplier_materials` relationship table, but Purchase
+UoM/conversion, BOM, Purchase Order, Receipt, and Inventory are either
+absent from jdk_clean entirely or have zero prerequisite infrastructure
+in jdk_erp today.
+
+- **`RawMaterial` mirrors `Product`'s shape exactly**: caller-supplied
+  immutable `code` (same audited jdk_clean behaviour), required active-
+  and-same-organisation Category/UnitOfMeasure FKs, one reference-cost
+  field (kept, unlike Product's -- jdk_clean's `unit_cost` is genuinely
+  consumed as a PO-pricing default and inventory-valuation input, unlike
+  Product's absent equivalent). Same admin-gated CRUD shape as Category/
+  Unit/Supplier/Product, not jdk_clean's own department-permission-matrix
+  gate for this module.
+- **`SupplierMaterial` is the one relationship built with real depth**:
+  a new join table (`supplier_id`, `raw_material_id`, CASCADE both ways,
+  no `organisation_id` of its own -- shaped like this codebase's own
+  `UserTeam`, a join between two already org-scoped entities) carrying
+  `supplier_material_code` (the supplier's own SKU, distinct from the
+  material's own code), `purchase_price` (a reference/default value,
+  never live-read into a transaction -- there being no PO module yet to
+  read it), `lead_time_days`, `moq`, `max_supply_quantity`, and
+  `is_preferred` (at most one per material, enforced service-side only
+  via silent unset, matching jdk_clean's own real, deliberate
+  `_enforce_single_preferred` behaviour exactly -- no DB constraint, no
+  rejected write). A material may have zero, one, or many suppliers, no
+  minimum enforced, matching jdk_clean's confirmed real behaviour.
+- **Deliberately not reproduced from jdk_clean's `supplier_materials`**:
+  `currency` (this codebase's `Organisation.currency` already covers
+  it), `onboarded_at`/`last_transaction_at` (both are only ever written
+  by an actual PO receipt event in jdk_clean -- dead columns without that
+  module), and the separate pause-vs-sever (`status` vs `deleted_at`)
+  distinction (a plain `is_active` covers pausing; severing is a real,
+  hard `DELETE` -- nothing yet needs to distinguish "paused" from
+  "severed but historically referenced," since no transaction table
+  exists yet to reference a severed relationship).
+- Nested API surface: `GET/POST /api/raw-materials/{id}/suppliers`,
+  `PATCH/DELETE /api/raw-materials/{id}/suppliers/{link_id}` -- open read,
+  admin-gated mutations, same gate as the Raw Material record itself.
+  `supplier_id` is validated active-and-same-organisation on add, same
+  treatment as Product's category/unit validation.
+- **Purchase UoM/conversion factor is not built** -- jdk_clean has no
+  such concept anywhere despite live procurement (a confirmed gap, not
+  prior art), and the spec explicitly warns against building a
+  conversion engine speculatively. If ever needed, it belongs on
+  `SupplierMaterial` (per-relationship), not on `RawMaterial`.
+- **BOM, Purchase Order, Receipt, and Inventory are all deferred in
+  full** -- confirmed zero prerequisite infrastructure in jdk_erp today;
+  each boundary rule (no stock quantity on RawMaterial, PO/receipt lines
+  must snapshot price and never live-read RawMaterial/SupplierMaterial,
+  deactivating a material must never silently touch a BOM) is documented
+  in the module spec as binding for whenever those modules are built.
+- 41 new tests (`tests/test_raw_materials.py`, `tests/test_raw_material_suppliers.py`):
+  organisation isolation, code/name uniqueness, immutable code,
+  active-and-same-organisation validation for category/unit/supplier,
+  add/list/edit/remove a supplier relationship, duplicate
+  (supplier, material) pair rejection (409), single-preferred-supplier
+  enforcement on both add and update, zero-suppliers-is-a-valid-state,
+  admin-only mutations (403 for non-admin) including on
+  `SupplierMaterial`, 404 for a cross-organisation id, and audit events
+  for every mutation on both `RawMaterial` and `SupplierMaterial`.
+
 ## Setup
 
 ```bash

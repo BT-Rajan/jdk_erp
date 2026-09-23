@@ -14,6 +14,8 @@ from app.api.notifications import router as notifications_router
 from app.api.organisations import router as organisations_router
 from app.api.permissions import router as permissions_router
 from app.api.products import router as products_router
+from app.api.raw_material_suppliers import router as raw_material_suppliers_router
+from app.api.raw_materials import router as raw_materials_router
 from app.api.suppliers import router as suppliers_router
 from app.api.teams import router as teams_router
 from app.api.units import router as units_router
@@ -67,6 +69,8 @@ app.include_router(notifications_router)
 app.include_router(organisations_router)
 app.include_router(permissions_router)
 app.include_router(products_router)
+app.include_router(raw_material_suppliers_router)
+app.include_router(raw_materials_router)
 app.include_router(suppliers_router)
 app.include_router(teams_router)
 app.include_router(units_router)
