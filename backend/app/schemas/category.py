@@ -7,17 +7,18 @@ class CategoryOut(BaseModel):
     id: int
     organisation_id: int
     name: str
-    code: str | None
+    code: str
     description: str | None
     is_active: bool
 
 
 class CategoryCreateRequest(BaseModel):
-    """organisation_id is never part of this payload -- the endpoint
-    always takes it from the authenticated admin (docs/modules/organisation.md #3)."""
+    """organisation_id and code are never part of this payload -- the
+    endpoint always takes organisation from the authenticated admin
+    (docs/modules/organisation.md #3) and generates code server-side
+    (docs/modules/categories.md #4), same as every other Phase 2 master."""
 
     name: str
-    code: str | None = None
     description: str | None = None
 
     @field_validator("name")
@@ -28,23 +29,14 @@ class CategoryCreateRequest(BaseModel):
             raise ValueError("Name is required.")
         return value
 
-    @field_validator("code")
-    @classmethod
-    def _check_code(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        return value.strip() or None
-
 
 class CategoryUpdateRequest(BaseModel):
-    """Partial update, same shape as OrganisationUpdateRequest -- every
-    field optional so a caller sends only what changed. is_active has
-    its own endpoint/audit action below (CategoryStatusChangeRequest),
-    since deactivating is a more consequential change than editing
-    name/code/description."""
+    """Partial update. `code` is immutable -- absent here, same as every
+    other master. is_active has its own endpoint/audit action below
+    (CategoryStatusChangeRequest), since deactivating is a more
+    consequential change than editing name/description."""
 
     name: str | None = None
-    code: str | None = None
     description: str | None = None
 
     @field_validator("name")
@@ -56,13 +48,6 @@ class CategoryUpdateRequest(BaseModel):
         if not value:
             raise ValueError("Name is required.")
         return value
-
-    @field_validator("code")
-    @classmethod
-    def _check_code(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        return value.strip() or None
 
 
 class CategoryStatusChangeRequest(BaseModel):

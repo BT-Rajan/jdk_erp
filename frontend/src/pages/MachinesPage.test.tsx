@@ -111,14 +111,14 @@ describe('MachinesPage', () => {
     await waitFor(() => expect(screen.getByText('No matching machines')).toBeInTheDocument())
   })
 
-  it('creating a machine posts the payload including code, production line and structured capacity', async () => {
-    postMock.mockResolvedValue({ data: makeMachine({ id: 2, name: 'Machine 2', code: 'M-002' }) })
+  it('creating a machine posts the payload including production line and structured capacity, with no code field', async () => {
+    postMock.mockResolvedValue({ data: makeMachine({ id: 2, name: 'Machine 2', code: '000021' }) })
     render(<MachinesPage />)
     await screen.findByText('Machine 1')
     getMock.mockClear()
 
     await userEvent.click(screen.getByRole('button', { name: 'New Machine' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'M-002')
+    expect(screen.queryByLabelText('Code')).not.toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Name'), 'Machine 2')
     await userEvent.selectOptions(screen.getByLabelText('Production Line'), '10')
     await userEvent.type(screen.getByLabelText('Production Capacity'), '2')
@@ -129,7 +129,6 @@ describe('MachinesPage', () => {
       expect(postMock).toHaveBeenCalledWith(
         '/api/machines',
         expect.objectContaining({
-          code: 'M-002',
           name: 'Machine 2',
           production_line_id: 10,
           capacity_quantity: '2',
@@ -145,7 +144,6 @@ describe('MachinesPage', () => {
     await screen.findByText('Machine 1')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Machine' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'M-002')
     await userEvent.type(screen.getByLabelText('Name'), 'Machine 2')
     await userEvent.selectOptions(screen.getByLabelText('Production Line'), '10')
     await userEvent.clear(screen.getByLabelText('Production Capacity'))

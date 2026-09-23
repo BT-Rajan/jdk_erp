@@ -36,6 +36,7 @@ const NAV_ENTRIES: NavEntry[] = [
       { label: 'Production Lines', to: '/production-lines' },
       { label: 'Machines', to: '/machines' },
       { label: 'Warehouses', to: '/warehouses' },
+      { label: 'Bills of Materials', to: '/boms' },
     ],
   },
 ]

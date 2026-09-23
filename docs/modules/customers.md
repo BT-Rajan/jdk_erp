@@ -97,8 +97,11 @@ the audit for why jdk_clean's onboarding-approval workflow isn't ported).
 ## 6. Duplicate and uniqueness control
 
 - `code`: DB-unique per organisation, server-generated
-  (`app/core/id_formats.py`'s `CUSTOMER_ID`, `CUS` + 5 digits), never
-  client-supplied.
+  (`app/core/id_formats.py`'s `CUSTOMER_ID`, prefix `3` + a 5-digit
+  per-organisation sequence — updated from an earlier `CUS` + 4-digit
+  letter-prefixed shape to the fixed 6-digit, all-numeric,
+  per-organisation-digit-prefixed shape every Phase 2 master now shares,
+  per explicit user instruction), never client-supplied.
 - `phone`: DB-unique per organisation when provided, normalized to
   digits-only at write time (fixing jdk_clean's O(n) re-scan-on-every-write
   defect — see the audit).

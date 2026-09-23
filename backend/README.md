@@ -801,11 +801,12 @@ future Feasibility/Quotation/Order module turns it into an actual
 commitment, snapshotting whatever value it used onto its own transaction
 row so a later Product change can never rewrite history).
 
-- **`code` is caller-supplied and immutable, unlike Customer/Supplier**:
-  jdk_clean's real Product code is manually assigned and has no update
-  path at all (`ProductUpdate` simply omits the field) -- preserved
-  exactly here per the spec's "do not silently change established
-  business behavior." `ProductUpdateRequest` has no `code` field.
+- **`code` is system-generated and immutable, same mechanism as
+  Customer/Supplier**: `app/core/id_formats.PRODUCT_CODE` (prefix `2` +
+  a 5-digit per-organisation sequence) -- per explicit user instruction
+  that every Phase 2 master's code be auto-assigned, superseding the
+  original decision to preserve jdk_clean's manually-assigned code.
+  `ProductUpdateRequest` has no `code` field either way.
 - **First real FK relationship between two master-data tables**:
   `category_id`/`unit_of_measure_id` are required FKs to the existing
   Category/UnitOfMeasure masters, validated on every create/update to be
@@ -854,8 +855,9 @@ UoM/conversion, BOM, Purchase Order, Receipt, and Inventory are either
 absent from jdk_clean entirely or have zero prerequisite infrastructure
 in jdk_erp today.
 
-- **`RawMaterial` mirrors `Product`'s shape exactly**: caller-supplied
-  immutable `code` (same audited jdk_clean behaviour), required active-
+- **`RawMaterial` mirrors `Product`'s shape exactly**: system-generated
+  immutable `code` (`app/core/id_formats.RAW_MATERIAL_CODE`: prefix `1`
+  + a 5-digit per-organisation sequence), required active-
   and-same-organisation Category/UnitOfMeasure FKs, one reference-cost
   field (kept, unlike Product's -- jdk_clean's `unit_cost` is genuinely
   consumed as a PO-pricing default and inventory-valuation input, unlike
@@ -969,9 +971,13 @@ table at all.
   confirmed live-read-only design (no snapshotting anywhere) are both
   documented in the module spec as binding targets for whenever those
   modules are built, rather than implemented speculatively now.
-- `code` is caller-supplied and immutable on both Machine and
-  ProductionLine (no update path for it at all), the same treatment
-  already given to Product/RawMaterial's manually-assigned codes.
+- `code` is system-generated and immutable on both Machine and
+  ProductionLine (no update path for it at all) --
+  `app/core/id_formats.PRODUCTION_LINE_CODE`/`MACHINE_CODE` share a
+  distinct `0000`-prefixed shape from the digit-per-entity masters
+  (`"00001"`/`"00002"` + one free digit), capping each at 9 records --
+  a real, intentional limit for these small, effectively-fixed-size
+  masters, surfaced as a 400 if ever hit.
 - 37 new tests (`tests/test_production_lines.py`, `tests/test_machines.py`):
   organisation isolation, code/name uniqueness, immutable code,
   active-and-same-organisation validation for production line and
@@ -1025,8 +1031,10 @@ any business logic").
   jdk_clean gate to diverge from here either, since "warehouse" in
   jdk_clean is a permission label, not an entity with its own access
   rule.
-- `code` is caller-supplied and immutable, the same treatment already
-  given to Product/RawMaterial/Machine's own stable identifiers.
+- `code` is system-generated and immutable --
+  `app/core/id_formats.WAREHOUSE_CODE` (`"00003"` + one free digit,
+  capping at 9 records, the same `0000`-prefixed shape as
+  ProductionLine/Machine).
 - 21 new tests (`tests/test_warehouses.py`): organisation isolation,
   code/name uniqueness, immutable code, active-and-same-organisation
   validation for the storage-area unit (422 for missing/inactive/
@@ -1034,6 +1042,99 @@ any business logic").
   capacity without a code change, admin-only create/edit/status-change
   (403 for non-admin), 404 for a cross-organisation id, and audit events
   for every mutation.
+
+### Master Data: Bill of Materials (`app/api/boms.py`, `app/services/bom_service.py`, `app/services/uom_conversion.py`)
+
+Ninth entity of Phase 2 (`docs/modules/boms.md`) -- the single,
+unambiguous relationship between a finished Product and the Raw
+Materials required to produce a specified base quantity of it. A
+hardening pass over a real jdk_clean feature, not a new module built
+from nothing.
+
+Audited first (`docs/audit/BOMS_AUDIT.md`): jdk_clean has a genuinely
+working, multi-level BOM (`Bom`/`BomLine`, sub-assemblies via a
+polymorphic component, cycle detection, `scrap_percent`) and a real
+persisted Production Order material-requirement snapshot with explicit
+protection against recalculation once execution starts. But its one
+real attempt at unit conversion -- a `units_of_measure` table with a
+single `factor_to_base` column doing double duty as both a universal
+ratio (`1 ton = 1000 kg`) and a material-specific packaging assumption
+(`1 bag = 50 kg`, per the seed data's own comment: *"edit this row's
+factor_to_base ... if that's wrong for what's actually being
+bagged"*) -- was built, then dropped nine days later. What replaced it
+sidesteps cross-unit BOMs entirely (a BOM line's unit is always forced
+equal to its component's own unit; fake units like `"20kg"`/`"25kg"`
+stand in for real packaging conversion) rather than solving the
+problem this module's spec requires solving.
+
+- **Two deliberately separate conversion mechanisms**, never one
+  conflated column: `UnitOfMeasure.dimension` +
+  `conversion_factor_to_base` for universal, dimensional ratios
+  (kg/g/tonne all share `dimension="mass"`) -- the "safe half" of
+  jdk_clean's removed mechanism; `RawMaterial.alternate_conversion_
+  unit_of_measure_id` + `alternate_conversion_factor` for
+  material-specific ratios (density, packaging) -- the "unsafe half,"
+  scoped to the one material it's actually true for. Both pairs are
+  nullable and always both-set-or-both-null, enforced at the API layer
+  even on partial `PATCH` updates. `app/services/uom_conversion.
+  resolve_conversion_ratio` chains at most one material-specific hop
+  plus one further universal hop -- never a generic multi-hop
+  conversion graph.
+- **Every component validated at save time**: `app/services/
+  bom_service.require_valid_component_conversion` rejects (422) a
+  component with no valid conversion between its own unit and the
+  Product's unit, with a specific, actionable error naming exactly
+  what needs configuring -- never a silent assumption or a silently
+  rounded-away mismatch. The same check re-runs at activation.
+- **Quantity is the one authoritative value**: `BomComponent.quantity`
+  is always stored in the material's own unit, never converted at
+  rest. Percentage is computed at read time only
+  (`bom_service.component_percentage`), never stored, never
+  independently editable.
+- **Production requirement calculation** (`POST /api/boms/{id}/
+  calculate-requirements`): `Required = Component Qty * Production
+  Qty / Base Qty`, computed per component, staying in that component's
+  own unit -- a pure, stateless calculation with no persistence of its
+  own, since Production Order doesn't exist in this codebase yet
+  (building even a minimal one now would merge responsibilities the
+  spec's own boundary keeps separate). jdk_clean's real snapshot-
+  protection behavior (never silently recalculate over a committed
+  production order) is documented in `docs/modules/boms.md` #10 as
+  binding for whichever future Production Order module is built --
+  flagged explicitly, not silently skipped.
+- **One BOM per product** (`UniqueConstraint(organisation_id,
+  product_id)`), directly reusing jdk_clean's own real, sound design.
+  Status is `draft`/`active` (renamed from jdk_clean's `active`/
+  `inactive` for clarity). Activating requires >=1 component and every
+  component's conversion still resolvable -- a hardened version of
+  jdk_clean's own real `component_count(...) > 0` activation gate.
+  Duplicate raw-material components are blocked by a DB
+  `UniqueConstraint(bom_id, raw_material_id)`, hardening jdk_clean's
+  app-level-only check.
+- **Not carried over from jdk_clean, flagged rather than silently
+  dropped**: multi-level/sub-assembly BOMs (no proven need, out of
+  spec scope), `scrap_percent` (outside the spec's own formula), the
+  `factor_to_base` conflated-conversion mechanism (the precise
+  anti-pattern this module exists to avoid), and the persisted
+  Production Order requirement snapshot (no Production Order exists
+  yet to snapshot onto).
+- Read (list/get/calculate-requirements) is open to any authenticated
+  organisation member; create/edit/component management/activation are
+  admin-gated -- jdk_clean gates BOM read behind `admin` entirely, not
+  followed here, matching every other jdk_erp master's split instead.
+- 69 new/changed tests: `tests/test_uom_conversion.py` (9, the
+  conversion service directly -- same-unit, universal, no-conversion-
+  across-dimensions, material-specific density/packaging, one
+  material-specific hop chained with one universal hop, inverse
+  direction, an override that doesn't apply to the pair being
+  converted), `tests/test_boms.py` (44 -- the full #14 conversion
+  matrix, organisation isolation, one-BOM-per-product uniqueness,
+  component CRUD, duplicate-component rejection, activation gating,
+  defensive re-check when a material's unit changes after a component
+  was added, stateless/live requirement calculation, RBAC, audit
+  events), plus new coverage in `tests/test_units.py` and
+  `tests/test_raw_materials.py` for the new conversion field pairing/
+  positivity/self-reference validation on create and edit.
 
 ## Setup
 

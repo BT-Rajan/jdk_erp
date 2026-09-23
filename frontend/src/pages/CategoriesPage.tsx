@@ -25,7 +25,7 @@ interface Category {
   id: number
   organisation_id: number
   name: string
-  code: string | null
+  code: string
   description: string | null
   is_active: boolean
 }
@@ -45,16 +45,15 @@ interface CategoriesFilters {
 
 const categorySchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  code: z.string(),
   description: z.string(),
 })
 
 type CategoryFormValues = z.infer<typeof categorySchema>
 
-const emptyDefaults: CategoryFormValues = { name: '', code: '', description: '' }
+const emptyDefaults: CategoryFormValues = { name: '', description: '' }
 
 function toFormValues(category: Category): CategoryFormValues {
-  return { name: category.name, code: category.code ?? '', description: category.description ?? '' }
+  return { name: category.name, description: category.description ?? '' }
 }
 
 async function fetchCategories({
@@ -93,7 +92,9 @@ async function fetchCategories({
  * Server-side is the real boundary (Principle 3); hiding the mutating
  * controls for a non-admin here is a usability courtesy, not the
  * enforcement itself. First real consumer of the common list foundation
- * in Phase 2 (Master Data), composed exactly like UsersPage. */
+ * in Phase 2 (Master Data), composed exactly like UsersPage. `code` is
+ * system-generated and immutable -- there is no Code input on Create;
+ * the Edit dialog shows it disabled purely for reference. */
 export function CategoriesPage() {
   const { user: currentUser } = useAuth()
   const canManage = isAdminRole(currentUser?.role)
@@ -155,7 +156,6 @@ export function CategoriesPage() {
       setFormError(null)
       const payload = {
         name: values.name,
-        code: values.code || null,
         description: values.description || null,
       }
       try {
@@ -199,7 +199,7 @@ export function CategoriesPage() {
 
   const columns: DataTableColumn<Category>[] = [
     { key: 'name', label: 'Name', sortable: true, render: (c) => c.name },
-    { key: 'code', label: 'Code', sortable: true, hideBelow: 'sm', render: (c) => c.code ?? <span className="text-gold-100/40">—</span> },
+    { key: 'code', label: 'Code', sortable: true, hideBelow: 'sm', render: (c) => c.code },
     {
       key: 'description',
       label: 'Description',
@@ -286,8 +286,10 @@ export function CategoriesPage() {
             submitLabel={editingCategory ? 'Save' : 'Create category'}
           >
             <Alert variant="danger">{formError}</Alert>
+            {editingCategory && (
+              <TextField label="Code" disabled readOnly hint="System-generated. Cannot be changed." value={editingCategory.code} />
+            )}
             <TextField label="Name" required {...register('name')} error={errors.name?.message} />
-            <TextField label="Code" hint="Optional short code." {...register('code')} error={errors.code?.message} />
             <TextareaField label="Description" {...register('description')} error={errors.description?.message} />
           </FormDialog>
 

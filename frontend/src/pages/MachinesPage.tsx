@@ -52,7 +52,6 @@ interface MachinesFilters {
 const DECIMAL_RE = /^\d+(\.\d+)?$/
 
 const machineSchema = z.object({
-  code: z.string().min(1, 'Code is required'),
   name: z.string().min(1, 'Name is required'),
   production_line_id: z.string().min(1, 'Production line is required'),
   capacity_quantity: z
@@ -69,7 +68,6 @@ const machineSchema = z.object({
 type MachineFormValues = z.infer<typeof machineSchema>
 
 const emptyDefaults: MachineFormValues = {
-  code: '',
   name: '',
   production_line_id: '',
   capacity_quantity: '',
@@ -79,7 +77,6 @@ const emptyDefaults: MachineFormValues = {
 
 function toFormValues(machine: Machine): MachineFormValues {
   return {
-    code: machine.code,
     name: machine.name,
     production_line_id: String(machine.production_line_id),
     capacity_quantity: machine.capacity_quantity,
@@ -128,8 +125,9 @@ function formatCapacity(machine: Machine, unitCode: string | undefined) {
  * /api/units-of-measure exactly like Product/RawMaterial. Capacity is
  * three structured fields (quantity/unit/period), never a free-text
  * string -- the whole point of this master (docs/modules/machines.md
- * #4). The Code field is visibly disabled on Edit, same treatment as
- * Product/RawMaterial's own manually-assigned codes. */
+ * #4). `code` is system-generated and immutable -- there is no Code
+ * input on Create; the Edit dialog shows it disabled purely for
+ * reference. */
 export function MachinesPage() {
   const { user: currentUser } = useAuth()
   const canManage = isAdminRole(currentUser?.role)
@@ -219,7 +217,7 @@ export function MachinesPage() {
         if (editingMachine) {
           await apiClient.patch(`/api/machines/${editingMachine.id}`, payload)
         } else {
-          await apiClient.post('/api/machines', { ...payload, code: values.code })
+          await apiClient.post('/api/machines', payload)
         }
         setFormOpen(false)
         table.refetch()
@@ -349,14 +347,9 @@ export function MachinesPage() {
             submitLabel={editingMachine ? 'Save' : 'Create machine'}
           >
             <Alert variant="danger">{formError}</Alert>
-            <TextField
-              label="Code"
-              required
-              disabled={!!editingMachine}
-              hint={editingMachine ? 'Code cannot be changed after creation.' : undefined}
-              {...register('code')}
-              error={errors.code?.message}
-            />
+            {editingMachine && (
+              <TextField label="Code" disabled readOnly hint="System-generated. Cannot be changed." value={editingMachine.code} />
+            )}
             <TextField label="Name" required {...register('name')} error={errors.name?.message} />
             <SelectField
               label="Production Line"

@@ -18,26 +18,16 @@ class MachineOut(BaseModel):
 
 
 class MachineCreateRequest(BaseModel):
-    """organisation_id is never part of this payload. `code` IS part of
-    this payload and required, and -- like Product/RawMaterial -- has no
-    update path (see MachineUpdateRequest): a stable identifier future
-    Production/Feasibility records will reference should not silently
-    change."""
+    """organisation_id and code are never part of this payload -- code
+    is system-generated (no update path either, see
+    MachineUpdateRequest): a stable identifier future Production/
+    Feasibility records will reference should not silently change."""
 
-    code: str
     name: str
     production_line_id: int
     capacity_quantity: Decimal
     capacity_unit_of_measure_id: int
     capacity_period_hours: Decimal
-
-    @field_validator("code")
-    @classmethod
-    def _check_code(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Code is required.")
-        return value
 
     @field_validator("name")
     @classmethod

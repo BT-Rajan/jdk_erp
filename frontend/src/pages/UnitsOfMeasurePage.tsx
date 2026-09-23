@@ -20,13 +20,18 @@ import { isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
 
-/** Mirrors backend/app/schemas/unit.py's UnitOfMeasureOut. */
+/** Mirrors backend/app/schemas/unit.py's UnitOfMeasureOut. `dimension`/
+ * `conversion_factor_to_base` are the universal-conversion half of BOM's
+ * two conversion mechanisms (docs/modules/boms.md #3) -- both null, or
+ * both set. */
 interface UnitOfMeasure {
   id: number
   organisation_id: number
   name: string
   code: string
   description: string | null
+  dimension: string | null
+  conversion_factor_to_base: string | null
   is_active: boolean
 }
 
@@ -40,18 +45,40 @@ interface UnitsFilters {
   search: string
 }
 
-const unitSchema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  code: z.string().min(1, 'Code is required'),
-  description: z.string(),
-})
+const DECIMAL_RE = /^\d+(\.\d{1,6})?$/
+
+const unitSchema = z
+  .object({
+    name: z.string().min(1, 'Name is required'),
+    code: z.string().min(1, 'Code is required'),
+    description: z.string(),
+    dimension: z.string(),
+    conversion_factor_to_base: z.string().refine((v) => v === '' || DECIMAL_RE.test(v), 'Enter a valid factor'),
+  })
+  // Both-or-neither, same discipline as the backend (docs/modules/boms.md #3).
+  .refine((data) => (data.dimension.trim() === '') === (data.conversion_factor_to_base.trim() === ''), {
+    message: 'Dimension and conversion factor must be provided together, or both left blank.',
+    path: ['conversion_factor_to_base'],
+  })
 
 type UnitFormValues = z.infer<typeof unitSchema>
 
-const emptyDefaults: UnitFormValues = { name: '', code: '', description: '' }
+const emptyDefaults: UnitFormValues = {
+  name: '',
+  code: '',
+  description: '',
+  dimension: '',
+  conversion_factor_to_base: '',
+}
 
 function toFormValues(unit: UnitOfMeasure): UnitFormValues {
-  return { name: unit.name, code: unit.code, description: unit.description ?? '' }
+  return {
+    name: unit.name,
+    code: unit.code,
+    description: unit.description ?? '',
+    dimension: unit.dimension ?? '',
+    conversion_factor_to_base: unit.conversion_factor_to_base ?? '',
+  }
 }
 
 async function fetchUnits({
@@ -150,7 +177,13 @@ export function UnitsOfMeasurePage() {
   const onFormSubmit = useCallback(
     async (values: UnitFormValues) => {
       setFormError(null)
-      const payload = { name: values.name, code: values.code, description: values.description || null }
+      const payload = {
+        name: values.name,
+        code: values.code,
+        description: values.description || null,
+        dimension: values.dimension || null,
+        conversion_factor_to_base: values.conversion_factor_to_base || null,
+      }
       try {
         if (editingUnit) {
           await apiClient.patch(`/api/units-of-measure/${editingUnit.id}`, payload)
@@ -192,12 +225,18 @@ export function UnitsOfMeasurePage() {
 
   const columns: DataTableColumn<UnitOfMeasure>[] = [
     { key: 'name', label: 'Name', sortable: true, render: (u) => u.name },
-    { key: 'code', label: 'Code', sortable: true, hideBelow: 'sm', render: (u) => u.code },
+    { key: 'code', label: 'Symbol', sortable: true, hideBelow: 'sm', render: (u) => u.code },
     {
       key: 'description',
       label: 'Description',
       hideBelow: 'md',
       render: (u) => u.description ?? <span className="text-gold-100/40">—</span>,
+    },
+    {
+      key: 'dimension',
+      label: 'Dimension',
+      hideBelow: 'lg',
+      render: (u) => u.dimension ?? <span className="text-gold-100/40">—</span>,
     },
     {
       key: 'status',
@@ -281,13 +320,25 @@ export function UnitsOfMeasurePage() {
             <Alert variant="danger">{formError}</Alert>
             <TextField label="Name" required {...register('name')} error={errors.name?.message} />
             <TextField
-              label="Code"
-              hint="Short code, e.g. KG. Stored upper-case."
+              label="Symbol"
+              hint="Short abbreviation, e.g. KG. Stored upper-case. Unlike other masters' auto-generated Code, this is a meaningful symbol you choose."
               required
               {...register('code')}
               error={errors.code?.message}
             />
             <TextareaField label="Description" {...register('description')} error={errors.description?.message} />
+            <TextField
+              label="Dimension"
+              hint='Optional. A universal conversion family, e.g. "mass" or "volume" -- leave both this and Conversion Factor blank if this unit does not convert (e.g. "pcs").'
+              {...register('dimension')}
+              error={errors.dimension?.message}
+            />
+            <TextField
+              label="Conversion Factor to Base"
+              hint="Optional. This unit's ratio within its Dimension, e.g. Tonne = 1000 when Kilogram = 1. Must be set together with Dimension."
+              {...register('conversion_factor_to_base')}
+              error={errors.conversion_factor_to_base?.message}
+            />
           </FormDialog>
 
           <ConfirmDialog

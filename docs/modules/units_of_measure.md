@@ -19,9 +19,13 @@ question (§5 below) before a line of jdk_erp code was written.
 
 A unit has: id, name (e.g. "Kilogram"), code (required, e.g. "KG" —
 normalized to upper-case), description (optional), active/inactive
-state, organisation ownership, timestamps. No hierarchy, no category
-(weight/count/volume) field, no conversion column. Kept exactly as
-simple as Categories — not a generic measurement framework.
+state, organisation ownership, timestamps. Plus, since BOM (see §5
+below and [`boms.md`](boms.md)): `dimension` and
+`conversion_factor_to_base`, both optional and always both-set-or-
+both-null. No hierarchy, no unit-of-measure category enum tied to
+`dimension` (it is free-form text, not a fixed picklist). Kept as
+close to Category's simplicity as the BOM conversion requirement
+allows — not a generic measurement framework.
 
 ## 3. Unit usage
 
@@ -58,23 +62,37 @@ a locally-typed string.
 
 ## 5. Unit conversion
 
-**No conversion mechanism is built.** This is an explicit, evidence-based
-decision, not an oversight — see
-[`../audit/UNITS_OF_MEASURE_AUDIT.md`](../audit/UNITS_OF_MEASURE_AUDIT.md)
-in full. Summary: jdk_clean built exactly this once (a `factor_to_base`
-column), and removed it within a week because it conflated a true
+**Updated by the BOM module** ([`boms.md`](boms.md) §3,
+[`../audit/BOMS_AUDIT.md`](../audit/BOMS_AUDIT.md)) — the "no
+conversion mechanism" decision below held until BOM supplied the first
+real, evidenced consumer. What's built now is deliberately only *half*
+of what jdk_clean once tried: `dimension` + `conversion_factor_to_base`
+is a pure, universal, dimensional ratio (`kg`/`g`/`tonne` all share
+`dimension="mass"`; a ratio true regardless of what material is being
+measured) — the "safe half" of jdk_clean's removed mechanism. The
+"unsafe half" — a business-specific packaging or density assumption
+(`1 bag = 50 kg`) — is deliberately **not** added here; it lives on
+`RawMaterial.alternate_conversion_*` instead
+([`raw_materials.md`](raw_materials.md) §5a), scoped to the one
+material it's actually true for, never a property of the unit itself.
+Both columns are nullable and always both-set-or-both-null — a unit
+that doesn't participate in universal conversion (e.g. `"pcs"`) simply
+carries neither.
+
+Original decision, for context (superseded above, not deleted — the
+evidence it cites is still exactly why the *material-specific* half
+stays off `UnitOfMeasure`): jdk_clean built a single `factor_to_base`
+column once, and removed it within a week because it conflated a true
 physical ratio (`1 ton = 1000 kg`, a universal constant) with a
 business-specific packaging assumption (`1 bag = 50 kg`, which the
 codebase's own seed-data comment admitted was "a configurable assumption...
 edit if wrong for what's actually being bagged") inside one
-undifferentiated field. Every downstream consumer that once needed
-conversion (BOM explosion) was redesigned instead so a line's unit always
-equals its component's own unit — never converts — and that redesign has
-held since, at real (if small) data volumes. If a genuine conversion
-requirement emerges later (once Products/BOM/Inventory actually exist),
-it is a new, deliberate feature built against real evidence at that
-time — explicitly not something this module pre-builds speculatively,
-per this module's own architectural rule (§14).
+undifferentiated field. See
+[`../audit/UNITS_OF_MEASURE_AUDIT.md`](../audit/UNITS_OF_MEASURE_AUDIT.md)
+for the full original audit and
+[`../audit/BOMS_AUDIT.md`](../audit/BOMS_AUDIT.md) for how BOM's own
+audit re-confirmed the same lesson before splitting the mechanism in
+two instead of repeating jdk_clean's single conflated column.
 
 ## 6. Data ownership and organisation scope
 
@@ -154,11 +172,14 @@ upper-case; organisation scope explicitly decided (org-owned, not
 global) and enforced at the DB level; active/inactive lifecycle defined;
 no hard delete.
 
-**Conversion**: no conversion engine built; the decision is documented
-with evidence, not silently skipped; business-specific packaging
-relationships and universal physical conversions are explicitly named as
-different kinds of things (jdk_clean's own failure), even though neither
-is implemented here.
+**Conversion**: no conversion engine was built until BOM supplied a
+real, evidenced consumer; business-specific packaging relationships and
+universal physical conversions are explicitly named as different kinds
+of things (jdk_clean's own failure) and kept on two separate models
+(`UnitOfMeasure.dimension`/`conversion_factor_to_base` for the
+universal half, `RawMaterial.alternate_conversion_*` for the
+material-specific half) rather than reintroduced as one conflated
+column — see [`boms.md`](boms.md) §3.
 
 **Access**: `require_admin` reused for mutations, no new authorization
 layer; organisation isolation enforced server-side on every query and
@@ -188,7 +209,9 @@ One quantity has one authoritative unit meaning throughout JDK. The Unit
 master defines the unit; the consuming module owns the quantity and the
 business transaction. No module maintains its own unit list, and no
 conversion mechanism exists without real evidence that one is needed —
-jdk_clean already tried and removed the alternative.
+jdk_clean already tried and removed one such attempt, and BOM's own
+audit supplied the evidence for the narrower, two-mechanism version
+that exists today (§5).
 
 ## Implementation approach
 

@@ -29,7 +29,7 @@ def test_list_products_returns_only_my_organisation(
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -59,7 +59,7 @@ def test_get_product_in_other_organisation_returns_404(
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -164,7 +164,7 @@ def test_product_code_unique_within_organisation_but_not_across(
         db_session.commit()
     db_session.rollback()
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -205,7 +205,6 @@ def test_non_admin_cannot_create_product(client, active_user, electronics_catego
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -220,7 +219,6 @@ def test_create_product_requires_authentication(client, admin_user, electronics_
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -235,7 +233,6 @@ def test_admin_can_create_product(client, db_session, admin_user, electronics_ca
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -248,7 +245,9 @@ def test_admin_can_create_product(client, db_session, admin_user, electronics_ca
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["code"] == "PRD001"
+    # code is system-generated: prefix "2" + a 5-digit per-organisation
+    # sequence (per explicit user instruction) -- never caller-supplied.
+    assert body["code"] == "200001"
     assert body["name"] == "Widget"
     assert body["selling_price"] == "149.99"
     assert body["manufacturing_lead_time_days"] == 10
@@ -262,15 +261,15 @@ def test_admin_can_create_product(client, db_session, admin_user, electronics_ca
         .one()
     )
     assert event.actor_user_id == admin_user.id
-    assert "PRD001" in event.details
+    assert "200001" in event.details
 
 
-def test_create_product_rejects_blank_code(client, admin_user, electronics_category, kilogram_unit):
+def test_create_product_ignores_a_caller_supplied_code(client, admin_user, electronics_category, kilogram_unit):
     headers = _login_headers(client, "admin_person")
     response = client.post(
         "/api/products",
         json={
-            "code": "   ",
+            "code": "HACKED",
             "name": "Widget",
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -278,7 +277,8 @@ def test_create_product_rejects_blank_code(client, admin_user, electronics_categ
         },
         headers=headers,
     )
-    assert response.status_code == 422
+    assert response.status_code == 201
+    assert response.json()["code"] == "200001"
 
 
 def test_create_product_rejects_blank_name(client, admin_user, electronics_category, kilogram_unit):
@@ -286,7 +286,6 @@ def test_create_product_rejects_blank_name(client, admin_user, electronics_categ
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "   ",
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -302,7 +301,6 @@ def test_create_product_rejects_negative_selling_price(client, admin_user, elect
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -318,7 +316,6 @@ def test_create_product_rejects_negative_lead_time(client, admin_user, electroni
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -330,20 +327,17 @@ def test_create_product_rejects_negative_lead_time(client, admin_user, electroni
     assert response.status_code == 422
 
 
-def test_create_product_rejects_duplicate_code(client, admin_user, widget_product, electronics_category, kilogram_unit):
+def test_create_product_generates_sequential_codes(client, admin_user, electronics_category, kilogram_unit):
     headers = _login_headers(client, "admin_person")
-    response = client.post(
-        "/api/products",
-        json={
-            "code": widget_product.code,
-            "name": "Something Else",
-            "category_id": electronics_category.id,
-            "unit_of_measure_id": kilogram_unit.id,
-            "selling_price": "100.00",
-        },
-        headers=headers,
-    )
-    assert response.status_code == 409
+    payload = {
+        "category_id": electronics_category.id,
+        "unit_of_measure_id": kilogram_unit.id,
+        "selling_price": "100.00",
+    }
+    first = client.post("/api/products", json={**payload, "name": "Widget"}, headers=headers)
+    second = client.post("/api/products", json={**payload, "name": "Gadget"}, headers=headers)
+    assert first.json()["code"] == "200001"
+    assert second.json()["code"] == "200002"
 
 
 def test_create_product_rejects_duplicate_name(client, admin_user, widget_product, electronics_category, kilogram_unit):
@@ -351,7 +345,6 @@ def test_create_product_rejects_duplicate_name(client, admin_user, widget_produc
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD777",
             "name": widget_product.name,
             "category_id": electronics_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -367,7 +360,6 @@ def test_create_product_rejects_nonexistent_category(client, admin_user, kilogra
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": 999999,
             "unit_of_measure_id": kilogram_unit.id,
@@ -381,7 +373,7 @@ def test_create_product_rejects_nonexistent_category(client, admin_user, kilogra
 def test_create_product_rejects_inactive_category(client, admin_user, db_session, organisation, kilogram_unit):
     from app.models.category import Category
 
-    inactive_category = Category(organisation_id=organisation.id, name="Discontinued", is_active=False)
+    inactive_category = Category(organisation_id=organisation.id, name="Discontinued", code="DISC", is_active=False)
     db_session.add(inactive_category)
     db_session.commit()
     db_session.refresh(inactive_category)
@@ -390,7 +382,6 @@ def test_create_product_rejects_inactive_category(client, admin_user, db_session
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": inactive_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -406,7 +397,6 @@ def test_create_product_rejects_nonexistent_unit(client, admin_user, electronics
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": electronics_category.id,
             "unit_of_measure_id": 999999,
@@ -422,7 +412,7 @@ def test_create_product_rejects_cross_organisation_category(
 ):
     from app.models.category import Category
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     db_session.refresh(other_category)
@@ -431,7 +421,6 @@ def test_create_product_rejects_cross_organisation_category(
     response = client.post(
         "/api/products",
         json={
-            "code": "PRD001",
             "name": "Widget",
             "category_id": other_category.id,
             "unit_of_measure_id": kilogram_unit.id,
@@ -461,7 +450,7 @@ def test_create_product_in_one_organisation_does_not_block_another(
         password_hash=hash_password("Str0ng!Pass"),
         is_active=True,
     )
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_admin, other_category, other_unit])
     db_session.commit()
@@ -586,7 +575,7 @@ def test_edit_product_in_other_organisation_returns_404(client, admin_user, othe
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()

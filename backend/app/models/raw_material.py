@@ -64,7 +64,22 @@ class RawMaterial(Base, TimestampMixin, OrganisationScopedMixin):
     "stocked in KG, purchased in BAG," it belongs on SupplierMaterial
     (per-relationship, since the conversion is inherently
     supplier/packaging-specific), not here -- deferred until that need is
-    proven."""
+    proven.
+
+    `alternate_conversion_unit_of_measure_id` + `alternate_conversion_factor`
+    are added for BOM (docs/modules/boms.md, docs/audit/BOMS_AUDIT.md):
+    the one place a *material-specific* conversion belongs -- "1 litre of
+    THIS material = 1.25 kg" or "1 bag of THIS material = 25 kg" is a
+    property of the specific material (its density, its packaging), never
+    a universal fact about the litre/bag unit itself. Both nullable, both
+    required together: meaning "1 [this material's own unit_of_measure] =
+    alternate_conversion_factor [alternate_conversion_unit_of_measure]."
+    jdk_clean's own history is the cautionary tale here: it never built a
+    real conversion field for this, instead baking specific package sizes
+    into fake unit names ("20kg", "25kg" as if they were units) --
+    exactly the anti-pattern this explicit field avoids by keeping the
+    material's own base unit stable (e.g. "bag") and recording the
+    conversion as real, structured data instead."""
 
     __tablename__ = "raw_materials"
     __table_args__ = (
@@ -83,4 +98,8 @@ class RawMaterial(Base, TimestampMixin, OrganisationScopedMixin):
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     reference_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    alternate_conversion_unit_of_measure_id: Mapped[int | None] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    alternate_conversion_factor: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)

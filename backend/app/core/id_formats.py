@@ -38,7 +38,29 @@ class IdFormat:
 QUOTATION_ID = IdFormat(prefix="Q", digits=6)
 ORDER_ID = IdFormat(prefix="O", digits=6)
 USER_ID = IdFormat(prefix="", digits=5)
-PRODUCT_ID = IdFormat(prefix="PR", digits=4)
-MATERIAL_ID = IdFormat(prefix="M", digits=4)
-CUSTOMER_ID = IdFormat(prefix="CUS", digits=5)
-SUPPLIER_ID = IdFormat(prefix="SUP", digits=4)
+
+# Every Phase 2 master's own code -- explicit user instruction: a fixed
+# 6-digit, all-numeric, system-assigned code per entity, never caller-
+# supplied or editable. The leading digit(s) identify which master a
+# code belongs to; the remaining digits are that master's own
+# per-organisation sequence, assigned by each entity's own
+# _generate_*_code (existing count + 1, retried against IdFormat's own
+# uniqueness under IntegrityError -- the pattern first established by
+# Customer/Supplier below, now applied to every master). Superseds the
+# letter-prefixed PRODUCT_ID/MATERIAL_ID/CUSTOMER_ID/SUPPLIER_ID shapes
+# this file previously defined.
+RAW_MATERIAL_CODE = IdFormat(prefix="1", digits=5)
+PRODUCT_CODE = IdFormat(prefix="2", digits=5)
+CUSTOMER_ID = IdFormat(prefix="3", digits=5)
+SUPPLIER_ID = IdFormat(prefix="4", digits=5)
+CATEGORY_CODE = IdFormat(prefix="5", digits=5)
+
+# Small, effectively-fixed-size masters (JDK has 1 of each today) share a
+# distinct "0000-prefixed" shape rather than a full 5-digit sequence --
+# a single free digit each, so at most 9 records per type (IdFormat's
+# own sequence floor is 1, not 0, so the range is 1-9, not "0-9 / cap of
+# 10" literally -- reusing this existing, already-tested utility as-is
+# rather than forking its invariant for one narrower shape).
+PRODUCTION_LINE_CODE = IdFormat(prefix="00001", digits=1)
+MACHINE_CODE = IdFormat(prefix="00002", digits=1)
+WAREHOUSE_CODE = IdFormat(prefix="00003", digits=1)

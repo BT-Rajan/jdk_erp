@@ -25,8 +25,11 @@ const CATEGORIES_RESPONSE = {
   pagination: { page: 1, page_size: 200, total: 1, total_pages: 1 },
 }
 const UNITS_RESPONSE = {
-  data: [{ id: 20, name: 'Kilogram', code: 'KG', is_active: true }],
-  pagination: { page: 1, page_size: 200, total: 1, total_pages: 1 },
+  data: [
+    { id: 20, name: 'Kilogram', code: 'KG', is_active: true },
+    { id: 21, name: 'Litre', code: 'L', is_active: true },
+  ],
+  pagination: { page: 1, page_size: 200, total: 2, total_pages: 1 },
 }
 const SUPPLIERS_RESPONSE = {
   data: [{ id: 30, name: 'Acme Traders', code: 'SUP0001', is_active: true }],
@@ -43,6 +46,8 @@ function makeMaterial(overrides: Partial<Record<string, unknown>> = {}) {
     unit_of_measure_id: 20,
     description: null,
     reference_cost: '12.5000',
+    alternate_conversion_unit_of_measure_id: null,
+    alternate_conversion_factor: null,
     is_active: true,
     ...overrides,
   }
@@ -153,14 +158,14 @@ describe('RawMaterialsPage', () => {
     expect(config.params.page).toBe(1)
   })
 
-  it('creating a raw material posts the payload including code, category and unit', async () => {
-    postMock.mockResolvedValue({ data: makeMaterial({ id: 2, name: 'Sand', code: 'RM002' }) })
+  it('creating a raw material posts the payload including category and unit, with no code field', async () => {
+    postMock.mockResolvedValue({ data: makeMaterial({ id: 2, name: 'Sand', code: '100002' }) })
     render(<RawMaterialsPage />)
     await screen.findByText('Cement')
     getMock.mockClear()
 
     await userEvent.click(screen.getByRole('button', { name: 'New Raw Material' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'RM002')
+    expect(screen.queryByLabelText('Code')).not.toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Name'), 'Sand')
     await userEvent.selectOptions(screen.getByLabelText('Category'), '10')
     await userEvent.selectOptions(screen.getByLabelText('Unit of Measure'), '20')
@@ -169,25 +174,68 @@ describe('RawMaterialsPage', () => {
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith(
         '/api/raw-materials',
-        expect.objectContaining({ code: 'RM002', name: 'Sand', category_id: 10, unit_of_measure_id: 20 }),
+        expect.not.objectContaining({ code: expect.anything() }),
       ),
     )
+    const [, payload] = postMock.mock.calls[0]
+    expect(payload).toEqual(expect.objectContaining({ name: 'Sand', category_id: 10, unit_of_measure_id: 20 }))
   })
 
-  it('creating a raw material shows a server-side code conflict as a form error', async () => {
+  it('creating a raw material shows a server-side name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
-    postMock.mockRejectedValue(new ApiError({ message: 'A raw material with this code or name already exists.', code: 'CONFLICT' }, 409))
+    postMock.mockRejectedValue(new ApiError({ message: 'A raw material with this name already exists.', code: 'CONFLICT' }, 409))
     render(<RawMaterialsPage />)
     await screen.findByText('Cement')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Raw Material' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'RM001')
     await userEvent.type(screen.getByLabelText('Name'), 'Duplicate')
     await userEvent.selectOptions(screen.getByLabelText('Category'), '10')
     await userEvent.selectOptions(screen.getByLabelText('Unit of Measure'), '20')
     await userEvent.click(screen.getByRole('button', { name: 'Create raw material' }))
 
-    expect(await screen.findByText('A raw material with this code or name already exists.')).toBeInTheDocument()
+    expect(await screen.findByText('A raw material with this name already exists.')).toBeInTheDocument()
+  })
+
+  it('creating a raw material with an alternate conversion unit and factor posts both', async () => {
+    postMock.mockResolvedValue({
+      data: makeMaterial({ id: 2, name: 'Resin', code: '100002', unit_of_measure_id: 21, alternate_conversion_unit_of_measure_id: 20, alternate_conversion_factor: '1.25' }),
+    })
+    render(<RawMaterialsPage />)
+    await screen.findByText('Cement')
+
+    await userEvent.click(screen.getByRole('button', { name: 'New Raw Material' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Resin')
+    await userEvent.selectOptions(screen.getByLabelText('Category'), '10')
+    await userEvent.selectOptions(screen.getByLabelText('Unit of Measure'), '21')
+    await userEvent.selectOptions(screen.getByLabelText('Alternate Conversion Unit'), '20')
+    await userEvent.type(screen.getByLabelText('Alternate Conversion Factor'), '1.25')
+    await userEvent.click(screen.getByRole('button', { name: 'Create raw material' }))
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(
+        '/api/raw-materials',
+        expect.objectContaining({ alternate_conversion_unit_of_measure_id: 20, alternate_conversion_factor: '1.25' }),
+      ),
+    )
+  })
+
+  it('rejects an alternate conversion factor entered without an alternate conversion unit before submitting', async () => {
+    render(<RawMaterialsPage />)
+    await screen.findByText('Cement')
+
+    await userEvent.click(screen.getByRole('button', { name: 'New Raw Material' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Resin')
+    await userEvent.selectOptions(screen.getByLabelText('Category'), '10')
+    await userEvent.selectOptions(screen.getByLabelText('Unit of Measure'), '21')
+    await userEvent.type(screen.getByLabelText('Alternate Conversion Factor'), '1.25')
+    await userEvent.click(screen.getByRole('button', { name: 'Create raw material' }))
+
+    expect(
+      await screen.findByText(
+        'Alternate conversion unit and factor must be provided together, or both left blank.',
+      ),
+    ).toBeInTheDocument()
+    expect(postMock).not.toHaveBeenCalled()
   })
 
   it('editing a raw material pre-fills the form, disables the code field, and sends a PATCH without code', async () => {

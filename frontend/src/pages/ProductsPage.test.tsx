@@ -130,14 +130,14 @@ describe('ProductsPage', () => {
     expect(config.params.page).toBe(1)
   })
 
-  it('creating a product posts the payload including code, category, unit and lead times', async () => {
-    postMock.mockResolvedValue({ data: makeProduct({ id: 2, name: 'Gizmo', code: 'PRD002' }) })
+  it('creating a product posts the payload including category, unit and lead times, with no code field', async () => {
+    postMock.mockResolvedValue({ data: makeProduct({ id: 2, name: 'Gizmo', code: '200002' }) })
     render(<ProductsPage />)
     await screen.findByText('Widget')
     getMock.mockClear()
 
     await userEvent.click(screen.getByRole('button', { name: 'New Product' }))
-    await userEvent.type(screen.getByLabelText('Product Code'), 'PRD002')
+    expect(screen.queryByLabelText('Product Code')).not.toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Product Name'), 'Gizmo')
     await userEvent.selectOptions(screen.getByLabelText('Category'), '10')
     await userEvent.selectOptions(screen.getByLabelText('Unit of Measure'), '20')
@@ -150,7 +150,6 @@ describe('ProductsPage', () => {
       expect(postMock).toHaveBeenCalledWith(
         '/api/products',
         expect.objectContaining({
-          code: 'PRD002',
           name: 'Gizmo',
           category_id: 10,
           unit_of_measure_id: 20,
@@ -160,6 +159,8 @@ describe('ProductsPage', () => {
         }),
       ),
     )
+    const [, payload] = postMock.mock.calls[0]
+    expect(payload.code).toBeUndefined()
   })
 
   it('rejects a non-numeric selling price inline before submitting', async () => {
@@ -167,7 +168,6 @@ describe('ProductsPage', () => {
     await screen.findByText('Widget')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Product' }))
-    await userEvent.type(screen.getByLabelText('Product Code'), 'PRD002')
     await userEvent.type(screen.getByLabelText('Product Name'), 'Gizmo')
     await userEvent.selectOptions(screen.getByLabelText('Category'), '10')
     await userEvent.selectOptions(screen.getByLabelText('Unit of Measure'), '20')
@@ -178,21 +178,20 @@ describe('ProductsPage', () => {
     expect(postMock).not.toHaveBeenCalled()
   })
 
-  it('creating a product shows a server-side code conflict as a form error', async () => {
+  it('creating a product shows a server-side name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
-    postMock.mockRejectedValue(new ApiError({ message: 'A product with this code or name already exists.', code: 'CONFLICT' }, 409))
+    postMock.mockRejectedValue(new ApiError({ message: 'A product with this name already exists.', code: 'CONFLICT' }, 409))
     render(<ProductsPage />)
     await screen.findByText('Widget')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Product' }))
-    await userEvent.type(screen.getByLabelText('Product Code'), 'PRD001')
     await userEvent.type(screen.getByLabelText('Product Name'), 'Duplicate')
     await userEvent.selectOptions(screen.getByLabelText('Category'), '10')
     await userEvent.selectOptions(screen.getByLabelText('Unit of Measure'), '20')
     await userEvent.type(screen.getByLabelText('Default Selling Price'), '10.00')
     await userEvent.click(screen.getByRole('button', { name: 'Create product' }))
 
-    expect(await screen.findByText('A product with this code or name already exists.')).toBeInTheDocument()
+    expect(await screen.findByText('A product with this name already exists.')).toBeInTheDocument()
   })
 
   it('editing a product pre-fills the form, disables the code field, and sends a PATCH without code', async () => {

@@ -97,16 +97,19 @@ def test_production_line_code_unique_within_organisation_but_not_across(db_sessi
 
 def test_non_admin_cannot_create_production_line(client, active_user):
     headers = _login_headers(client)
-    response = client.post("/api/production-lines", json={"code": "LINE1", "name": "Line 1"}, headers=headers)
+    response = client.post("/api/production-lines", json={"name": "Line 1"}, headers=headers)
     assert response.status_code == 403
 
 
 def test_admin_can_create_production_line(client, db_session, admin_user):
     headers = _login_headers(client, "admin_person")
-    response = client.post("/api/production-lines", json={"code": "LINE1", "name": "Production Line 1"}, headers=headers)
+    response = client.post("/api/production-lines", json={"name": "Production Line 1"}, headers=headers)
     assert response.status_code == 201
     body = response.json()
-    assert body["code"] == "LINE1"
+    # code is system-generated: "00001" + a single per-organisation
+    # sequence digit (per explicit user instruction) -- never
+    # caller-supplied.
+    assert body["code"] == "000011"
     assert body["name"] == "Production Line 1"
     assert body["is_active"] is True
 
@@ -118,16 +121,32 @@ def test_admin_can_create_production_line(client, db_session, admin_user):
     assert event.actor_user_id == admin_user.id
 
 
+def test_create_production_line_ignores_a_caller_supplied_code(client, admin_user):
+    headers = _login_headers(client, "admin_person")
+    response = client.post("/api/production-lines", json={"code": "HACKED", "name": "Line 1"}, headers=headers)
+    assert response.status_code == 201
+    assert response.json()["code"] == "000011"
+
+
 def test_create_production_line_rejects_blank_name(client, admin_user):
     headers = _login_headers(client, "admin_person")
-    response = client.post("/api/production-lines", json={"code": "LINE1", "name": "   "}, headers=headers)
+    response = client.post("/api/production-lines", json={"name": "   "}, headers=headers)
     assert response.status_code == 422
 
 
-def test_create_production_line_rejects_duplicate_code(client, admin_user, line_1):
+def test_create_production_line_rejects_a_tenth_line(client, admin_user, db_session, organisation):
+    """PRODUCTION_LINE_CODE's single free digit caps this master at 9
+    records (docs/modules/production_lines.md) -- a real business limit,
+    surfaced as a clear 400 rather than an unhandled error."""
+    from app.models.production_line import ProductionLine
+
+    for i in range(1, 10):
+        db_session.add(ProductionLine(organisation_id=organisation.id, code=f"00001{i}", name=f"Line {i}", is_active=True))
+    db_session.commit()
+
     headers = _login_headers(client, "admin_person")
-    response = client.post("/api/production-lines", json={"code": line_1.code, "name": "Another Line"}, headers=headers)
-    assert response.status_code == 409
+    response = client.post("/api/production-lines", json={"name": "One Too Many"}, headers=headers)
+    assert response.status_code == 400
 
 
 # --- update ------------------------------------------------------------

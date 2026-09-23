@@ -58,7 +58,6 @@ const DECIMAL_RE = /^\d+(\.\d{1,2})?$/
 const INTEGER_RE = /^\d+$/
 
 const productSchema = z.object({
-  code: z.string().min(1, 'Code is required'),
   name: z.string().min(1, 'Name is required'),
   category_id: z.string().min(1, 'Category is required'),
   unit_of_measure_id: z.string().min(1, 'Unit of measure is required'),
@@ -71,7 +70,6 @@ const productSchema = z.object({
 type ProductFormValues = z.infer<typeof productSchema>
 
 const emptyDefaults: ProductFormValues = {
-  code: '',
   name: '',
   category_id: '',
   unit_of_measure_id: '',
@@ -83,7 +81,6 @@ const emptyDefaults: ProductFormValues = {
 
 function toFormValues(product: Product): ProductFormValues {
   return {
-    code: product.code,
     name: product.name,
     category_id: String(product.category_id),
     unit_of_measure_id: String(product.unit_of_measure_id),
@@ -126,10 +123,9 @@ async function fetchProducts({
  * engine). Category and Unit of Measure are rendered as dropdowns of the
  * caller's own active records, reusing GET /api/categories and
  * GET /api/units-of-measure rather than a new lookup endpoint. `code` is
- * caller-supplied and immutable after creation (docs/modules/products.md
- * #3) -- the Code field is disabled, not just omitted, on Edit so its
- * immutability is visible, not just enforced silently server-side.
- * Manufacturing Lead Time and Customer Lead Time are deliberately
+ * system-generated and immutable -- there is no Code input on Create at
+ * all (nothing to type), and the Edit dialog shows it disabled purely
+ * for reference. Manufacturing Lead Time and Customer Lead Time are deliberately
  * separate fields with distinct meanings (docs/modules/products.md
  * #4/#5) -- this page never combines or derives one from the other. */
 export function ProductsPage() {
@@ -223,7 +219,7 @@ export function ProductsPage() {
         if (editingProduct) {
           await apiClient.patch(`/api/products/${editingProduct.id}`, payload)
         } else {
-          await apiClient.post('/api/products', { ...payload, code: values.code })
+          await apiClient.post('/api/products', payload)
         }
         setFormOpen(false)
         table.refetch()
@@ -360,14 +356,15 @@ export function ProductsPage() {
             submitLabel={editingProduct ? 'Save' : 'Create product'}
           >
             <Alert variant="danger">{formError}</Alert>
-            <TextField
-              label="Product Code"
-              required
-              disabled={!!editingProduct}
-              hint={editingProduct ? 'Code cannot be changed after creation.' : undefined}
-              {...register('code')}
-              error={errors.code?.message}
-            />
+            {editingProduct && (
+              <TextField
+                label="Product Code"
+                disabled
+                hint="System-generated. Cannot be changed."
+                value={editingProduct.code}
+                readOnly
+              />
+            )}
             <TextField label="Product Name" required {...register('name')} error={errors.name?.message} />
             <SelectField label="Category" required {...register('category_id')} error={errors.category_id?.message}>
               <option value="">Select a category...</option>

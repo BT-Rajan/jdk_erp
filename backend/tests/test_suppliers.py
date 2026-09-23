@@ -147,7 +147,7 @@ def test_admin_can_create_supplier(client, db_session, admin_user):
     assert response.status_code == 201
     body = response.json()
     assert body["name"] == "Acme Traders"
-    assert body["code"] == "SUP0001"
+    assert body["code"] == "400001"
     assert body["phone"] == "96512345678"  # digits-only normalization
     assert body["is_active"] is True
     assert body["organisation_id"] == admin_user.organisation_id
@@ -165,8 +165,8 @@ def test_create_supplier_generates_sequential_codes(client, admin_user):
     headers = _login_headers(client, "admin_person")
     first = client.post("/api/suppliers", json={"name": "Vendor One"}, headers=headers)
     second = client.post("/api/suppliers", json={"name": "Vendor Two"}, headers=headers)
-    assert first.json()["code"] == "SUP0001"
-    assert second.json()["code"] == "SUP0002"
+    assert first.json()["code"] == "400001"
+    assert second.json()["code"] == "400002"
 
 
 def test_create_supplier_normalizes_phone_to_digits_only(client, admin_user):

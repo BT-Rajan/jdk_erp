@@ -23,7 +23,10 @@ import { isAdminRole } from "@/lib/auth/roles";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useServerTable, type ServerTableResult } from "@/lib/useServerTable";
 
-/** Mirrors backend/app/schemas/raw_material.py's RawMaterialOut. */
+/** Mirrors backend/app/schemas/raw_material.py's RawMaterialOut.
+ * `alternate_conversion_*` is BOM's material-specific conversion
+ * mechanism (docs/modules/boms.md #3, docs/modules/raw_materials.md
+ * #5a) -- both null, or both set. */
 interface RawMaterial {
   id: number;
   organisation_id: number;
@@ -33,6 +36,8 @@ interface RawMaterial {
   unit_of_measure_id: number;
   description: string | null;
   reference_cost: string | null;
+  alternate_conversion_unit_of_measure_id: number | null;
+  alternate_conversion_factor: string | null;
   is_active: boolean;
 }
 
@@ -76,36 +81,67 @@ interface RawMaterialsFilters {
 const DECIMAL_RE = /^\d+(\.\d{1,4})?$/;
 const INTEGER_RE = /^\d+$/;
 
-const materialSchema = z.object({
-  code: z.string().min(1, "Code is required"),
-  name: z.string().min(1, "Name is required"),
-  category_id: z.string().min(1, "Category is required"),
-  unit_of_measure_id: z.string().min(1, "Unit of measure is required"),
-  description: z.string(),
-  reference_cost: z
-    .string()
-    .refine((v) => v === "" || DECIMAL_RE.test(v), "Enter a valid amount"),
-});
+const materialSchema = z
+  .object({
+    name: z.string().min(1, "Name is required"),
+    category_id: z.string().min(1, "Category is required"),
+    unit_of_measure_id: z.string().min(1, "Unit of measure is required"),
+    description: z.string(),
+    reference_cost: z
+      .string()
+      .refine((v) => v === "" || DECIMAL_RE.test(v), "Enter a valid amount"),
+    alternate_conversion_unit_of_measure_id: z.string(),
+    alternate_conversion_factor: z
+      .string()
+      .refine((v) => v === "" || DECIMAL_RE.test(v), "Enter a valid factor"),
+  })
+  // Both-or-neither, same discipline as UnitOfMeasure's Dimension/
+  // Conversion Factor pair (docs/modules/boms.md #3).
+  .refine(
+    (data) =>
+      (data.alternate_conversion_unit_of_measure_id.trim() === "") ===
+      (data.alternate_conversion_factor.trim() === ""),
+    {
+      message:
+        "Alternate conversion unit and factor must be provided together, or both left blank.",
+      path: ["alternate_conversion_factor"],
+    },
+  )
+  .refine(
+    (data) =>
+      data.alternate_conversion_unit_of_measure_id === "" ||
+      data.alternate_conversion_unit_of_measure_id !==
+        data.unit_of_measure_id,
+    {
+      message: "Alternate conversion unit must differ from the material's own unit.",
+      path: ["alternate_conversion_unit_of_measure_id"],
+    },
+  );
 
 type MaterialFormValues = z.infer<typeof materialSchema>;
 
 const emptyMaterialDefaults: MaterialFormValues = {
-  code: "",
   name: "",
   category_id: "",
   unit_of_measure_id: "",
   description: "",
   reference_cost: "",
+  alternate_conversion_unit_of_measure_id: "",
+  alternate_conversion_factor: "",
 };
 
 function toMaterialFormValues(material: RawMaterial): MaterialFormValues {
   return {
-    code: material.code,
     name: material.name,
     category_id: String(material.category_id),
     unit_of_measure_id: String(material.unit_of_measure_id),
     description: material.description ?? "",
     reference_cost: material.reference_cost ?? "",
+    alternate_conversion_unit_of_measure_id:
+      material.alternate_conversion_unit_of_measure_id == null
+        ? ""
+        : String(material.alternate_conversion_unit_of_measure_id),
+    alternate_conversion_factor: material.alternate_conversion_factor ?? "",
   };
 }
 
@@ -327,6 +363,11 @@ export function RawMaterialsPage() {
         unit_of_measure_id: Number(values.unit_of_measure_id),
         description: values.description || null,
         reference_cost: values.reference_cost || null,
+        alternate_conversion_unit_of_measure_id:
+          values.alternate_conversion_unit_of_measure_id
+            ? Number(values.alternate_conversion_unit_of_measure_id)
+            : null,
+        alternate_conversion_factor: values.alternate_conversion_factor || null,
       };
       try {
         if (editingMaterial) {
@@ -335,10 +376,7 @@ export function RawMaterialsPage() {
             payload,
           );
         } else {
-          await apiClient.post("/api/raw-materials", {
-            ...payload,
-            code: values.code,
-          });
+          await apiClient.post("/api/raw-materials", payload);
         }
         setFormOpen(false);
         table.refetch();
@@ -623,18 +661,15 @@ export function RawMaterialsPage() {
             submitLabel={editingMaterial ? "Save" : "Create raw material"}
           >
             <Alert variant="danger">{formError}</Alert>
-            <TextField
-              label="Code"
-              required
-              disabled={!!editingMaterial}
-              hint={
-                editingMaterial
-                  ? "Code cannot be changed after creation."
-                  : undefined
-              }
-              {...register("code")}
-              error={errors.code?.message}
-            />
+            {editingMaterial && (
+              <TextField
+                label="Code"
+                disabled
+                readOnly
+                hint="System-generated. Cannot be changed."
+                value={editingMaterial.code}
+              />
+            )}
             <TextField
               label="Name"
               required
@@ -681,6 +716,27 @@ export function RawMaterialsPage() {
               hint="Current/default reference value only -- not a historical purchase price."
               {...register("reference_cost")}
               error={errors.reference_cost?.message}
+            />
+            <SelectField
+              label="Alternate Conversion Unit"
+              hint="Optional. For BOM: a material-specific conversion, e.g. a Litre of this material weighs some number of kg. Leave blank if this material needs no such conversion."
+              {...register("alternate_conversion_unit_of_measure_id")}
+              error={errors.alternate_conversion_unit_of_measure_id?.message}
+            >
+              <option value="">None</option>
+              {units
+                .filter((u) => u.is_active)
+                .map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} ({u.code})
+                  </option>
+                ))}
+            </SelectField>
+            <TextField
+              label="Alternate Conversion Factor"
+              hint="Optional. 1 [this material's own unit] = this many [Alternate Conversion Unit]. Must be set together with Alternate Conversion Unit."
+              {...register("alternate_conversion_factor")}
+              error={errors.alternate_conversion_factor?.message}
             />
           </FormDialog>
 

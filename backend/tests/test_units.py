@@ -184,6 +184,87 @@ def test_create_unit_rejects_duplicate_code_case_insensitively(client, admin_use
     assert response.status_code == 409
 
 
+# --- dimension / conversion_factor_to_base (docs/modules/boms.md #3) -------
+
+
+def test_admin_can_create_unit_with_dimension_and_conversion_factor(client, db_session, admin_user):
+    headers = _login_headers(client, "admin_person")
+    response = client.post(
+        "/api/units-of-measure",
+        json={"name": "Tonne", "code": "TON", "dimension": "mass", "conversion_factor_to_base": "1000"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["dimension"] == "mass"
+    assert body["conversion_factor_to_base"] == "1000.000000"
+
+
+def test_create_unit_rejects_dimension_without_conversion_factor(client, admin_user):
+    headers = _login_headers(client, "admin_person")
+    response = client.post(
+        "/api/units-of-measure", json={"name": "Tonne", "code": "TON", "dimension": "mass"}, headers=headers
+    )
+    assert response.status_code == 422
+
+
+def test_create_unit_rejects_conversion_factor_without_dimension(client, admin_user):
+    headers = _login_headers(client, "admin_person")
+    response = client.post(
+        "/api/units-of-measure",
+        json={"name": "Tonne", "code": "TON", "conversion_factor_to_base": "1000"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_create_unit_rejects_non_positive_conversion_factor(client, admin_user):
+    headers = _login_headers(client, "admin_person")
+    response = client.post(
+        "/api/units-of-measure",
+        json={"name": "Tonne", "code": "TON", "dimension": "mass", "conversion_factor_to_base": "0"},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_admin_can_edit_unit_to_add_dimension_and_conversion_factor(client, db_session, admin_user, kilogram_unit):
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/units-of-measure/{kilogram_unit.id}",
+        json={"dimension": "mass", "conversion_factor_to_base": "1"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["dimension"] == "mass"
+
+
+def test_edit_unit_rejects_adding_only_dimension(client, admin_user, kilogram_unit):
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/units-of-measure/{kilogram_unit.id}", json={"dimension": "mass"}, headers=headers
+    )
+    assert response.status_code == 422
+
+
+def test_edit_unit_rejects_adding_only_conversion_factor(client, admin_user, kilogram_unit):
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/units-of-measure/{kilogram_unit.id}", json={"conversion_factor_to_base": "1"}, headers=headers
+    )
+    assert response.status_code == 422
+
+
+def test_edit_unit_leaving_both_dimension_fields_unset_does_not_validate_pair(client, admin_user, kilogram_unit):
+    """kilogram_unit already has neither field set -- a PATCH that
+    touches neither must not be blocked by the pairing check."""
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/units-of-measure/{kilogram_unit.id}", json={"name": "Kilograms"}, headers=headers
+    )
+    assert response.status_code == 200
+
+
 def test_create_unit_in_one_organisation_does_not_block_another(
     client, db_session, admin_user, kilogram_unit, other_organisation
 ):
