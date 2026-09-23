@@ -12,7 +12,9 @@ import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { ProductsPage } from '@/pages/ProductsPage'
 import { MachinesPage } from '@/pages/MachinesPage'
 import { ProductionLinesPage } from '@/pages/ProductionLinesPage'
+import { PurchaseOrdersPage } from '@/pages/PurchaseOrdersPage'
 import { RawMaterialsPage } from '@/pages/RawMaterialsPage'
+import { RfqsPage } from '@/pages/RfqsPage'
 import { WarehousesPage } from '@/pages/WarehousesPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
 import { SuppliersPage } from '@/pages/SuppliersPage'
@@ -47,6 +49,8 @@ export function App() {
           <Route path="/machines" element={<MachinesPage />} />
           <Route path="/warehouses" element={<WarehousesPage />} />
           <Route path="/boms" element={<BomsPage />} />
+          <Route path="/rfqs" element={<RfqsPage />} />
+          <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

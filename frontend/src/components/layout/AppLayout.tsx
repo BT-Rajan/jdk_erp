@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Boxes, Home, Menu, Settings } from 'lucide-react'
+import { Boxes, Home, Menu, Settings, ShoppingCart } from 'lucide-react'
 import { Outlet } from 'react-router-dom'
 import { ActionMenu } from '@/components/ui/ActionMenu'
 import { IconButton } from '@/components/ui/IconButton'
@@ -37,6 +37,15 @@ const NAV_ENTRIES: NavEntry[] = [
       { label: 'Machines', to: '/machines' },
       { label: 'Warehouses', to: '/warehouses' },
       { label: 'Bills of Materials', to: '/boms' },
+    ],
+  },
+  {
+    type: 'group',
+    label: 'Procurement',
+    icon: <ShoppingCart size={16} />,
+    items: [
+      { label: 'RFQs', to: '/rfqs' },
+      { label: 'Purchase Orders', to: '/purchase-orders' },
     ],
   },
 ]

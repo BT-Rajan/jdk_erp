@@ -60,6 +60,35 @@ BOM_STATUS_CHANGED = "bom_status_changed"
 BOM_COMPONENT_ADDED = "bom_component_added"
 BOM_COMPONENT_UPDATED = "bom_component_updated"
 BOM_COMPONENT_REMOVED = "bom_component_removed"
+PURCHASE_ORDER_CREATED = "purchase_order_created"
+PURCHASE_ORDER_UPDATED = "purchase_order_updated"
+PURCHASE_ORDER_STATUS_CHANGED = "purchase_order_status_changed"
+PURCHASE_ORDER_LINE_ADDED = "purchase_order_line_added"
+PURCHASE_ORDER_LINE_UPDATED = "purchase_order_line_updated"
+PURCHASE_ORDER_LINE_REMOVED = "purchase_order_line_removed"
+PURCHASE_ORDER_RECEIVED = "purchase_order_received"
+PURCHASE_ORDER_ISSUED = "purchase_order_issued"
+PURCHASE_ORDER_SUPPLIER_CONFIRMED = "purchase_order_supplier_confirmed"
+PURCHASE_ORDER_SENT = "purchase_order_sent"
+PURCHASE_ORDER_SEND_FAILED = "purchase_order_send_failed"
+PURCHASE_ORDER_PAYMENT_RECORDED = "purchase_order_payment_recorded"
+PURCHASE_ORDER_PAYMENT_CANCELLED = "purchase_order_payment_cancelled"
+# PURCHASE_ORDER_RECEIVED (above) is kept only for already-written
+# historical AuditEvent rows from the removed receive-as-action flow --
+# no code writes it anymore (docs/modules/purchase_orders.md Revision 4).
+PURCHASE_ORDER_RECEIPT_CREATED = "purchase_order_receipt_created"
+PURCHASE_ORDER_RECEIPT_POSTED = "purchase_order_receipt_posted"
+PURCHASE_ORDER_RECEIPT_CANCELLED = "purchase_order_receipt_cancelled"
+PURCHASE_ORDER_RECEIPT_REVERSED = "purchase_order_receipt_reversed"
+RFQ_CREATED = "rfq_created"
+RFQ_UPDATED = "rfq_updated"
+RFQ_LINE_ADDED = "rfq_line_added"
+RFQ_LINE_UPDATED = "rfq_line_updated"
+RFQ_LINE_REMOVED = "rfq_line_removed"
+RFQ_STATUS_CHANGED = "rfq_status_changed"
+RFQ_RESPONSE_CAPTURED = "rfq_response_captured"
+RFQ_DECIDED = "rfq_decided"
+RFQ_CONVERTED = "rfq_converted"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"
@@ -69,6 +98,9 @@ ORGANISATION_MODULE = "organisation"
 # not a new constant invented per entity (docs/ENGINEERING_PRINCIPLES.md
 # #2 one source of truth).
 MASTER_DATA_MODULE = "master_data"
+# Phase 4 -- Purchase Order lifecycle/receiving events
+# (docs/modules/purchase_orders.md).
+PROCUREMENT_MODULE = "procurement"
 
 
 class AuditEvent(Base):

@@ -185,6 +185,37 @@ def authorize_file_access(db: Session, user: User, record: FileRecord) -> None:
         raise AccessDeniedError("You do not have permission to access this file.")
 
 
+def attach_files(
+    db: Session, *, file_ids: list[int], entity_type: str, entity_id: int, organisation_id: int
+) -> list[FileRecord]:
+    """Links already-uploaded (POST /api/files, entity_type/entity_id
+    omitted) files to the entity that now exists to own them -- the
+    "attach-then-save" two-step flow the FileRecord model was already
+    documented as supporting (see its own docstring: "an
+    uploaded-but-not-yet-linked file... has no entity yet"). Used by
+    app/api/rfqs.py's capture-response action, its first real caller
+    (docs/modules/rfq.md #15). Only files already in the caller's own
+    organisation and not yet linked to a different entity are accepted
+    -- never silently re-parents a file already attached elsewhere."""
+    records = db.query(FileRecord).filter(FileRecord.id.in_(file_ids), FileRecord.organisation_id == organisation_id).all()
+    if len(records) != len(set(file_ids)):
+        raise ValidationError(
+            "One or more files could not be found in your organisation.",
+            fields={"file_ids": "One or more files are invalid."},
+        )
+    for record in records:
+        if record.entity_type is not None and (record.entity_type != entity_type or record.entity_id != entity_id):
+            raise ValidationError(
+                "One or more files are already attached elsewhere.",
+                fields={"file_ids": "One or more files are already attached to a different record."},
+            )
+        record.entity_type = entity_type
+        record.entity_id = entity_id
+        db.add(record)
+    db.flush()
+    return records
+
+
 def soft_delete_file(db: Session, record: FileRecord) -> None:
     """Logical removal only (docs/modules/file_storage.md #8) -- never
     touches the physical file. Physical deletion is a separate,
