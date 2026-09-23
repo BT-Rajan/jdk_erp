@@ -9,6 +9,7 @@ import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
+import { SuppliersPage } from '@/pages/SuppliersPage'
 import { UnitsOfMeasurePage } from '@/pages/UnitsOfMeasurePage'
 import { UsersPage } from '@/pages/UsersPage'
 
@@ -33,6 +34,7 @@ export function App() {
           <Route path="/categories" element={<CategoriesPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/units-of-measure" element={<UnitsOfMeasurePage />} />
+          <Route path="/suppliers" element={<SuppliersPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

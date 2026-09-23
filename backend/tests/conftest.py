@@ -31,6 +31,7 @@ from app.core.storage import default_storage
 from app.main import app
 from app.models.category import Category
 from app.models.organisation import Organisation
+from app.models.supplier import Supplier
 from app.models.team import Team
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
@@ -175,6 +176,15 @@ def kilogram_unit(db_session, organisation):
     db_session.commit()
     db_session.refresh(unit)
     return unit
+
+
+@pytest.fixture()
+def acme_supplier(db_session, organisation):
+    supplier = Supplier(organisation_id=organisation.id, code="SUP0001", name="Acme Traders", is_active=True)
+    db_session.add(supplier)
+    db_session.commit()
+    db_session.refresh(supplier)
+    return supplier
 
 
 @pytest.fixture()

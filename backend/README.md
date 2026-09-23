@@ -727,6 +727,60 @@ assigned_to_user_id/is_active.
   the customers their resolved scope predicts, confirmed against actual
   HTTP responses, not just unit-level assertions.
 
+### Master Data: Suppliers (`app/api/suppliers.py`)
+
+Fourth entity of Phase 2 (`docs/modules/suppliers.md`), and deliberately
+the lightest master built so far -- expected volume is ~10 suppliers per
+organisation, per the user's own framing. Audited first
+(`docs/audit/SUPPLIERS_AUDIT.md`): unlike Categories/Units, jdk_clean has
+a real Supplier implementation, but most of it is CRM/workflow bloat
+copy-pasted from its own Customer model (a full onboarding-status state
+machine, 1-5 star rating, ID-document verification, per-supplier
+approval-threshold overrides) with no real consumer -- none of that is
+reused. The Supplier model here carries only
+code/name/contact_person/phone/email/address/is_active.
+
+- **No organisation-scoping precedent to follow or diverge from**:
+  jdk_clean has zero `organisation_id`/tenant concept anywhere in its
+  codebase (it's single-tenant) -- Supplier simply follows jdk_erp's own
+  established `OrganisationScopedMixin` convention, the same as every
+  other master.
+- **No Supplier<->Material relationship yet, and that's deliberate**:
+  jdk_clean's real `supplier_materials` join table (price, MOQ, lead
+  time, `is_preferred`, `status`) is solid prior art worth reusing --
+  but Products/Raw Materials don't exist in this codebase yet, so
+  building the other half of that relationship now would be pure
+  speculation (Principle 5). When those modules land, `supplier_materials`'
+  shape is the template to reuse; until then, a future Procurement module
+  references a supplier directly on a purchase order with no catalog
+  constraint.
+- **Fully admin-gated, unlike Customer**: create/edit/activate-deactivate
+  all require `require_admin` -- there is no ownership/assignment
+  dimension to a ~10-record vendor list, so this reuses Category/Unit's
+  plain admin-gated shape rather than a scaled-down version of Customer's
+  permission-scope engine. Read stays open to any authenticated
+  organisation member, same reasoning as every other master.
+- `code` is auto-generated (`app/core/id_formats.py`'s new `SUPPLIER_ID`
+  format, prefix `SUP`) via the same generate-with-retry-on-conflict
+  approach `POST /api/customers` uses. `phone` is normalized to
+  digits-only at write time and DB-unique per organisation, the same fix
+  already applied to Customer's O(n) duplicate-phone defect -- jdk_clean's
+  real Supplier implementation repeats that exact defect independently
+  (`_check_duplicate_phone`, a fresh Python re-scan on every write).
+  Unlike Customer, `name` **is** unique per organisation here -- a
+  supplier is a small, internally curated vendor list (closer to
+  Category/Unit in spirit) rather than externally-given high-volume
+  business data.
+- 26 new tests (`tests/test_suppliers.py`): organisation isolation,
+  sequential code generation, phone normalization, name/phone
+  uniqueness per organisation, admin-only create/edit/status-change
+  (403 for non-admin), 404 for a cross-organisation id, and audit events
+  for every mutation. Verified live: an admin creating a supplier saw
+  the auto-generated `SUP0001` code and normalized phone rendered
+  correctly, a duplicate-name attempt surfaced the 409 inline, a
+  team_member saw the same list with no mutating controls, and
+  deactivating updated the status badge immediately.
+
 ## Setup
 
 ```bash

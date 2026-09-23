@@ -349,6 +349,26 @@ across every module).
   OWN/TEAM/ALL scope predicts, and assign/deactivate actions updated the
   list correctly.
 
+- **Suppliers** (`src/pages/SuppliersPage.tsx`) -- the frontend for
+  `backend/app/api/suppliers.py`
+  (`docs/modules/suppliers.md`/`docs/audit/SUPPLIERS_AUDIT.md`),
+  deliberately the lightest master-data page so far (~10 records per
+  organisation expected). Composed identically to `CategoriesPage` --
+  the same flat admin-gated shape (`isAdminRole` hides New Supplier, the
+  row action menu, and the form/confirm dialogs for a non-admin), not
+  `CustomersPage`'s ownership/assign machinery, since a supplier has no
+  assignment dimension at all. The create/edit form fields mirror
+  `CustomersPage`'s contact-field shape (name/contact_person/phone/
+  email/address) instead. 10 new tests (`SuppliersPage.test.tsx`), same
+  coverage shape as `CategoriesPage.test.tsx`: load, non-admin read-only
+  view, error state, empty-vs-no-match states, debounced search, create
+  (success and a server-side name conflict surfacing as a form error),
+  edit (pre-filled form, PATCH), and deactivate. Verified live against a
+  real backend: creating a supplier showed the auto-generated `SUP0001`
+  code and digits-only-normalized phone immediately, a duplicate name
+  surfaced its 409 inline, a team_member saw the same list with no
+  mutating controls, and deactivating updated the status badge.
+
 ## Setup
 
 ```bash
