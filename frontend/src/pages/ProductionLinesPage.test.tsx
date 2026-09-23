@@ -71,34 +71,31 @@ describe('ProductionLinesPage', () => {
     await waitFor(() => expect(screen.getByText('No matching production lines')).toBeInTheDocument())
   })
 
-  it('creating a production line posts the payload and refetches the list', async () => {
-    postMock.mockResolvedValue({ data: makeLine({ id: 2, code: 'LINE2', name: 'Line 2' }) })
+  it('creating a production line posts the payload with no code field, and refetches the list', async () => {
+    postMock.mockResolvedValue({ data: makeLine({ id: 2, code: '000012', name: 'Line 2' }) })
     render(<ProductionLinesPage />)
     await screen.findByText('Production Line 1')
     getMock.mockClear()
 
     await userEvent.click(screen.getByRole('button', { name: 'New Production Line' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'LINE2')
+    expect(screen.queryByLabelText('Code')).not.toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Name'), 'Line 2')
     await userEvent.click(screen.getByRole('button', { name: 'Create production line' }))
 
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith('/api/production-lines', { code: 'LINE2', name: 'Line 2' }),
-    )
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/api/production-lines', { name: 'Line 2' }))
   })
 
-  it('creating a production line shows a server-side code conflict as a form error', async () => {
+  it('creating a production line shows a server-side name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
-    postMock.mockRejectedValue(new ApiError({ message: 'A production line with this code or name already exists.', code: 'CONFLICT' }, 409))
+    postMock.mockRejectedValue(new ApiError({ message: 'A production line with this name already exists.', code: 'CONFLICT' }, 409))
     render(<ProductionLinesPage />)
     await screen.findByText('Production Line 1')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Production Line' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'LINE1')
     await userEvent.type(screen.getByLabelText('Name'), 'Duplicate')
     await userEvent.click(screen.getByRole('button', { name: 'Create production line' }))
 
-    expect(await screen.findByText('A production line with this code or name already exists.')).toBeInTheDocument()
+    expect(await screen.findByText('A production line with this name already exists.')).toBeInTheDocument()
   })
 
   it('editing a production line disables the code field and sends a PATCH with only the name', async () => {

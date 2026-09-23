@@ -38,16 +38,15 @@ interface ProductionLinesFilters {
 }
 
 const lineSchema = z.object({
-  code: z.string().min(1, 'Code is required'),
   name: z.string().min(1, 'Name is required'),
 })
 
 type LineFormValues = z.infer<typeof lineSchema>
 
-const emptyDefaults: LineFormValues = { code: '', name: '' }
+const emptyDefaults: LineFormValues = { name: '' }
 
 function toFormValues(line: ProductionLine): LineFormValues {
-  return { code: line.code, name: line.name }
+  return { name: line.name }
 }
 
 async function fetchProductionLines({
@@ -79,9 +78,9 @@ async function fetchProductionLines({
  * (backend/app/api/production_lines.py, docs/modules/machines.md).
  * Deliberately kept a genuinely separate master from Machine, even
  * though JDK has exactly one of each today (docs/modules/machines.md
- * #2) -- composed identically to CategoriesPage, except `code` is
- * immutable after creation (disabled on Edit), the same treatment
- * ProductsPage/RawMaterialsPage give their own manually-assigned codes. */
+ * #2) -- composed identically to CategoriesPage. `code` is
+ * system-generated and immutable -- there is no Code input on Create;
+ * the Edit dialog shows it disabled purely for reference. */
 export function ProductionLinesPage() {
   const { user: currentUser } = useAuth()
   const canManage = isAdminRole(currentUser?.role)
@@ -260,14 +259,9 @@ export function ProductionLinesPage() {
             submitLabel={editingLine ? 'Save' : 'Create production line'}
           >
             <Alert variant="danger">{formError}</Alert>
-            <TextField
-              label="Code"
-              required
-              disabled={!!editingLine}
-              hint={editingLine ? 'Code cannot be changed after creation.' : undefined}
-              {...register('code')}
-              error={errors.code?.message}
-            />
+            {editingLine && (
+              <TextField label="Code" disabled readOnly hint="System-generated. Cannot be changed." value={editingLine.code} />
+            )}
             <TextField label="Name" required {...register('name')} error={errors.name?.message} />
           </FormDialog>
 

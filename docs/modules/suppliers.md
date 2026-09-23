@@ -77,8 +77,11 @@ raising a purchase request) needs to look up, not a privileged view. Only
 create/edit/activate-deactivate are admin-gated.
 
 `code` is generated server-side (`app/core/id_formats.py`'s
-`SUPPLIER_ID`, prefix `SUP`), the same mechanism Customer uses — never
-client-supplied.
+`SUPPLIER_ID`, prefix `4` + a 5-digit per-organisation sequence —
+updated from an earlier `SUP` + 4-digit letter-prefixed shape to the
+fixed 6-digit, all-numeric, per-organisation-digit-prefixed shape every
+Phase 2 master now shares, per explicit user instruction), the same
+mechanism Customer uses — never client-supplied.
 
 ## 6. Deactivation and referential integrity
 

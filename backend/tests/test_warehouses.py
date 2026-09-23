@@ -156,7 +156,6 @@ def test_non_admin_cannot_create_warehouse(client, active_user, kilogram_unit):
     response = client.post(
         "/api/warehouses",
         json={
-            "code": "WH-001",
             "name": "Factory Warehouse",
             "total_usable_storage_area": "5000",
             "storage_area_unit_of_measure_id": kilogram_unit.id,
@@ -171,7 +170,6 @@ def test_admin_can_create_warehouse_with_configured_capacity(client, db_session,
     response = client.post(
         "/api/warehouses",
         json={
-            "code": "WH-001",
             "name": "Factory Warehouse",
             "total_usable_storage_area": "5000",
             "storage_area_unit_of_measure_id": kilogram_unit.id,
@@ -180,7 +178,10 @@ def test_admin_can_create_warehouse_with_configured_capacity(client, db_session,
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["code"] == "WH-001"
+    # code is system-generated: "00003" + a single per-organisation
+    # sequence digit (per explicit user instruction) -- never
+    # caller-supplied.
+    assert body["code"] == "000031"
     assert body["total_usable_storage_area"] == "5000.00"
     assert body["storage_area_unit_of_measure_id"] == kilogram_unit.id
     assert body["is_active"] is True
@@ -198,7 +199,6 @@ def test_create_warehouse_rejects_zero_area(client, admin_user, kilogram_unit):
     response = client.post(
         "/api/warehouses",
         json={
-            "code": "WH-001",
             "name": "Factory Warehouse",
             "total_usable_storage_area": "0",
             "storage_area_unit_of_measure_id": kilogram_unit.id,
@@ -213,7 +213,6 @@ def test_create_warehouse_rejects_negative_area(client, admin_user, kilogram_uni
     response = client.post(
         "/api/warehouses",
         json={
-            "code": "WH-001",
             "name": "Factory Warehouse",
             "total_usable_storage_area": "-100",
             "storage_area_unit_of_measure_id": kilogram_unit.id,
@@ -235,7 +234,6 @@ def test_create_warehouse_rejects_inactive_unit(client, admin_user, db_session, 
     response = client.post(
         "/api/warehouses",
         json={
-            "code": "WH-001",
             "name": "Factory Warehouse",
             "total_usable_storage_area": "5000",
             "storage_area_unit_of_measure_id": inactive_unit.id,
@@ -257,7 +255,6 @@ def test_create_warehouse_rejects_cross_organisation_unit(client, admin_user, ot
     response = client.post(
         "/api/warehouses",
         json={
-            "code": "WH-001",
             "name": "Factory Warehouse",
             "total_usable_storage_area": "5000",
             "storage_area_unit_of_measure_id": other_unit.id,
@@ -267,19 +264,52 @@ def test_create_warehouse_rejects_cross_organisation_unit(client, admin_user, ot
     assert response.status_code == 422
 
 
-def test_create_warehouse_rejects_duplicate_code(client, admin_user, warehouse_1, kilogram_unit):
+def test_create_warehouse_ignores_a_caller_supplied_code(client, admin_user, kilogram_unit):
     headers = _login_headers(client, "admin_person")
     response = client.post(
         "/api/warehouses",
         json={
-            "code": warehouse_1.code,
-            "name": "Another Warehouse",
+            "code": "HACKED",
+            "name": "Factory Warehouse",
             "total_usable_storage_area": "100",
             "storage_area_unit_of_measure_id": kilogram_unit.id,
         },
         headers=headers,
     )
-    assert response.status_code == 409
+    assert response.status_code == 201
+    assert response.json()["code"] == "000031"
+
+
+def test_create_warehouse_rejects_a_tenth_warehouse(client, admin_user, db_session, organisation, kilogram_unit):
+    """WAREHOUSE_CODE's single free digit caps this master at 9 records
+    (docs/modules/warehouses.md) -- a real business limit, surfaced as a
+    clear 400 rather than an unhandled error."""
+    from app.models.warehouse import Warehouse
+
+    for i in range(1, 10):
+        db_session.add(
+            Warehouse(
+                organisation_id=organisation.id,
+                code=f"00003{i}",
+                name=f"Warehouse {i}",
+                total_usable_storage_area=100,
+                storage_area_unit_of_measure_id=kilogram_unit.id,
+                is_active=True,
+            )
+        )
+    db_session.commit()
+
+    headers = _login_headers(client, "admin_person")
+    response = client.post(
+        "/api/warehouses",
+        json={
+            "name": "One Too Many",
+            "total_usable_storage_area": "100",
+            "storage_area_unit_of_measure_id": kilogram_unit.id,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 400
 
 
 # --- update (reconfiguring capacity without a code change) -------------

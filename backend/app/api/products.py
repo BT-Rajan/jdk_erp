@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.id_formats import PRODUCT_CODE
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import (
@@ -37,6 +38,13 @@ _SORT_FIELDS = {
     "selling_price": Product.selling_price,
     "created_at": Product.created_at,
 }
+
+_MAX_CODE_ATTEMPTS = 5
+
+
+def _generate_product_code(db: Session, organisation_id: int) -> str:
+    existing = db.query(Product).filter(Product.organisation_id == organisation_id).count()
+    return PRODUCT_CODE.format(existing + 1)
 
 
 def _get_product_in_org(db: Session, product_id: int, organisation_id: int) -> Product:
@@ -130,31 +138,41 @@ def create_product(
     db: Session = Depends(get_db),
 ) -> Product:
     """Admin-gated (same shape as every other master-data mutation).
-    `code` is caller-supplied and required, unlike Customer/Supplier's
-    auto-generated codes -- jdk_clean's real Product code is manually
-    assigned (docs/audit/PRODUCTS_AUDIT.md #2), so this preserves that
-    established behaviour rather than silently switching to
-    auto-generation."""
+    `code` is system-generated and retried against a collision, same
+    pattern Supplier/Customer already use (per explicit user instruction,
+    superseding this module's original caller-supplied code -- see
+    docs/audit/PRODUCTS_AUDIT.md #2 for the now-superseded jdk_clean
+    precedent)."""
     _resolve_active_category(db, payload.category_id, admin.organisation_id)
     _resolve_active_unit(db, payload.unit_of_measure_id, admin.organisation_id)
 
-    product = Product(
-        organisation_id=admin.organisation_id,
-        code=payload.code,
-        name=payload.name,
-        category_id=payload.category_id,
-        unit_of_measure_id=payload.unit_of_measure_id,
-        description=payload.description,
-        selling_price=payload.selling_price,
-        manufacturing_lead_time_days=payload.manufacturing_lead_time_days,
-        customer_lead_time_days=payload.customer_lead_time_days,
-    )
-    db.add(product)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise ConflictError("A product with this code or name already exists.") from exc
+    product: Product | None = None
+    last_error: IntegrityError | None = None
+    for _ in range(_MAX_CODE_ATTEMPTS):
+        code = _generate_product_code(db, admin.organisation_id)
+        product = Product(
+            organisation_id=admin.organisation_id,
+            code=code,
+            name=payload.name,
+            category_id=payload.category_id,
+            unit_of_measure_id=payload.unit_of_measure_id,
+            description=payload.description,
+            selling_price=payload.selling_price,
+            manufacturing_lead_time_days=payload.manufacturing_lead_time_days,
+            customer_lead_time_days=payload.customer_lead_time_days,
+        )
+        db.add(product)
+        try:
+            db.flush()
+            last_error = None
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+    if last_error is not None or product is None:
+        raise ConflictError(
+            "A product with this name already exists, or a unique code could not be generated."
+        ) from last_error
 
     audit_service.log_event(
         db,

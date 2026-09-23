@@ -2,6 +2,7 @@ import { Route, Routes } from 'react-router-dom'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { RequireAuth } from '@/components/routing/RequireAuth'
 import { AuthProvider } from '@/lib/auth/AuthContext'
+import { BomsPage } from '@/pages/BomsPage'
 import { CategoriesPage } from '@/pages/CategoriesPage'
 import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
@@ -45,6 +46,7 @@ export function App() {
           <Route path="/production-lines" element={<ProductionLinesPage />} />
           <Route path="/machines" element={<MachinesPage />} />
           <Route path="/warehouses" element={<WarehousesPage />} />
+          <Route path="/boms" element={<BomsPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

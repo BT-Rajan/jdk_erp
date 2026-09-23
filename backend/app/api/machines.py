@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
+from app.core.id_formats import MACHINE_CODE
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import MASTER_DATA_MODULE, MACHINE_CREATED, MACHINE_STATUS_CHANGED, MACHINE_UPDATED
@@ -31,6 +32,18 @@ _SORT_FIELDS = {
     "name": Machine.name,
     "created_at": Machine.created_at,
 }
+
+_MAX_CODE_ATTEMPTS = 5
+
+
+def _generate_machine_code(db: Session, organisation_id: int) -> str:
+    existing = db.query(Machine).filter(Machine.organisation_id == organisation_id).count()
+    try:
+        return MACHINE_CODE.format(existing + 1)
+    except ValueError as exc:
+        raise BusinessRuleError(
+            "The maximum number of machines has been reached. Contact support to raise this limit."
+        ) from exc
 
 
 def _get_machine_in_org(db: Session, machine_id: int, organisation_id: int) -> Machine:
@@ -118,26 +131,36 @@ def create_machine(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> Machine:
-    """Admin-gated. `code` is caller-supplied and required, with no
-    update path (see MachineUpdateRequest)."""
+    """Admin-gated. `code` is system-generated and retried against a
+    collision, with no update path (see MachineUpdateRequest)."""
     _resolve_active_production_line(db, payload.production_line_id, admin.organisation_id)
     _resolve_active_unit(db, payload.capacity_unit_of_measure_id, admin.organisation_id)
 
-    machine = Machine(
-        organisation_id=admin.organisation_id,
-        code=payload.code,
-        name=payload.name,
-        production_line_id=payload.production_line_id,
-        capacity_quantity=payload.capacity_quantity,
-        capacity_unit_of_measure_id=payload.capacity_unit_of_measure_id,
-        capacity_period_hours=payload.capacity_period_hours,
-    )
-    db.add(machine)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise ConflictError("A machine with this code or name already exists.") from exc
+    machine: Machine | None = None
+    last_error: IntegrityError | None = None
+    for _ in range(_MAX_CODE_ATTEMPTS):
+        code = _generate_machine_code(db, admin.organisation_id)
+        machine = Machine(
+            organisation_id=admin.organisation_id,
+            code=code,
+            name=payload.name,
+            production_line_id=payload.production_line_id,
+            capacity_quantity=payload.capacity_quantity,
+            capacity_unit_of_measure_id=payload.capacity_unit_of_measure_id,
+            capacity_period_hours=payload.capacity_period_hours,
+        )
+        db.add(machine)
+        try:
+            db.flush()
+            last_error = None
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+    if last_error is not None or machine is None:
+        raise ConflictError(
+            "A machine with this name already exists, or a unique code could not be generated."
+        ) from last_error
 
     audit_service.log_event(
         db,

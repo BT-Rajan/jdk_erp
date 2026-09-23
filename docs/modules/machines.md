@@ -34,14 +34,22 @@ machine is added.
 
 ## 3. Core fields
 
-**ProductionLine**: id, code (required, manually entered, immutable
+**ProductionLine**: id, code (required, system-generated, immutable
 after creation), name (required), active/inactive state, organisation,
 timestamps. Nothing else — no line balancing, work centres, or routing.
 
-**Machine**: id, code (required, manually entered, immutable), name
+**Machine**: id, code (required, system-generated, immutable), name
 (required), production line (required FK, must be active and in the
 caller's own organisation), production capacity (required, structured —
 see #4), active/inactive state, organisation, timestamps.
+
+**Code generation** (per explicit user instruction, superseding both
+masters' original manually-entered code): ProductionLine/Machine/
+Warehouse share a distinct `0000`-prefixed shape from the other Phase 2
+masters — `app/core/id_formats.PRODUCTION_LINE_CODE`/`MACHINE_CODE`:
+`"00001"`/`"00002"` + one free digit, capping each master at 9 records
+(a real, intentional business limit for these small, effectively-fixed-
+size masters, surfaced as a 400 rather than an unhandled error if hit).
 
 ## 4. Production capacity
 
@@ -338,7 +346,7 @@ Per [`../ENGINEERING_PRINCIPLES.md`](../ENGINEERING_PRINCIPLES.md) §16
 ("Audit before changing"): see
 [`../audit/MACHINES_AUDIT.md`](../audit/MACHINES_AUDIT.md). `ProductionLine`
 mirrors Category's plain admin-gated CRUD shape exactly. `Machine`
-mirrors Product's shape — caller-supplied immutable code, required
+mirrors Product's shape — system-generated immutable code, required
 active-and-same-organisation FK validation (for both `production_line_id`
 and `capacity_unit_of_measure_id`) — plus the one new element this
 module introduces: three structured capacity columns instead of a single

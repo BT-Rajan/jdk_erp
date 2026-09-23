@@ -50,7 +50,6 @@ interface WarehousesFilters {
 const DECIMAL_RE = /^\d+(\.\d+)?$/
 
 const warehouseSchema = z.object({
-  code: z.string().min(1, 'Code is required'),
   name: z.string().min(1, 'Name is required'),
   total_usable_storage_area: z
     .string()
@@ -62,7 +61,6 @@ const warehouseSchema = z.object({
 type WarehouseFormValues = z.infer<typeof warehouseSchema>
 
 const emptyDefaults: WarehouseFormValues = {
-  code: '',
   name: '',
   total_usable_storage_area: '',
   storage_area_unit_of_measure_id: '',
@@ -70,7 +68,6 @@ const emptyDefaults: WarehouseFormValues = {
 
 function toFormValues(warehouse: Warehouse): WarehouseFormValues {
   return {
-    code: warehouse.code,
     name: warehouse.name,
     total_usable_storage_area: warehouse.total_usable_storage_area,
     storage_area_unit_of_measure_id: String(warehouse.storage_area_unit_of_measure_id),
@@ -110,8 +107,9 @@ async function fetchWarehouses({
  * GET /api/units-of-measure, the same pattern Machine's Capacity Unit
  * dropdown already established. No stock/utilisation summaries are
  * shown -- Inventory doesn't exist yet to source them from
- * (docs/modules/warehouses.md #22). The Code field is visibly disabled
- * on Edit, same treatment as every other manually-assigned master code. */
+ * (docs/modules/warehouses.md #22). `code` is system-generated and
+ * immutable -- there is no Code input on Create; the Edit dialog shows
+ * it disabled purely for reference. */
 export function WarehousesPage() {
   const { user: currentUser } = useAuth()
   const canManage = isAdminRole(currentUser?.role)
@@ -195,7 +193,7 @@ export function WarehousesPage() {
         if (editingWarehouse) {
           await apiClient.patch(`/api/warehouses/${editingWarehouse.id}`, payload)
         } else {
-          await apiClient.post('/api/warehouses', { ...payload, code: values.code })
+          await apiClient.post('/api/warehouses', payload)
         }
         setFormOpen(false)
         table.refetch()
@@ -319,14 +317,9 @@ export function WarehousesPage() {
             submitLabel={editingWarehouse ? 'Save' : 'Create warehouse'}
           >
             <Alert variant="danger">{formError}</Alert>
-            <TextField
-              label="Code"
-              required
-              disabled={!!editingWarehouse}
-              hint={editingWarehouse ? 'Code cannot be changed after creation.' : undefined}
-              {...register('code')}
-              error={errors.code?.message}
-            />
+            {editingWarehouse && (
+              <TextField label="Code" disabled readOnly hint="System-generated. Cannot be changed." value={editingWarehouse.code} />
+            )}
             <TextField label="Name" required {...register('name')} error={errors.name?.message} />
             <TextField
               label="Total Usable Storage Area"

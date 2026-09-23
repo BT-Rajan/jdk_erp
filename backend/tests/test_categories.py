@@ -25,7 +25,7 @@ def test_categories_list_requires_authentication(client, active_user):
 def test_list_categories_returns_only_my_organisation(
     client, active_user, electronics_category, other_organisation, db_session
 ):
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
 
@@ -38,7 +38,7 @@ def test_list_categories_returns_only_my_organisation(
 
 
 def test_get_category_in_other_organisation_returns_404(client, active_user, other_organisation, db_session):
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     db_session.refresh(other_category)
@@ -55,7 +55,7 @@ def test_get_nonexistent_category_returns_404(client, active_user):
 
 
 def test_list_categories_excludes_inactive_by_default(client, active_user, organisation, db_session):
-    inactive = Category(organisation_id=organisation.id, name="Discontinued", is_active=False)
+    inactive = Category(organisation_id=organisation.id, name="Discontinued", code="DISC", is_active=False)
     db_session.add(inactive)
     db_session.commit()
 
@@ -84,22 +84,25 @@ def test_list_categories_search_narrows_by_name_or_code(client, active_user, ele
 
 
 def test_category_name_unique_within_organisation_but_not_across(db_session, organisation, other_organisation):
-    category_a = Category(organisation_id=organisation.id, name="Electronics", is_active=True)
+    category_a = Category(organisation_id=organisation.id, name="Electronics", code="ELEC1", is_active=True)
     db_session.add(category_a)
     db_session.commit()
 
-    duplicate_in_same_org = Category(organisation_id=organisation.id, name="Electronics", is_active=True)
+    duplicate_in_same_org = Category(organisation_id=organisation.id, name="Electronics", code="ELEC2", is_active=True)
     db_session.add(duplicate_in_same_org)
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
 
-    same_name_other_org = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    same_name_other_org = Category(organisation_id=other_organisation.id, name="Electronics", code="ELEC1", is_active=True)
     db_session.add(same_name_other_org)
     db_session.commit()  # must not raise -- per-organisation uniqueness only
 
 
-def test_category_code_unique_within_organisation_when_provided(db_session, organisation):
+def test_category_code_unique_within_organisation_but_not_across(db_session, organisation, other_organisation):
+    """code is now system-generated and required (docs/modules/categories.md
+    #4) -- still DB-enforced unique per organisation, same as every
+    other master's code."""
     category_a = Category(organisation_id=organisation.id, name="Electronics", code="ELEC", is_active=True)
     db_session.add(category_a)
     db_session.commit()
@@ -110,11 +113,9 @@ def test_category_code_unique_within_organisation_when_provided(db_session, orga
         db_session.commit()
     db_session.rollback()
 
-    # Multiple categories with no code at all must still be allowed.
-    no_code_a = Category(organisation_id=organisation.id, name="No Code A", is_active=True)
-    no_code_b = Category(organisation_id=organisation.id, name="No Code B", is_active=True)
-    db_session.add_all([no_code_a, no_code_b])
-    db_session.commit()  # must not raise
+    same_code_other_org = Category(organisation_id=other_organisation.id, name="Electronics", code="ELEC", is_active=True)
+    db_session.add(same_code_other_org)
+    db_session.commit()  # must not raise -- per-organisation uniqueness only
 
 
 # --- create ------------------------------------------------------------
@@ -134,12 +135,14 @@ def test_create_category_requires_authentication(client, admin_user):
 def test_admin_can_create_category(client, db_session, admin_user):
     headers = _login_headers(client, "admin_person")
     response = client.post(
-        "/api/categories", json={"name": "Electronics", "code": "ELEC", "description": "Electronic parts"}, headers=headers
+        "/api/categories", json={"name": "Electronics", "description": "Electronic parts"}, headers=headers
     )
     assert response.status_code == 201
     body = response.json()
     assert body["name"] == "Electronics"
-    assert body["code"] == "ELEC"
+    # code is system-generated: prefix "5" + a 5-digit per-organisation
+    # sequence (docs/modules/categories.md #4) -- never caller-supplied.
+    assert body["code"] == "500001"
     assert body["is_active"] is True
     assert body["organisation_id"] == admin_user.organisation_id
 
@@ -152,6 +155,26 @@ def test_admin_can_create_category(client, db_session, admin_user):
     assert event.details == "name: Electronics"
 
 
+def test_create_category_ignores_a_caller_supplied_code(client, admin_user):
+    """`code` is never accepted from the request body -- sending one is
+    silently ignored, not an error, since the schema simply has no such
+    field to bind it to."""
+    headers = _login_headers(client, "admin_person")
+    response = client.post(
+        "/api/categories", json={"name": "Electronics", "code": "HACKED"}, headers=headers
+    )
+    assert response.status_code == 201
+    assert response.json()["code"] == "500001"
+
+
+def test_create_category_generates_sequential_codes(client, admin_user):
+    headers = _login_headers(client, "admin_person")
+    first = client.post("/api/categories", json={"name": "Electronics"}, headers=headers)
+    second = client.post("/api/categories", json={"name": "Chemicals"}, headers=headers)
+    assert first.json()["code"] == "500001"
+    assert second.json()["code"] == "500002"
+
+
 def test_create_category_rejects_blank_name(client, admin_user):
     headers = _login_headers(client, "admin_person")
     response = client.post("/api/categories", json={"name": "   "}, headers=headers)
@@ -161,14 +184,6 @@ def test_create_category_rejects_blank_name(client, admin_user):
 def test_create_category_rejects_duplicate_name(client, admin_user, electronics_category):
     headers = _login_headers(client, "admin_person")
     response = client.post("/api/categories", json={"name": electronics_category.name}, headers=headers)
-    assert response.status_code == 409
-
-
-def test_create_category_rejects_duplicate_code(client, admin_user, electronics_category):
-    headers = _login_headers(client, "admin_person")
-    response = client.post(
-        "/api/categories", json={"name": "Something Else", "code": electronics_category.code}, headers=headers
-    )
     assert response.status_code == 409
 
 
@@ -243,7 +258,7 @@ def test_edit_category_rejects_blank_name(client, admin_user, electronics_catego
 def test_edit_category_rejects_a_name_already_used_by_another_category(
     client, db_session, admin_user, electronics_category, organisation
 ):
-    other = Category(organisation_id=organisation.id, name="Hardware", is_active=True)
+    other = Category(organisation_id=organisation.id, name="Hardware", code="HW", is_active=True)
     db_session.add(other)
     db_session.commit()
     db_session.refresh(other)
@@ -257,7 +272,7 @@ def test_edit_category_rejects_a_name_already_used_by_another_category(
 
 
 def test_edit_category_in_other_organisation_returns_404(client, admin_user, other_organisation, db_session):
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", is_active=True)
+    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     db_session.refresh(other_category)

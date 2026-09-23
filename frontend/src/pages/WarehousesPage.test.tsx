@@ -101,14 +101,14 @@ describe('WarehousesPage', () => {
     await waitFor(() => expect(screen.getByText('No matching warehouses')).toBeInTheDocument())
   })
 
-  it('creating a warehouse posts the payload including code and structured capacity', async () => {
-    postMock.mockResolvedValue({ data: makeWarehouse({ id: 2, name: 'Second Warehouse', code: 'WH-002' }) })
+  it('creating a warehouse posts the payload including structured capacity, with no code field', async () => {
+    postMock.mockResolvedValue({ data: makeWarehouse({ id: 2, name: 'Second Warehouse', code: '000031' }) })
     render(<WarehousesPage />)
     await screen.findByText('Factory Warehouse')
     getMock.mockClear()
 
     await userEvent.click(screen.getByRole('button', { name: 'New Warehouse' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'WH-002')
+    expect(screen.queryByLabelText('Code')).not.toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Name'), 'Second Warehouse')
     await userEvent.type(screen.getByLabelText('Total Usable Storage Area'), '3000')
     await userEvent.selectOptions(screen.getByLabelText('Storage Area Unit'), '20')
@@ -118,7 +118,6 @@ describe('WarehousesPage', () => {
       expect(postMock).toHaveBeenCalledWith(
         '/api/warehouses',
         expect.objectContaining({
-          code: 'WH-002',
           name: 'Second Warehouse',
           total_usable_storage_area: '3000',
           storage_area_unit_of_measure_id: 20,
@@ -132,7 +131,6 @@ describe('WarehousesPage', () => {
     await screen.findByText('Factory Warehouse')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Warehouse' }))
-    await userEvent.type(screen.getByLabelText('Code'), 'WH-002')
     await userEvent.type(screen.getByLabelText('Name'), 'Second Warehouse')
     await userEvent.type(screen.getByLabelText('Total Usable Storage Area'), '0')
     await userEvent.selectOptions(screen.getByLabelText('Storage Area Unit'), '20')

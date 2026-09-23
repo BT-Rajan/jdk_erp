@@ -16,23 +16,14 @@ class WarehouseOut(BaseModel):
 
 
 class WarehouseCreateRequest(BaseModel):
-    """organisation_id is never part of this payload. `code` IS part of
-    this payload and required, with no update path (see
+    """organisation_id and code are never part of this payload -- code
+    is system-generated, with no update path (see
     WarehouseUpdateRequest) -- a stable identifier a future Inventory
     module will reference should not silently change."""
 
-    code: str
     name: str
     total_usable_storage_area: Decimal
     storage_area_unit_of_measure_id: int
-
-    @field_validator("code")
-    @classmethod
-    def _check_code(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Code is required.")
-        return value
 
     @field_validator("name")
     @classmethod

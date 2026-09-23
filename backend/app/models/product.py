@@ -29,13 +29,13 @@ class Product(Base, TimestampMixin, OrganisationScopedMixin):
     exists anywhere in jdk_clean, and jdk_erp has no logistics/Delivery
     consumer for either yet.
 
-    `code` is REQUIRED and manually entered, unlike Customer/Supplier's
-    auto-generated codes -- the audit found jdk_clean's Product code is
-    manually assigned and immutable after creation (no update path for
-    it at all), and the spec is explicit: "Do not silently change
-    established business behavior." `code` is therefore absent from
-    ProductUpdateRequest, the same way jdk_clean's own update schema
-    omits it.
+    `code` is system-generated (`app/core/id_formats.PRODUCT_CODE`) and
+    immutable after creation (no update path for it at all) -- per
+    explicit user instruction that every Phase 2 master's code be
+    auto-assigned, superseding this module's original manually-entered
+    code (the audit found jdk_clean's own Product code was manually
+    assigned; that precedent no longer applies). `code` is absent from
+    ProductUpdateRequest either way.
 
     `customer_lead_time_days` and `manufacturing_lead_time_days` are
     deliberately distinct, simple reference values -- jdk_clean has

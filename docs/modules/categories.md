@@ -16,11 +16,31 @@ generic classification engine.
 
 ## 2. Category record
 
-A category has: id, name, code (optional short identifier), description
-(optional), active/inactive state, organisation ownership, created/updated
-timestamps. No hierarchy — nothing in the legacy audit or JDK's current
-scale justifies a parent/child tree (see
+A category has: id, name, code, description (optional), active/inactive
+state, organisation ownership, created/updated timestamps. No hierarchy —
+nothing in the legacy audit or JDK's current scale justifies a
+parent/child tree (see
 [`../audit/CATEGORIES_AUDIT.md`](../audit/CATEGORIES_AUDIT.md)).
+
+**Updated by explicit user instruction**: `code` is now required and
+system-generated, not the optional/caller-editable field originally
+described here — see §4a below. This is a deliberate, later reversal of
+this section's own original decision, not a silent one.
+
+## 4a. Code generation
+
+Every Phase 2 master's own identifying code is a fixed 6-digit,
+all-numeric, system-assigned value, never caller-supplied or editable
+(per explicit user instruction) — `app/core/id_formats.CATEGORY_CODE`
+generates Category's own: prefix `5` + a 5-digit per-organisation
+sequence (e.g. `500001`, `500002`, ...), assigned the same way
+Customer/Supplier's own codes already were (existing count + 1, retried
+against a collision under `IntegrityError`) — see
+[`boms.md`](boms.md)'s sibling modules for the full per-entity prefix
+table (Raw Material `1`, Product `2`, Customer `3`, Supplier `4`,
+Category `5`; Production Line/Machine/Warehouse share a `0000`-prefixed
+shape instead, capped at 9 records each). Never a hierarchy-encoding or
+otherwise meaningful code — purely a stable, unique reference id.
 
 ## 3. Category usage
 

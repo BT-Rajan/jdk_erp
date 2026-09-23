@@ -269,6 +269,176 @@ def warehouse_1(db_session, organisation, kilogram_unit):
 
 
 @pytest.fixture()
+def mass_kilogram_unit(db_session, organisation):
+    """Kilogram configured as the "mass" dimension's base unit
+    (conversion_factor_to_base=1) -- distinct from the plain
+    `kilogram_unit` fixture (which deliberately carries no dimension) so
+    existing tests relying on that fixture's shape are never affected by
+    BOM's conversion fields."""
+    unit = UnitOfMeasure(
+        organisation_id=organisation.id,
+        name="Mass Kilogram",
+        code="KG-M",
+        dimension="mass",
+        conversion_factor_to_base=1,
+        is_active=True,
+    )
+    db_session.add(unit)
+    db_session.commit()
+    db_session.refresh(unit)
+    return unit
+
+
+@pytest.fixture()
+def mass_tonne_unit(db_session, organisation):
+    """1 tonne = 1000 kg, same "mass" dimension as `mass_kilogram_unit`
+    (docs/modules/boms.md #3 -- Case A, universal conversion)."""
+    unit = UnitOfMeasure(
+        organisation_id=organisation.id,
+        name="Tonne",
+        code="TON-M",
+        dimension="mass",
+        conversion_factor_to_base=1000,
+        is_active=True,
+    )
+    db_session.add(unit)
+    db_session.commit()
+    db_session.refresh(unit)
+    return unit
+
+
+@pytest.fixture()
+def volume_litre_unit(db_session, organisation):
+    """No dimension shared with `mass_kilogram_unit`/`mass_tonne_unit` --
+    a litre can only be related to a mass unit via a material-specific
+    conversion (docs/modules/boms.md #3 -- Case B), never a universal
+    one."""
+    unit = UnitOfMeasure(
+        organisation_id=organisation.id,
+        name="Litre",
+        code="L-M",
+        dimension="volume",
+        conversion_factor_to_base=1,
+        is_active=True,
+    )
+    db_session.add(unit)
+    db_session.commit()
+    db_session.refresh(unit)
+    return unit
+
+
+@pytest.fixture()
+def bag_unit(db_session, organisation):
+    """No dimension at all -- a packaging unit, never universally
+    convertible to anything (docs/modules/boms.md #3 -- Case B)."""
+    unit = UnitOfMeasure(organisation_id=organisation.id, name="Bag", code="BAG-M", is_active=True)
+    db_session.add(unit)
+    db_session.commit()
+    db_session.refresh(unit)
+    return unit
+
+
+@pytest.fixture()
+def product_tonne(db_session, organisation, electronics_category, mass_tonne_unit):
+    """Product A, stocked/produced in tonnes -- the BOM spec's own worked
+    example (docs/modules/boms.md #1)."""
+    product = Product(
+        organisation_id=organisation.id,
+        code="PRD-TON",
+        name="Product A",
+        category_id=electronics_category.id,
+        unit_of_measure_id=mass_tonne_unit.id,
+        selling_price=100,
+        is_active=True,
+    )
+    db_session.add(product)
+    db_session.commit()
+    db_session.refresh(product)
+    return product
+
+
+@pytest.fixture()
+def material_m_kg(db_session, organisation, electronics_category, mass_kilogram_unit):
+    """Material M, stocked in kg -- same "mass" dimension as
+    `product_tonne`'s tonne, so it converts via the universal
+    dimensional ratio alone, no material-specific configuration needed."""
+    material = RawMaterial(
+        organisation_id=organisation.id,
+        code="RM-M",
+        name="Material M",
+        category_id=electronics_category.id,
+        unit_of_measure_id=mass_kilogram_unit.id,
+        is_active=True,
+    )
+    db_session.add(material)
+    db_session.commit()
+    db_session.refresh(material)
+    return material
+
+
+@pytest.fixture()
+def material_n_litre_with_density(db_session, organisation, electronics_category, volume_litre_unit, mass_kilogram_unit):
+    """Material N, stocked in litres, with a configured material-specific
+    density conversion: 1 litre of N = 1.25 kg (docs/modules/boms.md #3
+    -- Case B)."""
+    material = RawMaterial(
+        organisation_id=organisation.id,
+        code="RM-N",
+        name="Material N",
+        category_id=electronics_category.id,
+        unit_of_measure_id=volume_litre_unit.id,
+        alternate_conversion_unit_of_measure_id=mass_kilogram_unit.id,
+        alternate_conversion_factor="1.25",
+        is_active=True,
+    )
+    db_session.add(material)
+    db_session.commit()
+    db_session.refresh(material)
+    return material
+
+
+@pytest.fixture()
+def material_p_bag_with_packaging(db_session, organisation, electronics_category, bag_unit, mass_kilogram_unit):
+    """Material P, stocked in bags, with a configured material-specific
+    packaging conversion: 1 bag of P = 25 kg (docs/modules/boms.md #3 --
+    Case B)."""
+    material = RawMaterial(
+        organisation_id=organisation.id,
+        code="RM-P",
+        name="Material P",
+        category_id=electronics_category.id,
+        unit_of_measure_id=bag_unit.id,
+        alternate_conversion_unit_of_measure_id=mass_kilogram_unit.id,
+        alternate_conversion_factor="25",
+        is_active=True,
+    )
+    db_session.add(material)
+    db_session.commit()
+    db_session.refresh(material)
+    return material
+
+
+@pytest.fixture()
+def material_no_conversion_litre(db_session, organisation, electronics_category, volume_litre_unit):
+    """Material stocked in litres with no material-specific conversion
+    configured at all -- used to prove an ambiguous Product<->Material
+    relationship is blocked, never silently assumed
+    (docs/modules/boms.md #5/#9)."""
+    material = RawMaterial(
+        organisation_id=organisation.id,
+        code="RM-NOCONV",
+        name="Material No Conversion",
+        category_id=electronics_category.id,
+        unit_of_measure_id=volume_litre_unit.id,
+        is_active=True,
+    )
+    db_session.add(material)
+    db_session.commit()
+    db_session.refresh(material)
+    return material
+
+
+@pytest.fixture()
 def admin_user(db_session, organisation):
     user = User(
         organisation_id=organisation.id,

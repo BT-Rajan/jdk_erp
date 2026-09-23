@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import (
@@ -103,6 +103,8 @@ def create_unit(
         name=payload.name,
         code=payload.code,
         description=payload.description,
+        dimension=payload.dimension,
+        conversion_factor_to_base=payload.conversion_factor_to_base,
     )
     db.add(unit)
     try:
@@ -145,6 +147,23 @@ def update_unit(
     before = {field: getattr(unit, field) for field in updates}
     for field, value in updates.items():
         setattr(unit, field, value)
+
+    if "dimension" in updates or "conversion_factor_to_base" in updates:
+        # A partial update can only see the fields actually sent -- check
+        # the *merged* post-update state so a caller can't silently leave
+        # a half-configured dimension/factor pair by omitting one side
+        # (docs/modules/boms.md #3).
+        if (unit.dimension is None) != (unit.conversion_factor_to_base is None):
+            raise ValidationError(
+                "dimension and conversion_factor_to_base must be provided together, or not at all.",
+                fields={"conversion_factor_to_base": "Must be set together with dimension, or both left unset."},
+            )
+        if unit.conversion_factor_to_base is not None and unit.conversion_factor_to_base <= 0:
+            raise ValidationError(
+                "conversion_factor_to_base must be greater than zero.",
+                fields={"conversion_factor_to_base": "Must be greater than zero."},
+            )
+
     db.add(unit)
 
     try:

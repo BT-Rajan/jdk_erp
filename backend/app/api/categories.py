@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.errors import ConflictError, NotFoundError
+from app.core.id_formats import CATEGORY_CODE
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import (
@@ -34,6 +35,13 @@ _SORT_FIELDS = {
     "code": Category.code,
     "created_at": Category.created_at,
 }
+
+_MAX_CODE_ATTEMPTS = 5
+
+
+def _generate_category_code(db: Session, organisation_id: int) -> str:
+    existing = db.query(Category).filter(Category.organisation_id == organisation_id).count()
+    return CATEGORY_CODE.format(existing + 1)
 
 
 def _get_category_in_org(db: Session, category_id: int, organisation_id: int) -> Category:
@@ -95,19 +103,31 @@ def create_category(
     """Admin-gated (docs/modules/categories.md #5), the same RBAC gate
     Teams/Users mutations already use -- no category-specific
     authorization layer. organisation_id always comes from the
-    authenticated admin, never the request body."""
-    category = Category(
-        organisation_id=admin.organisation_id,
-        name=payload.name,
-        code=payload.code,
-        description=payload.description,
-    )
-    db.add(category)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise ConflictError("A category with this name or code already exists.") from exc
+    authenticated admin, never the request body. `code` is system-
+    generated and retried against a collision the same way Supplier/
+    Customer already do (docs/modules/categories.md #4)."""
+    category: Category | None = None
+    last_error: IntegrityError | None = None
+    for _ in range(_MAX_CODE_ATTEMPTS):
+        code = _generate_category_code(db, admin.organisation_id)
+        category = Category(
+            organisation_id=admin.organisation_id,
+            name=payload.name,
+            code=code,
+            description=payload.description,
+        )
+        db.add(category)
+        try:
+            db.flush()
+            last_error = None
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+    if last_error is not None or category is None:
+        raise ConflictError(
+            "A category with this name already exists, or a unique code could not be generated."
+        ) from last_error
 
     audit_service.log_event(
         db,

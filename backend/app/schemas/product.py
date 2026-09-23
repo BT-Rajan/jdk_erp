@@ -20,14 +20,13 @@ class ProductOut(BaseModel):
 
 
 class ProductCreateRequest(BaseModel):
-    """organisation_id is never part of this payload -- the endpoint
-    always takes it from the authenticated admin. Unlike Customer/
-    Supplier, `code` IS part of this payload and required: jdk_clean's
-    real Product code is manually assigned, not auto-generated
-    (docs/audit/PRODUCTS_AUDIT.md #2), and the spec is explicit about not
-    silently changing that established behaviour."""
+    """organisation_id and code are never part of this payload -- the
+    endpoint always takes organisation from the authenticated admin and
+    generates code server-side, same as every other Phase 2 master
+    (per explicit user instruction, superseding this module's original
+    caller-supplied code -- see docs/audit/PRODUCTS_AUDIT.md #2 for the
+    now-superseded jdk_clean precedent)."""
 
-    code: str
     name: str
     category_id: int
     unit_of_measure_id: int
@@ -35,14 +34,6 @@ class ProductCreateRequest(BaseModel):
     selling_price: Decimal
     manufacturing_lead_time_days: int | None = None
     customer_lead_time_days: int | None = None
-
-    @field_validator("code")
-    @classmethod
-    def _check_code(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Code is required.")
-        return value
 
     @field_validator("name")
     @classmethod

@@ -314,12 +314,17 @@ across every module).
 - **Units of Measure** (`src/pages/UnitsOfMeasurePage.tsx`) -- the
   frontend for `backend/app/api/units.py`
   (`docs/modules/units_of_measure.md`), composed identically to
-  `CategoriesPage` and nav-gated alongside it under **Master Data**. No
-  conversion UI of any kind (see the module's own audit -- jdk_clean
-  tried that once and removed it). The Code field's hint text ("Stored
-  upper-case") reflects the backend's normalization rather than
-  duplicating it client-side. 10 new tests
-  (`UnitsOfMeasurePage.test.tsx`), same coverage shape as
+  `CategoriesPage` and nav-gated alongside it under **Master Data**. The
+  Symbol field's hint text ("Stored upper-case") reflects the backend's
+  normalization rather than duplicating it client-side. Since BOM
+  (`docs/modules/boms.md` #3): two optional fields, **Dimension** and
+  **Conversion Factor to Base**, always submitted together or both left
+  blank (a client-side Zod `.refine` catches a half-filled pair before
+  it ever reaches the server) -- the universal-conversion half of BOM's
+  two conversion mechanisms; the material-specific half lives on Raw
+  Material instead (see below), never here. 12 tests
+  (`UnitsOfMeasurePage.test.tsx`, 10 original + 2 for the Dimension/
+  Conversion Factor pairing), same coverage shape as
   `CategoriesPage.test.tsx`.
 
 - **Customers** (`src/pages/CustomersPage.tsx`) -- the frontend for
@@ -364,7 +369,7 @@ across every module).
   view, error state, empty-vs-no-match states, debounced search, create
   (success and a server-side name conflict surfacing as a form error),
   edit (pre-filled form, PATCH), and deactivate. Verified live against a
-  real backend: creating a supplier showed the auto-generated `SUP0001`
+  real backend: creating a supplier showed the auto-generated `400001`
   code and digits-only-normalized phone immediately, a duplicate name
   surfaced its 409 inline, a team_member saw the same list with no
   mutating controls, and deactivating updated the status badge.
@@ -380,10 +385,12 @@ across every module).
   cross-master-data relationship: Category and Unit of Measure render as
   `<select>` dropdowns of the caller's own active records, fetched once
   from the existing `GET /api/categories`/`GET /api/units-of-measure`
-  endpoints rather than a new lookup. The Product Code field is visibly
-  `disabled` (not merely omitted) on Edit, so its immutability
-  (`docs/modules/products.md` #3) is obvious in the UI, not just enforced
-  silently server-side. Manufacturing Lead Time and Customer Lead Time
+  endpoints rather than a new lookup. The Product Code has no input at
+  all on Create (it doesn't exist until the server assigns it) and
+  appears only on Edit, as a visibly `disabled`/`readOnly` field, so its
+  system-generated immutability (`docs/modules/products.md` #3) is
+  obvious in the UI, not just enforced silently server-side.
+  Manufacturing Lead Time and Customer Lead Time
   render as two separate, clearly-labelled fields with distinct hint
   text (`docs/modules/products.md` #4/#5) -- this page never combines or
   derives one from the other. 12 new tests (`ProductsPage.test.tsx`):
@@ -391,8 +398,9 @@ across every module).
   read-only view (including that a non-admin never fetches the lookup
   endpoints), error state, empty-vs-no-match states, debounced search,
   create (including a client-side invalid-price rejection and a
-  server-side code-conflict surfacing as a form error), edit (code field
-  disabled and excluded from the PATCH payload), and deactivate.
+  server-side name-conflict surfacing as a form error), edit (a
+  system-generated code shown read-only, with no Code input on create
+  at all), and deactivate.
 
 - **Raw Materials** (`src/pages/RawMaterialsPage.tsx`) -- the frontend
   for `backend/app/api/raw_materials.py`/`raw_material_suppliers.py`
@@ -409,11 +417,14 @@ across every module).
   supply quantity, and a Preferred toggle. This is the one place this
   module needed more than a flat form, matching the user's own framing
   that the relational depth belongs on the relationship, not the master.
-  14 new tests (`RawMaterialsPage.test.tsx`): the same coverage shape as
+  16 tests (`RawMaterialsPage.test.tsx`): the same coverage shape as
   `ProductsPage.test.tsx` for the master record itself, plus opening the
   Manage Suppliers dialog (empty state and a populated list with
-  resolved supplier names), adding a relationship, and removing one
-  (with confirmation).
+  resolved supplier names), adding a relationship, removing one (with
+  confirmation), and, since BOM (`docs/modules/boms.md` #3): the
+  **Alternate Conversion Unit**/**Alternate Conversion Factor** pair
+  (submitting both together, and a client-side rejection of a
+  half-filled pair).
 
 - **Production Lines** (`src/pages/ProductionLinesPage.tsx`) and
   **Machines** (`src/pages/MachinesPage.tsx`) -- the frontend for
@@ -425,7 +436,7 @@ across every module).
   concepts even at this scale -- `ProductionLinesPage` is a plain
   admin-gated list composed identically to `CategoriesPage` (Code field
   visibly disabled on Edit, same treatment as `ProductsPage`'s
-  manually-assigned code). `MachinesPage` composes identically to
+  system-generated code). `MachinesPage` composes identically to
   `ProductsPage`: a Production Line select dropdown plays the same role
   Product's Category dropdown does, and a Capacity Unit dropdown reuses
   `GET /api/units-of-measure`. Production capacity renders as three
@@ -455,6 +466,36 @@ across every module).
   states, create (including a client-side non-positive-area rejection),
   edit (code field disabled, reconfiguring capacity without touching
   code), and deactivate.
+
+- **Bills of Materials** (`src/pages/BomsPage.tsx`) -- the frontend for
+  `backend/app/api/boms.py` (`docs/modules/boms.md`/
+  `docs/audit/BOMS_AUDIT.md`), the single, unambiguous relationship
+  between a finished Product and the Raw Materials required to produce
+  a specified base quantity of it. One flat list (one row per Product
+  with a BOM: Product, Base Quantity with the Product's own unit
+  resolved from the lookup list, component count, Draft/Active status).
+  Two row actions beyond Edit/Activate: **Manage Components...** opens a
+  `Modal` (the same "list plus a separate add/edit form" shape
+  `RawMaterialsPage`'s Manage Suppliers dialog already established) with
+  the spec's own table -- Raw Material | Quantity | UoM | % |
+  Conversion Status -- where an invalid component shows a red "Invalid"
+  badge plus the exact, actionable error the backend raises (never a
+  generic failure message); every mutation re-fetches the whole BOM,
+  since a single component change can shift every other component's
+  displayed percentage. **Calculate Requirements...** is a separate,
+  read-only dialog (open to any authenticated user, not just admins,
+  matching the backend's own RBAC split) that posts a production
+  quantity and renders the resulting per-material requirement table --
+  it warns inline when the BOM is still `draft` (only an `active` BOM
+  can be used), rather than only surfacing the backend's 400 after a
+  submit attempt. 14 new tests (`BomsPage.test.tsx`): load and
+  Product-unit resolution, non-admin read-only view (Calculate
+  Requirements remains visible; Edit/Manage Components do not), error
+  state, empty-vs-no-match states, create/edit (Product field disabled
+  on edit, matching every other master's immutable-identity pattern),
+  activate, add/view/remove a component (conversion status and
+  percentage rendering), and calculating requirements both for an
+  active BOM and the draft-BOM warning path.
 
 ## Setup
 

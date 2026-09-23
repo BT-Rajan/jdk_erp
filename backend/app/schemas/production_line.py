@@ -12,16 +12,10 @@ class ProductionLineOut(BaseModel):
 
 
 class ProductionLineCreateRequest(BaseModel):
-    code: str
-    name: str
+    """code is never part of this payload -- system-generated, same as
+    every other Phase 2 master."""
 
-    @field_validator("code")
-    @classmethod
-    def _check_code(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Code is required.")
-        return value
+    name: str
 
     @field_validator("name")
     @classmethod

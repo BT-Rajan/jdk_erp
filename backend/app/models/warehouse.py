@@ -49,11 +49,9 @@ class Warehouse(Base, TimestampMixin, OrganisationScopedMixin):
     to break; that guard belongs to whichever future Inventory module
     actually depends on an active warehouse to record movements against.
 
-    `code` is manually entered and immutable after creation, the same
-    treatment already given to Product/RawMaterial/Machine's own stable
-    identifiers -- a deliberate jdk_erp convention here, not a
-    jdk_clean-audited one, since jdk_clean has nothing to audit on this
-    point."""
+    `code` is system-generated (`app/core/id_formats.WAREHOUSE_CODE`)
+    and immutable after creation, per explicit user instruction that
+    every Phase 2 master's code be auto-assigned."""
 
     __tablename__ = "warehouses"
     __table_args__ = (

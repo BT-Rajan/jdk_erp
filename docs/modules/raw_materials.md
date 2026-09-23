@@ -25,7 +25,7 @@ identifier invented by any consuming module.
 
 ## 2. Raw Material record
 
-id, code (required, manually entered, immutable after creation), name
+id, code (required, system-generated, immutable after creation), name
 (required), category (required FK to the authoritative Category master),
 unit of measure (required FK to the authoritative UnitOfMeasure master),
 description (optional — also where a business-critical specification
@@ -54,11 +54,12 @@ There must never be a second material identifier minted by a consuming
 module (a "PO material id," an "inventory material id," etc.) — this is
 the one purpose this master exists to serve.
 
-**Raw Material code**: manually entered and immutable after creation,
-matching jdk_clean's own real, established behaviour exactly (audit #2)
-— not auto-generated, the same treatment already given to Product's code
-and for the identical reason (don't silently change established business
-behavior).
+**Raw Material code**: system-generated and immutable after creation
+(`app/core/id_formats.RAW_MATERIAL_CODE`: prefix `1` + a 5-digit
+per-organisation sequence) — per explicit user instruction that every
+Phase 2 master's code be auto-assigned, superseding this section's
+original decision to match jdk_clean's own manually-assigned code
+(audit #2).
 
 ## 4. Category and Unit of Measure
 
@@ -81,6 +82,24 @@ proven to need "stocked in KG, purchased in BAG," the conversion belongs
 on `SupplierMaterial` (per-relationship, since it's inherently
 supplier/packaging-specific — Supplier A might sell in bags, Supplier B
 in bulk), not as a second UoM on Raw Material itself.
+
+## 5a. Material-specific BOM conversion
+
+**Built for BOM** ([`boms.md`](boms.md) §3,
+[`../audit/BOMS_AUDIT.md`](../audit/BOMS_AUDIT.md) §5) — distinct from
+§5's Purchase UoM (which stays unbuilt, no evidence). A material may
+optionally carry `alternate_conversion_unit_of_measure_id` +
+`alternate_conversion_factor`, meaning "1 [this material's own
+`unit_of_measure`] = `alternate_conversion_factor`
+[`alternate_conversion_unit_of_measure`]" — e.g. "1 litre of this
+Material = 1.25 kg" or "1 bag of this Material = 25 kg." Both nullable,
+always both-set-or-both-null, and the alternate unit must differ from
+the material's own unit. This is deliberately scoped to *this one
+material* — never a property of the unit itself (that would repeat
+jdk_clean's own conflated `factor_to_base` mistake, see
+`docs/modules/units_of_measure.md` §5) — and exists solely to let BOM
+validate and convert a Product↔Material relationship; it has no meaning
+or consumer outside that.
 
 ## 6. Supplier relationship
 
@@ -143,22 +162,23 @@ later change to either can never rewrite a historical purchase order.
 
 ## 8. Product → BOM → Raw Material relationship
 
-Not built yet — BOM doesn't exist in this codebase. Documented here as
-the binding boundary for whenever it is: a BOM line references the
-authoritative Raw Material by FK and owns its own required quantity;
-Raw Material never carries a "quantity required per product" field of
-any kind. jdk_clean's own BOM shape (`bom_lines.component_type` polymorphic
-raw_material/product, no real FK constraint on the polymorphic side) is
-noted in the audit (#6) as the template, not something built now.
+**Built** — see [`boms.md`](boms.md). A `BomComponent` references the
+authoritative Raw Material by FK (`RESTRICT`) and owns its own required
+quantity, in the material's own unit; `RawMaterial` still carries no
+"quantity required per product" field of any kind. jdk_clean's own BOM
+shape (`bom_lines.component_type` polymorphic raw_material/product) is
+the template for the header/line split (`docs/audit/BOMS_AUDIT.md` §1)
+— the polymorphic product-as-component half is deliberately not
+reproduced (no proven sub-assembly need; see that audit's §1).
 
 ## 9. BOM quantity boundary
 
-Restated for completeness (nothing to implement yet, since BOM doesn't
-exist): Raw Material must never carry a quantity-required-per-product,
-per-batch, wastage percentage, allocation, or consumption field. Those
-are BOM/production concepts. `RM-001 Cement` means one authoritative
-material; how much of it Product A's BOM needs, versus Product B's, are
-two independent BOM-line facts, never stored on `RawMaterial`.
+Raw Material carries no quantity-required-per-product,
+per-batch, wastage percentage, allocation, or consumption field, now
+that BOM exists to prove the boundary against: those are BOM/production
+concepts. `RM-001 Cement` means one authoritative material; how much of
+it Product A's BOM needs, versus Product B's, are two independent
+`BomComponent` facts, never stored on `RawMaterial` itself.
 
 ## 10. Procurement relationship
 
@@ -291,16 +311,19 @@ one addition: a "Manage Suppliers" action per row opening a dialog that
 lists, adds, edits, and removes that material's `SupplierMaterial`
 relationships inline — the one place this module genuinely needs more
 than a flat form, since it's a live-managed relationship, not a read-only
-summary. "Used in BOMs" and "Current Stock" summary panels are not built
-— BOM and Inventory don't exist yet to source them from; a placeholder
-with nothing to show would be dead UI, not a relationship summary.
+summary. A "Used in BOMs" summary panel is still not built here, even
+though BOM now exists ([`boms.md`](boms.md)) — that cross-reference
+belongs on the BOM screen (which already shows Raw Material per
+component), not duplicated as a second read here. "Current Stock" stays
+deferred — Inventory doesn't exist yet to source it from.
 
 ## 22. Database integrity
 
 `raw_materials`: primary key, `organisation_id` FK (`RESTRICT`, indexed),
 `category_id` FK (`RESTRICT`, indexed), `unit_of_measure_id` FK
-(`RESTRICT`, indexed), `code`/`name` required, unique per
-`(organisation_id, code)` and `(organisation_id, name)`.
+(`RESTRICT`, indexed), `alternate_conversion_unit_of_measure_id` FK
+(`RESTRICT`, indexed, nullable — see §5a), `code`/`name` required,
+unique per `(organisation_id, code)` and `(organisation_id, name)`.
 `supplier_materials`: primary key, `supplier_id` FK (`CASCADE`, indexed),
 `raw_material_id` FK (`CASCADE`, indexed), unique per
 `(supplier_id, raw_material_id)` — one relationship row per pair; edit

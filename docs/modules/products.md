@@ -16,7 +16,7 @@ maintaining its own product table or free-text product name.
 
 ## 2. Product record
 
-A product has: id, code (required, manually entered, immutable after
+A product has: id, code (required, system-generated, immutable after
 creation), name (required), category (required FK to the authoritative
 Category master), unit of measure (required FK to the authoritative
 UnitOfMeasure master), description (optional), default selling price
@@ -50,11 +50,12 @@ week later (see the audit #3) — that reversal is not followed here;
 jdk_erp's own UnitOfMeasure master already exists and is the correct
 thing to reference.
 
-**Product code**: one authoritative value, manually entered and
-immutable after creation — matching jdk_clean's own real, established
-behaviour exactly (see audit #2). Unlike Customer/Supplier, this is *not*
-auto-generated; the spec's own instruction not to silently change
-established business behavior applies directly here.
+**Product code**: one authoritative value, system-generated and
+immutable after creation — per explicit user instruction that every
+Phase 2 master's code be auto-assigned, never caller-editable
+(superseding this section's original decision to match jdk_clean's own
+manually-assigned code, audit #2). `app/core/id_formats.PRODUCT_CODE`:
+prefix `2` + a 5-digit per-organisation sequence.
 
 ## 4. Sales and Customer Lead Time
 
@@ -361,10 +362,10 @@ Per [`../ENGINEERING_PRINCIPLES.md`](../ENGINEERING_PRINCIPLES.md) §16
 [`../audit/PRODUCTS_AUDIT.md`](../audit/PRODUCTS_AUDIT.md). Structurally
 mirrors Category/Unit/Supplier's admin-gated CRUD shape (no permission-
 scope engine — Product has no ownership dimension), with two new
-elements: `code` is caller-supplied and immutable (unlike Customer/
-Supplier's auto-generated codes, preserving jdk_clean's real established
-behaviour), and `category_id`/`unit_of_measure_id` are the first
-cross-master-data foreign keys in this codebase, validated active and
+elements: `code` is system-generated and immutable, same mechanism as
+Customer/Supplier's own codes (per explicit user instruction), and
+`category_id`/`unit_of_measure_id` are the first cross-master-data
+foreign keys in this codebase, validated active and
 same-organisation on every create/update. `MASTER_DATA_MODULE` (the same
 shared audit-module constant every prior Phase 2 entity logs under) is
 reused again, not a new `PRODUCT_MODULE` constant.

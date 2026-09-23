@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.core.id_formats import PRODUCTION_LINE_CODE
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import (
@@ -34,6 +35,22 @@ _SORT_FIELDS = {
     "name": ProductionLine.name,
     "created_at": ProductionLine.created_at,
 }
+
+_MAX_CODE_ATTEMPTS = 5
+
+
+def _generate_production_line_code(db: Session, organisation_id: int) -> str:
+    existing = db.query(ProductionLine).filter(ProductionLine.organisation_id == organisation_id).count()
+    try:
+        return PRODUCTION_LINE_CODE.format(existing + 1)
+    except ValueError as exc:
+        # PRODUCTION_LINE_CODE's single free digit caps this master at 9
+        # records (docs/modules/production_lines.md) -- a real business
+        # limit here, not an internal error, so it surfaces as a clear
+        # 400 rather than an unhandled 500.
+        raise BusinessRuleError(
+            "The maximum number of production lines has been reached. Contact support to raise this limit."
+        ) from exc
 
 
 def _get_production_line_in_org(db: Session, production_line_id: int, organisation_id: int) -> ProductionLine:
@@ -90,14 +107,26 @@ def create_production_line(
 ) -> ProductionLine:
     """Admin-gated, same shape as every other master-data mutation. No
     singleton constraint is enforced -- ordinary CRUD already produces
-    "exactly one" today; see app/models/production_line.py's docstring."""
-    production_line = ProductionLine(organisation_id=admin.organisation_id, code=payload.code, name=payload.name)
-    db.add(production_line)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise ConflictError("A production line with this code or name already exists.") from exc
+    "exactly one" today; see app/models/production_line.py's docstring.
+    `code` is system-generated and retried against a collision, same
+    pattern every other master uses."""
+    production_line: ProductionLine | None = None
+    last_error: IntegrityError | None = None
+    for _ in range(_MAX_CODE_ATTEMPTS):
+        code = _generate_production_line_code(db, admin.organisation_id)
+        production_line = ProductionLine(organisation_id=admin.organisation_id, code=code, name=payload.name)
+        db.add(production_line)
+        try:
+            db.flush()
+            last_error = None
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+    if last_error is not None or production_line is None:
+        raise ConflictError(
+            "A production line with this name already exists, or a unique code could not be generated."
+        ) from last_error
 
     audit_service.log_event(
         db,

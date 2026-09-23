@@ -173,7 +173,6 @@ def test_non_admin_cannot_create_machine(client, active_user, line_1, kilogram_u
     response = client.post(
         "/api/machines",
         json={
-            "code": "M-001",
             "name": "Machine 1",
             "production_line_id": line_1.id,
             "capacity_quantity": "2",
@@ -190,7 +189,6 @@ def test_admin_can_create_machine_with_configured_capacity(client, db_session, a
     response = client.post(
         "/api/machines",
         json={
-            "code": "M-001",
             "name": "Machine 1",
             "production_line_id": line_1.id,
             "capacity_quantity": "2",
@@ -201,7 +199,10 @@ def test_admin_can_create_machine_with_configured_capacity(client, db_session, a
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["code"] == "M-001"
+    # code is system-generated: "00002" + a single per-organisation
+    # sequence digit (per explicit user instruction) -- never
+    # caller-supplied.
+    assert body["code"] == "000021"
     assert body["production_line_id"] == line_1.id
     assert body["capacity_quantity"] == "2.0000"
     assert body["capacity_unit_of_measure_id"] == kilogram_unit.id
@@ -221,7 +222,6 @@ def test_create_machine_rejects_zero_capacity(client, admin_user, line_1, kilogr
     response = client.post(
         "/api/machines",
         json={
-            "code": "M-001",
             "name": "Machine 1",
             "production_line_id": line_1.id,
             "capacity_quantity": "0",
@@ -238,7 +238,6 @@ def test_create_machine_rejects_negative_period(client, admin_user, line_1, kilo
     response = client.post(
         "/api/machines",
         json={
-            "code": "M-001",
             "name": "Machine 1",
             "production_line_id": line_1.id,
             "capacity_quantity": "2",
@@ -262,7 +261,6 @@ def test_create_machine_rejects_inactive_production_line(client, admin_user, db_
     response = client.post(
         "/api/machines",
         json={
-            "code": "M-001",
             "name": "Machine 1",
             "production_line_id": inactive_line.id,
             "capacity_quantity": "2",
@@ -288,7 +286,6 @@ def test_create_machine_rejects_cross_organisation_production_line(
     response = client.post(
         "/api/machines",
         json={
-            "code": "M-001",
             "name": "Machine 1",
             "production_line_id": other_line.id,
             "capacity_quantity": "2",
@@ -312,7 +309,6 @@ def test_create_machine_rejects_inactive_unit(client, admin_user, line_1, db_ses
     response = client.post(
         "/api/machines",
         json={
-            "code": "M-001",
             "name": "Machine 1",
             "production_line_id": line_1.id,
             "capacity_quantity": "2",
@@ -324,13 +320,13 @@ def test_create_machine_rejects_inactive_unit(client, admin_user, line_1, db_ses
     assert response.status_code == 422
 
 
-def test_create_machine_rejects_duplicate_code(client, admin_user, machine_1, line_1, kilogram_unit):
+def test_create_machine_ignores_a_caller_supplied_code(client, admin_user, line_1, kilogram_unit):
     headers = _login_headers(client, "admin_person")
     response = client.post(
         "/api/machines",
         json={
-            "code": machine_1.code,
-            "name": "Another Machine",
+            "code": "HACKED",
+            "name": "Machine 1",
             "production_line_id": line_1.id,
             "capacity_quantity": "1",
             "capacity_unit_of_measure_id": kilogram_unit.id,
@@ -338,7 +334,44 @@ def test_create_machine_rejects_duplicate_code(client, admin_user, machine_1, li
         },
         headers=headers,
     )
-    assert response.status_code == 409
+    assert response.status_code == 201
+    assert response.json()["code"] == "000021"
+
+
+def test_create_machine_rejects_an_eleventh_machine(client, admin_user, db_session, organisation, line_1, kilogram_unit):
+    """MACHINE_CODE's single free digit caps this master at 9 records
+    (docs/modules/machines.md) -- a real business limit, surfaced as a
+    clear 400 rather than an unhandled error."""
+    from app.models.machine import Machine
+
+    for i in range(1, 10):
+        db_session.add(
+            Machine(
+                organisation_id=organisation.id,
+                code=f"00002{i}",
+                name=f"Machine {i}",
+                production_line_id=line_1.id,
+                capacity_quantity=1,
+                capacity_unit_of_measure_id=kilogram_unit.id,
+                capacity_period_hours=1,
+                is_active=True,
+            )
+        )
+    db_session.commit()
+
+    headers = _login_headers(client, "admin_person")
+    response = client.post(
+        "/api/machines",
+        json={
+            "name": "One Too Many",
+            "production_line_id": line_1.id,
+            "capacity_quantity": "1",
+            "capacity_unit_of_measure_id": kilogram_unit.id,
+            "capacity_period_hours": "1",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 400
 
 
 # --- update (reconfiguring capacity without a code change) -------------

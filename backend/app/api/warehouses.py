@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
+from app.core.id_formats import WAREHOUSE_CODE
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import (
@@ -35,6 +36,18 @@ _SORT_FIELDS = {
     "name": Warehouse.name,
     "created_at": Warehouse.created_at,
 }
+
+_MAX_CODE_ATTEMPTS = 5
+
+
+def _generate_warehouse_code(db: Session, organisation_id: int) -> str:
+    existing = db.query(Warehouse).filter(Warehouse.organisation_id == organisation_id).count()
+    try:
+        return WAREHOUSE_CODE.format(existing + 1)
+    except ValueError as exc:
+        raise BusinessRuleError(
+            "The maximum number of warehouses has been reached. Contact support to raise this limit."
+        ) from exc
 
 
 def _get_warehouse_in_org(db: Session, warehouse_id: int, organisation_id: int) -> Warehouse:
@@ -107,25 +120,35 @@ def create_warehouse(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> Warehouse:
-    """Admin-gated. `code` is caller-supplied and required, with no
-    update path (see WarehouseUpdateRequest). No singleton constraint is
-    enforced -- ordinary CRUD already produces "exactly one" today; see
-    app/models/warehouse.py's docstring."""
+    """Admin-gated. `code` is system-generated and retried against a
+    collision, with no update path (see WarehouseUpdateRequest). No
+    singleton constraint is enforced -- ordinary CRUD already produces
+    "exactly one" today; see app/models/warehouse.py's docstring."""
     _resolve_active_unit(db, payload.storage_area_unit_of_measure_id, admin.organisation_id)
 
-    warehouse = Warehouse(
-        organisation_id=admin.organisation_id,
-        code=payload.code,
-        name=payload.name,
-        total_usable_storage_area=payload.total_usable_storage_area,
-        storage_area_unit_of_measure_id=payload.storage_area_unit_of_measure_id,
-    )
-    db.add(warehouse)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise ConflictError("A warehouse with this code or name already exists.") from exc
+    warehouse: Warehouse | None = None
+    last_error: IntegrityError | None = None
+    for _ in range(_MAX_CODE_ATTEMPTS):
+        code = _generate_warehouse_code(db, admin.organisation_id)
+        warehouse = Warehouse(
+            organisation_id=admin.organisation_id,
+            code=code,
+            name=payload.name,
+            total_usable_storage_area=payload.total_usable_storage_area,
+            storage_area_unit_of_measure_id=payload.storage_area_unit_of_measure_id,
+        )
+        db.add(warehouse)
+        try:
+            db.flush()
+            last_error = None
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+    if last_error is not None or warehouse is None:
+        raise ConflictError(
+            "A warehouse with this name already exists, or a unique code could not be generated."
+        ) from last_error
 
     audit_service.log_event(
         db,

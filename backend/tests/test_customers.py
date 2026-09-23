@@ -199,7 +199,7 @@ def test_customer_code_is_auto_generated_and_never_client_supplied(client, activ
     response = client.post("/api/customers", json={"name": "New Co", "code": "HACKED"}, headers=headers)
     assert response.status_code == 201
     assert response.json()["code"] != "HACKED"
-    assert response.json()["code"].startswith("CUS")
+    assert response.json()["code"].startswith("3")
 
 
 def test_manager_can_assign_customer_to_someone_else_at_create(client, db_session, organisation, manager_user, active_user):

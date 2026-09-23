@@ -15,7 +15,13 @@ class Category(Base, TimestampMixin, OrganisationScopedMixin):
     like Team (docs/modules/teams.md) -- name/code/description/is_active,
     no hierarchy -- since nothing in the audit justifies a parent/child
     tree for JDK's small, flat category list (#2's own "do not build
-    hierarchical categories unless evidence requires it")."""
+    hierarchical categories unless evidence requires it").
+
+    `code` is system-generated (`app/core/id_formats.CATEGORY_CODE`),
+    required, and immutable -- per explicit user instruction that every
+    Phase 2 master's code be auto-assigned and never caller-edited,
+    superseding this module's original optional/caller-editable code
+    (docs/modules/categories.md #4)."""
 
     __tablename__ = "categories"
     __table_args__ = (
@@ -25,6 +31,6 @@ class Category(Base, TimestampMixin, OrganisationScopedMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
-    code: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)

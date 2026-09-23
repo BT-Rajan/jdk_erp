@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.currency import DEFAULT_CURRENCY, decimal_places, round_currency
-from app.core.id_formats import MATERIAL_ID, ORDER_ID, PRODUCT_ID, QUOTATION_ID, USER_ID
+from app.core.id_formats import ORDER_ID, PRODUCT_CODE, QUOTATION_ID, RAW_MATERIAL_CODE, USER_ID
 from app.core.timezone import JDK_TIMEZONE, now_jdk, to_jdk_time
 from app.core.validation import (
     normalize_email,
@@ -75,8 +75,8 @@ class TestIdFormats:
             (QUOTATION_ID, "Q000001", "QQ00001"),
             (ORDER_ID, "O000042", "O42"),
             (USER_ID, "00001", "1"),
-            (PRODUCT_ID, "PR0001", "PRODUCT1"),
-            (MATERIAL_ID, "M0001", "MAT0001"),
+            (PRODUCT_CODE, "200001", "20001"),
+            (RAW_MATERIAL_CODE, "100001", "10001"),
         ],
     )
     def test_validate_accepts_the_right_shape_and_rejects_others(self, id_format, valid, invalid):
@@ -88,14 +88,14 @@ class TestIdFormats:
         assert QUOTATION_ID.format(1) == "Q000001"
         assert ORDER_ID.format(42) == "O000042"
         assert USER_ID.format(1) == "00001"
-        assert PRODUCT_ID.format(1) == "PR0001"
-        assert MATERIAL_ID.format(1) == "M0001"
+        assert PRODUCT_CODE.format(1) == "200001"
+        assert RAW_MATERIAL_CODE.format(1) == "100001"
 
     def test_format_rejects_a_sequence_that_does_not_fit(self):
         with pytest.raises(ValueError, match="between 1"):
-            PRODUCT_ID.format(0)
+            PRODUCT_CODE.format(0)
         with pytest.raises(ValueError, match="between 1"):
-            PRODUCT_ID.format(10000)
+            PRODUCT_CODE.format(100000)
 
     def test_generated_ids_round_trip_through_validate(self):
         assert QUOTATION_ID.validate(QUOTATION_ID.format(123)) == "Q000123"

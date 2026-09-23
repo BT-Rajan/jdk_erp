@@ -26,6 +26,8 @@ function makeUnit(overrides: Partial<Record<string, unknown>> = {}) {
     name: 'Kilogram',
     code: 'KG',
     description: 'Base weight unit',
+    dimension: null,
+    conversion_factor_to_base: null,
     is_active: true,
     ...overrides,
   }
@@ -103,7 +105,7 @@ describe('UnitsOfMeasurePage', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'New Unit' }))
     await userEvent.type(screen.getByLabelText('Name'), 'Litre')
-    await userEvent.type(screen.getByLabelText('Code'), 'l')
+    await userEvent.type(screen.getByLabelText('Symbol'), 'l')
     await userEvent.click(screen.getByRole('button', { name: 'Create unit' }))
 
     await waitFor(() =>
@@ -123,7 +125,7 @@ describe('UnitsOfMeasurePage', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'New Unit' }))
     await userEvent.type(screen.getByLabelText('Name'), 'Kilogram')
-    await userEvent.type(screen.getByLabelText('Code'), 'KG')
+    await userEvent.type(screen.getByLabelText('Symbol'), 'KG')
     await userEvent.click(screen.getByRole('button', { name: 'Create unit' }))
 
     expect(await screen.findByText('A unit with this name or code already exists.')).toBeInTheDocument()
@@ -139,7 +141,7 @@ describe('UnitsOfMeasurePage', () => {
     await userEvent.click(await screen.findByText('Edit'))
 
     expect(screen.getByLabelText('Name')).toHaveValue('Kilogram')
-    expect(screen.getByLabelText('Code')).toHaveValue('KG')
+    expect(screen.getByLabelText('Symbol')).toHaveValue('KG')
     await userEvent.clear(screen.getByLabelText('Name'))
     await userEvent.type(screen.getByLabelText('Name'), 'Kilogramme')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -163,6 +165,42 @@ describe('UnitsOfMeasurePage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Deactivate' }))
 
     await waitFor(() => expect(patchMock).toHaveBeenCalledWith('/api/units-of-measure/1/status', { is_active: false }))
+  })
+
+  it('creating a unit with a dimension and conversion factor posts both', async () => {
+    postMock.mockResolvedValue({ data: makeUnit({ id: 2, name: 'Tonne', code: 'TON', dimension: 'mass', conversion_factor_to_base: '1000' }) })
+    render(<UnitsOfMeasurePage />)
+    await screen.findByText('Kilogram')
+
+    await userEvent.click(screen.getByRole('button', { name: 'New Unit' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Tonne')
+    await userEvent.type(screen.getByLabelText('Symbol'), 'TON')
+    await userEvent.type(screen.getByLabelText('Dimension'), 'mass')
+    await userEvent.type(screen.getByLabelText('Conversion Factor to Base'), '1000')
+    await userEvent.click(screen.getByRole('button', { name: 'Create unit' }))
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith(
+        '/api/units-of-measure',
+        expect.objectContaining({ dimension: 'mass', conversion_factor_to_base: '1000' }),
+      ),
+    )
+  })
+
+  it('rejects a dimension entered without a conversion factor before submitting', async () => {
+    render(<UnitsOfMeasurePage />)
+    await screen.findByText('Kilogram')
+
+    await userEvent.click(screen.getByRole('button', { name: 'New Unit' }))
+    await userEvent.type(screen.getByLabelText('Name'), 'Tonne')
+    await userEvent.type(screen.getByLabelText('Symbol'), 'TON')
+    await userEvent.type(screen.getByLabelText('Dimension'), 'mass')
+    await userEvent.click(screen.getByRole('button', { name: 'Create unit' }))
+
+    expect(
+      await screen.findByText('Dimension and conversion factor must be provided together, or both left blank.'),
+    ).toBeInTheDocument()
+    expect(postMock).not.toHaveBeenCalled()
   })
 
   it('shows an error message when changing status fails', async () => {

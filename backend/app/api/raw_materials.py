@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.id_formats import RAW_MATERIAL_CODE
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.models.audit_event import (
@@ -36,6 +37,13 @@ _SORT_FIELDS = {
     "name": RawMaterial.name,
     "created_at": RawMaterial.created_at,
 }
+
+_MAX_CODE_ATTEMPTS = 5
+
+
+def _generate_raw_material_code(db: Session, organisation_id: int) -> str:
+    existing = db.query(RawMaterial).filter(RawMaterial.organisation_id == organisation_id).count()
+    return RAW_MATERIAL_CODE.format(existing + 1)
 
 
 def get_raw_material_in_org(db: Session, raw_material_id: int, organisation_id: int) -> RawMaterial:
@@ -68,7 +76,9 @@ def _resolve_active_category(db: Session, category_id: int, organisation_id: int
     return category
 
 
-def _resolve_active_unit(db: Session, unit_of_measure_id: int, organisation_id: int) -> UnitOfMeasure:
+def _resolve_active_unit(
+    db: Session, unit_of_measure_id: int, organisation_id: int, field: str = "unit_of_measure_id"
+) -> UnitOfMeasure:
     unit = (
         db.query(UnitOfMeasure)
         .filter(
@@ -80,8 +90,8 @@ def _resolve_active_unit(db: Session, unit_of_measure_id: int, organisation_id: 
     )
     if unit is None:
         raise ValidationError(
-            "unit_of_measure_id must be an active unit of measure in your organisation.",
-            fields={"unit_of_measure_id": "Not a valid active unit of measure in your organisation."},
+            f"{field} must be an active unit of measure in your organisation.",
+            fields={field: "Not a valid active unit of measure in your organisation."},
         )
     return unit
 
@@ -127,26 +137,48 @@ def create_raw_material(
     db: Session = Depends(get_db),
 ) -> RawMaterial:
     """Admin-gated, same shape as POST /api/products. `code` is
-    caller-supplied and required -- jdk_clean's real Raw Material code is
-    manually assigned (docs/audit/RAW_MATERIALS_AUDIT.md #2)."""
+    system-generated and retried against a collision, same pattern
+    Supplier/Customer already use (per explicit user instruction,
+    superseding this module's original caller-supplied code -- see
+    docs/audit/RAW_MATERIALS_AUDIT.md #2 for the now-superseded
+    jdk_clean precedent)."""
     _resolve_active_category(db, payload.category_id, admin.organisation_id)
     _resolve_active_unit(db, payload.unit_of_measure_id, admin.organisation_id)
+    if payload.alternate_conversion_unit_of_measure_id is not None:
+        _resolve_active_unit(
+            db,
+            payload.alternate_conversion_unit_of_measure_id,
+            admin.organisation_id,
+            field="alternate_conversion_unit_of_measure_id",
+        )
 
-    raw_material = RawMaterial(
-        organisation_id=admin.organisation_id,
-        code=payload.code,
-        name=payload.name,
-        category_id=payload.category_id,
-        unit_of_measure_id=payload.unit_of_measure_id,
-        description=payload.description,
-        reference_cost=payload.reference_cost,
-    )
-    db.add(raw_material)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        db.rollback()
-        raise ConflictError("A raw material with this code or name already exists.") from exc
+    raw_material: RawMaterial | None = None
+    last_error: IntegrityError | None = None
+    for _ in range(_MAX_CODE_ATTEMPTS):
+        code = _generate_raw_material_code(db, admin.organisation_id)
+        raw_material = RawMaterial(
+            organisation_id=admin.organisation_id,
+            code=code,
+            name=payload.name,
+            category_id=payload.category_id,
+            unit_of_measure_id=payload.unit_of_measure_id,
+            description=payload.description,
+            reference_cost=payload.reference_cost,
+            alternate_conversion_unit_of_measure_id=payload.alternate_conversion_unit_of_measure_id,
+            alternate_conversion_factor=payload.alternate_conversion_factor,
+        )
+        db.add(raw_material)
+        try:
+            db.flush()
+            last_error = None
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+    if last_error is not None or raw_material is None:
+        raise ConflictError(
+            "A raw material with this name already exists, or a unique code could not be generated."
+        ) from last_error
 
     audit_service.log_event(
         db,
@@ -182,10 +214,42 @@ def update_raw_material(
         _resolve_active_category(db, updates["category_id"], admin.organisation_id)
     if "unit_of_measure_id" in updates:
         _resolve_active_unit(db, updates["unit_of_measure_id"], admin.organisation_id)
+    if updates.get("alternate_conversion_unit_of_measure_id") is not None:
+        _resolve_active_unit(
+            db,
+            updates["alternate_conversion_unit_of_measure_id"],
+            admin.organisation_id,
+            field="alternate_conversion_unit_of_measure_id",
+        )
 
     before = {field: getattr(raw_material, field) for field in updates}
     for field, value in updates.items():
         setattr(raw_material, field, value)
+
+    if "alternate_conversion_unit_of_measure_id" in updates or "alternate_conversion_factor" in updates:
+        # Same both-or-neither discipline as UnitOfMeasure's
+        # dimension/conversion_factor_to_base pair -- checked against the
+        # merged post-update state since a partial update only sees the
+        # fields actually sent (docs/modules/boms.md #5).
+        if (raw_material.alternate_conversion_unit_of_measure_id is None) != (
+            raw_material.alternate_conversion_factor is None
+        ):
+            raise ValidationError(
+                "alternate_conversion_unit_of_measure_id and alternate_conversion_factor "
+                "must be provided together, or not at all.",
+                fields={"alternate_conversion_factor": "Must be set together with the alternate unit, or both left unset."},
+            )
+        if raw_material.alternate_conversion_unit_of_measure_id == raw_material.unit_of_measure_id:
+            raise ValidationError(
+                "alternate_conversion_unit_of_measure_id must differ from unit_of_measure_id.",
+                fields={"alternate_conversion_unit_of_measure_id": "Must differ from the material's own unit of measure."},
+            )
+        if raw_material.alternate_conversion_factor is not None and raw_material.alternate_conversion_factor <= 0:
+            raise ValidationError(
+                "alternate_conversion_factor must be greater than zero.",
+                fields={"alternate_conversion_factor": "Must be greater than zero."},
+            )
+
     db.add(raw_material)
 
     try:

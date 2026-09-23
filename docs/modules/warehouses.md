@@ -17,10 +17,11 @@ multi-warehouse support.
 
 ## 2. Warehouse definition
 
-id, code (required, manually entered, immutable after creation — a
-deliberate jdk_erp convention here, since jdk_clean has no such entity to
-audit; the same treatment already given to Product/RawMaterial/Machine's
-own stable identifiers), name (required), active/inactive state,
+id, code (required, system-generated, immutable after creation --
+`app/core/id_formats.WAREHOUSE_CODE`: `"00003"` + one free digit,
+shared shape with ProductionLine/Machine, see
+[`machines.md`](machines.md) #3, capping this master at 9 records too),
+name (required), active/inactive state,
 organisation, timestamps. No address, country, region, GPS, transport
 zone, warehouse type, shipping carrier, operating hours, temperature
 zone, or storage class — jdk_clean has none of these either (see
@@ -350,7 +351,7 @@ built.
 Per [`../ENGINEERING_PRINCIPLES.md`](../ENGINEERING_PRINCIPLES.md) §16
 ("Audit before changing"): see
 [`../audit/WAREHOUSES_AUDIT.md`](../audit/WAREHOUSES_AUDIT.md). `Warehouse`
-mirrors Machine's shape closely — caller-supplied immutable code,
+mirrors Machine's shape closely — system-generated immutable code,
 required active-and-same-organisation UnitOfMeasure FK validation, and a
 capacity value reconfigurable via a plain `PATCH` with no code change —
 the same pattern applied to a single structured field
