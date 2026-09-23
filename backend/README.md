@@ -781,6 +781,61 @@ code/name/contact_person/phone/email/address/is_active.
   team_member saw the same list with no mutating controls, and
   deactivating updated the status badge immediately.
 
+### Master Data: Products (`app/api/products.py`)
+
+Fifth entity of Phase 2 (`docs/modules/products.md`) -- the authoritative
+definition of what JDK sells and manufactures (~20 products per
+organisation). Audited first (`docs/audit/PRODUCTS_AUDIT.md`): jdk_clean
+has a real, fairly disciplined ~20-field Product with no variant/
+attribute-builder bloat, but two critical gaps the user explicitly called
+out: **no Customer Lead Time field or delivery-calculation engine exists
+anywhere in jdk_clean** (Sales there negotiates delivery dates by hand),
+and Manufacturing Lead Time isn't a literal field either -- it's a rate
+(hours/unit) feeding a live capacity-scheduling engine consumed only by
+Feasibility, never by Order's delivery-date logic. Both fields are
+therefore designed fresh here, as simple, deliberately distinct reference
+values (`manufacturing_lead_time_days`, `customer_lead_time_days`) --
+never a calculation engine of any kind -- matching the user's own
+architecture diagram exactly (Product holds the reference number; a
+future Feasibility/Quotation/Order module turns it into an actual
+commitment, snapshotting whatever value it used onto its own transaction
+row so a later Product change can never rewrite history).
+
+- **`code` is caller-supplied and immutable, unlike Customer/Supplier**:
+  jdk_clean's real Product code is manually assigned and has no update
+  path at all (`ProductUpdate` simply omits the field) -- preserved
+  exactly here per the spec's "do not silently change established
+  business behavior." `ProductUpdateRequest` has no `code` field.
+- **First real FK relationship between two master-data tables**:
+  `category_id`/`unit_of_measure_id` are required FKs to the existing
+  Category/UnitOfMeasure masters, validated on every create/update to be
+  an *active* record in the caller's own organisation --
+  jdk_clean itself briefly built a real units-of-measure master then
+  reverted to a free-text enum a week later; that reversal is not
+  followed here since jdk_erp's own masters already exist and are
+  correct to reference.
+- **Deliberately deferred, not invented ahead of a real consumer**:
+  `product_type` (jdk_clean has a real finished_good/sub_assembly
+  distinction, but its only consumer is BOM's component polymorphism,
+  and BOM doesn't exist yet), a reorder-point/max-stock threshold pair
+  (jdk_clean has one, but Inventory doesn't exist yet either), barcode,
+  weight, and reference cost (none exist anywhere in jdk_clean at all).
+  No delete guard either -- nothing in jdk_erp references `products` yet;
+  jdk_clean itself has no delete guard on Product despite having real
+  consumers, a gap explicitly not repeated once a first consumer exists.
+- Same admin-gated shape as Category/Unit/Supplier (no ownership
+  dimension, so no permission-scope engine) -- not jdk_clean's own
+  department-permission-matrix gate for this module.
+- 35 new tests (`tests/test_products.py`): organisation isolation, code/
+  name uniqueness, immutable code (a `code` sent on PATCH is silently
+  ignored), active-and-same-organisation validation for both category and
+  unit of measure (422 for missing/inactive/cross-organisation), negative
+  price/lead-time rejection, admin-only create/edit/status-change (403
+  for non-admin), 404 for a cross-organisation id, audit events for every
+  mutation, and a pin-down test documenting that `GET /api/products/{id}`
+  always reflects Product's live price -- the obligation for whichever
+  Quotation/Order module is built next to snapshot price itself.
+
 ## Setup
 
 ```bash

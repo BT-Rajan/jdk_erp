@@ -31,6 +31,7 @@ from app.core.storage import default_storage
 from app.main import app
 from app.models.category import Category
 from app.models.organisation import Organisation
+from app.models.product import Product
 from app.models.supplier import Supplier
 from app.models.team import Team
 from app.models.unit import UnitOfMeasure
@@ -185,6 +186,23 @@ def acme_supplier(db_session, organisation):
     db_session.commit()
     db_session.refresh(supplier)
     return supplier
+
+
+@pytest.fixture()
+def widget_product(db_session, organisation, electronics_category, kilogram_unit):
+    product = Product(
+        organisation_id=organisation.id,
+        code="PRD001",
+        name="Widget",
+        category_id=electronics_category.id,
+        unit_of_measure_id=kilogram_unit.id,
+        selling_price=100,
+        is_active=True,
+    )
+    db_session.add(product)
+    db_session.commit()
+    db_session.refresh(product)
+    return product
 
 
 @pytest.fixture()

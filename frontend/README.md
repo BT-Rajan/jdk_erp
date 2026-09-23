@@ -369,6 +369,31 @@ across every module).
   surfaced its 409 inline, a team_member saw the same list with no
   mutating controls, and deactivating updated the status badge.
 
+- **Products** (`src/pages/ProductsPage.tsx`) -- the frontend for
+  `backend/app/api/products.py`
+  (`docs/modules/products.md`/`docs/audit/PRODUCTS_AUDIT.md`), the
+  authoritative definition of what JDK sells and manufactures (~20
+  products per organisation). Composed identically to `CategoriesPage`/
+  `SuppliersPage` -- the same flat admin-gated shape (`isAdminRole` hides
+  New Product, the row action menu, and the form/confirm dialogs for a
+  non-admin) -- but the first master-data page with a genuine
+  cross-master-data relationship: Category and Unit of Measure render as
+  `<select>` dropdowns of the caller's own active records, fetched once
+  from the existing `GET /api/categories`/`GET /api/units-of-measure`
+  endpoints rather than a new lookup. The Product Code field is visibly
+  `disabled` (not merely omitted) on Edit, so its immutability
+  (`docs/modules/products.md` #3) is obvious in the UI, not just enforced
+  silently server-side. Manufacturing Lead Time and Customer Lead Time
+  render as two separate, clearly-labelled fields with distinct hint
+  text (`docs/modules/products.md` #4/#5) -- this page never combines or
+  derives one from the other. 12 new tests (`ProductsPage.test.tsx`):
+  load, category/unit-name resolution from the lookup lists, non-admin
+  read-only view (including that a non-admin never fetches the lookup
+  endpoints), error state, empty-vs-no-match states, debounced search,
+  create (including a client-side invalid-price rejection and a
+  server-side code-conflict surfacing as a form error), edit (code field
+  disabled and excluded from the PATCH payload), and deactivate.
+
 ## Setup
 
 ```bash

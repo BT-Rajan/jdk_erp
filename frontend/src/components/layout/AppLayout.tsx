@@ -31,6 +31,7 @@ const NAV_ENTRIES: NavEntry[] = [
       { label: 'Units of Measure', to: '/units-of-measure' },
       { label: 'Customers', to: '/customers' },
       { label: 'Suppliers', to: '/suppliers' },
+      { label: 'Products', to: '/products' },
     ],
   },
 ]
