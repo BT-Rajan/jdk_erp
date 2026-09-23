@@ -9,6 +9,13 @@
 #   USE_SQLITE=1                              keep the .env.example SQLite default instead of switching to MySQL
 set -Eeuo pipefail
 
+step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+ok()   { printf '\033[1;32m  ✔ %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m  ! %s\033[0m\n' "$*"; }
+die()  { printf '\033[1;31m  ✘ %s\033[0m\n' "$*" >&2; exit 1; }
+trap 'die "Failed at line $LINENO: $BASH_COMMAND"' ERR
+need() { command -v "$1" >/dev/null 2>&1 || die "Missing required tool: $1"; }
+
 APP_NAME="${APP_NAME:-jdk_erp}"
 FRONTEND_APP_NAME="${FRONTEND_APP_NAME:-${APP_NAME}-frontend}"
 REPO_URL="${REPO_URL:-https://github.com/BT-Rajan/jdk_erp.git}"
@@ -27,15 +34,17 @@ DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-3306}"
 DB_NAME="${DB_NAME:-jdk_erp}"
 DB_USER="${DB_USER:-app_user}"
-DB_PASS="${DB_PASS:-Chennai#44}"
+# No fixed default here on purpose -- a hardcoded password baked into a
+# public template is a real credential leak the moment it's committed.
+# Normal entry point is first_run.sh, which always resolves a real
+# DB_PASS (reused or freshly created) before calling this script. Running
+# install.sh standalone with DB_PASS unset generates one instead.
+if [ -z "${DB_PASS:-}" ]; then
+  DB_PASS="$(openssl rand -hex 16 2>/dev/null || head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  warn "DB_PASS not set — generated one: $DB_PASS (also saved into backend/.env)"
+  warn "This only creates a working MySQL account if you run first_run.sh (or provision the account yourself) -- install.sh itself does not create MySQL users."
+fi
 export USE_SQLITE DB_HOST DB_PORT DB_NAME DB_USER DB_PASS
-
-step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
-ok()   { printf '\033[1;32m  ✔ %s\033[0m\n' "$*"; }
-warn() { printf '\033[1;33m  ! %s\033[0m\n' "$*"; }
-die()  { printf '\033[1;31m  ✘ %s\033[0m\n' "$*" >&2; exit 1; }
-trap 'die "Failed at line $LINENO: $BASH_COMMAND"' ERR
-need() { command -v "$1" >/dev/null 2>&1 || die "Missing required tool: $1"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -z "${APP_DIR:-}" ]; then
@@ -132,20 +141,40 @@ if not get("JWT_SECRET_KEY"):
     put("JWT_SECRET_KEY", secrets.token_hex(32))
     print("  generated JWT_SECRET_KEY")
 
-def mysql_username(u):
-    m = re.match(r"^mysql\+pymysql://([^:@/]+)", u)
-    return unquote_plus(m.group(1)) if m else None
+def mysql_parts(u):
+    # user/host/port/name -- ALL FOUR, not just username. A URL whose
+    # user matches but host/port/name don't is still stale: it would
+    # point the app at a different database than the one DB_* just
+    # describes (e.g. after switching DB_HOST or DB_NAME while keeping
+    # the same DB_USER). Comparing only the username let that case slip
+    # through silently.
+    m = re.match(r"^mysql\+pymysql://([^:@/]+)(?::[^@/]*)?@([^:/]+):(\d+)/([^/?]+)", u)
+    if not m:
+        return None
+    return {
+        "user": unquote_plus(m.group(1)),
+        "host": m.group(2),
+        "port": m.group(3),
+        "name": m.group(4),
+    }
 
 url = get("DATABASE_URL") or ""
-current_user = mysql_username(url)
+parts = mysql_parts(url)
 # Rewrite DATABASE_URL whenever it's unset, still the sqlite default, or a
-# MySQL URL whose username no longer matches DB_USER -- so re-running
-# install.sh with different DB_* values (e.g. switching root -> app_user)
-# actually takes effect instead of leaving a stale URL from an earlier run.
+# MySQL URL whose user/host/port/name no longer matches DB_* -- so
+# re-running install.sh with different DB_* values (switching user, host,
+# port, or database name) actually takes effect instead of leaving a
+# stale URL from an earlier run. This is the same four-way match
+# first_run.sh's own credential-reuse check uses, so the two scripts can
+# never disagree about whether the existing config is still valid.
 switch = os.environ["USE_SQLITE"] != "1" and (
     not url
     or url.startswith("sqlite")
-    or (current_user is not None and current_user != os.environ["DB_USER"])
+    or parts is None
+    or parts["user"] != os.environ["DB_USER"]
+    or parts["host"] != os.environ["DB_HOST"]
+    or parts["port"] != os.environ["DB_PORT"]
+    or parts["name"] != os.environ["DB_NAME"]
 )
 if switch:
     user = quote_plus(os.environ["DB_USER"])
