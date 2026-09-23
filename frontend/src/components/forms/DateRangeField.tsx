@@ -15,16 +15,19 @@ export interface DateRangeFieldProps {
   error?: string
   hint?: string
   id?: string
+  /** Defaults to spanning both grid columns -- two date inputs side by
+   * side in a from/to pair are already cramped in a half-width column. */
+  fullWidth?: boolean
 }
 
 /** A from/to date pair -- the spec lists "date/date range" as one
  * filter type, and only a single-date field existed before this. */
-export function DateRangeField({ label, value, onChange, error, hint, id }: DateRangeFieldProps) {
+export function DateRangeField({ label, value, onChange, error, hint, id, fullWidth = true }: DateRangeFieldProps) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
   const describedById = describedBy(hint, error, hintId, errorId)
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} fullWidth={fullWidth}>
       <div className="flex items-center gap-2">
         <input
           id={fieldId}

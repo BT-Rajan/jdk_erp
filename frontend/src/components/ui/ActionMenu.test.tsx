@@ -73,6 +73,20 @@ describe('ActionMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Edit' })).toHaveFocus()
   })
 
+  it('renders the panel outside a scrollable/clipping ancestor (e.g. a DataTable row) instead of inside it', async () => {
+    render(
+      <div data-testid="scroll-ancestor" style={{ overflow: 'auto' }}>
+        <ActionMenu label="Row actions" options={[{ key: 'edit', label: 'Edit', onSelect: vi.fn() }]} />
+      </div>,
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Row actions' }))
+
+    const menu = screen.getByRole('menu')
+    expect(menu).toBeInTheDocument()
+    expect(screen.getByTestId('scroll-ancestor')).not.toContainElement(menu)
+    expect(menu).toHaveStyle({ position: 'fixed' })
+  })
+
   it('skips disabled options when navigating and never fires their onSelect', async () => {
     const onSelect = vi.fn()
     render(

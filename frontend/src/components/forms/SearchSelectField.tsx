@@ -22,6 +22,7 @@ export interface SearchSelectFieldProps {
   id?: string
   disabled?: boolean
   required?: boolean
+  fullWidth?: boolean
 }
 
 /** "Pick one record via search" -- jdk_clean had no form-field-level
@@ -41,6 +42,7 @@ export function SearchSelectField({
   id,
   disabled,
   required,
+  fullWidth,
 }: SearchSelectFieldProps) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
   const selected = options.find((option) => option.value === value) ?? null
@@ -95,7 +97,7 @@ export function SearchSelectField({
   }
 
   return (
-    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required}>
+    <FieldShell label={label} fieldId={fieldId} hintId={hintId} errorId={errorId} hint={hint} error={error} required={required} fullWidth={fullWidth}>
       <div ref={containerRef} className="relative">
         <input
           id={fieldId}
@@ -116,6 +118,10 @@ export function SearchSelectField({
             setActiveIndex(0)
           }}
           onFocus={() => setOpen(true)}
+          onBlur={() => {
+            setOpen(false)
+            setQuery(selected?.label ?? '')
+          }}
           onKeyDown={handleKeyDown}
           className={inputClasses(!!error)}
         />
