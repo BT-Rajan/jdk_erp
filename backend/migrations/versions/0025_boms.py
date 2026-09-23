@@ -49,9 +49,12 @@ def upgrade() -> None:
             batch_op.add_column(sa.Column("alternate_conversion_unit_of_measure_id", sa.Integer(), nullable=True))
         if "alternate_conversion_factor" not in raw_material_columns:
             batch_op.add_column(sa.Column("alternate_conversion_factor", sa.Numeric(precision=18, scale=6), nullable=True))
-        if "fk_raw_materials_alternate_conversion_unit_of_measure_id_units_of_measure" not in raw_material_fks:
+        # Shortened from the column-name-derived
+        # fk_raw_materials_alternate_conversion_unit_of_measure_id_units_of_measure
+        # (73 chars) -- MySQL rejects any identifier over 64 characters.
+        if "fk_raw_materials_alt_conversion_uom_id_units_of_measure" not in raw_material_fks:
             batch_op.create_foreign_key(
-                "fk_raw_materials_alternate_conversion_unit_of_measure_id_units_of_measure",
+                "fk_raw_materials_alt_conversion_uom_id_units_of_measure",
                 "units_of_measure",
                 ["alternate_conversion_unit_of_measure_id"],
                 ["id"],
@@ -128,9 +131,7 @@ def downgrade() -> None:
 
     with op.batch_alter_table("raw_materials") as batch_op:
         batch_op.drop_index("ix_raw_materials_alternate_conversion_unit_of_measure_id")
-        batch_op.drop_constraint(
-            "fk_raw_materials_alternate_conversion_unit_of_measure_id_units_of_measure", type_="foreignkey"
-        )
+        batch_op.drop_constraint("fk_raw_materials_alt_conversion_uom_id_units_of_measure", type_="foreignkey")
         batch_op.drop_column("alternate_conversion_factor")
         batch_op.drop_column("alternate_conversion_unit_of_measure_id")
 
