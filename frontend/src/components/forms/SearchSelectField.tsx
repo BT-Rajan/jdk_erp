@@ -23,6 +23,9 @@ export interface SearchSelectFieldProps {
   disabled?: boolean
   required?: boolean
   fullWidth?: boolean
+  /** Only list options once this many characters are typed -- for long
+   * lists where scrolling everything is useless (e.g. 2 for suppliers). */
+  minQueryLength?: number
 }
 
 /** "Pick one record via search" -- jdk_clean had no form-field-level
@@ -43,6 +46,7 @@ export function SearchSelectField({
   disabled,
   required,
   fullWidth,
+  minQueryLength = 0,
 }: SearchSelectFieldProps) {
   const { fieldId, hintId, errorId } = useFieldIds(id)
   const selected = options.find((option) => option.value === value) ?? null
@@ -65,8 +69,10 @@ export function SearchSelectField({
     },
   })
 
-  const filtered =
-    query.trim() === '' || query === selected?.label
+  const tooShort = query.trim().length < minQueryLength && query !== selected?.label
+  const filtered = tooShort
+    ? []
+    : query.trim() === '' || query === selected?.label
       ? options
       : options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()))
 
@@ -128,7 +134,9 @@ export function SearchSelectField({
         {open && (
           <ul id={listboxId} role="listbox" className="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-ink-600 bg-ink-800 py-1 shadow-lg">
             {filtered.length === 0 ? (
-              <li className="px-3 py-2 text-sm text-gold-100/40">No matches</li>
+              <li className="px-3 py-2 text-sm text-gold-100/40">
+                {tooShort ? `Type at least ${minQueryLength} letters` : 'No matches'}
+              </li>
             ) : (
               filtered.map((option, index) => (
                 <li

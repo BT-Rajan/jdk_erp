@@ -1,30 +1,24 @@
-"""Tests for docs/modules/purchase_orders.md: the Purchase Flow as a
-controlled commercial document (Supplier -> Purchase Order -> Issue ->
-Supplier Confirmation -> Goods Receipt -> Raw Material Inventory) -- draft
-creation/line management, PO numbering (YY5NNNN, yearly reset), issuing
-(the immutable revision snapshot + generated PDF), historical integrity
-across renegotiation, supplier confirmation as a distinct event, sending
-via the native email integration, every guard rail the task spec calls
-out, organisation isolation, and the purchase permission engine's
-admin-bypass/deny-by-default/explicit-grant behaviour. The Goods Receipt
-workflow itself (Revision 4) has its own test file,
-test_purchase_order_receipts.py."""
-from datetime import date
+"""Tests for docs/modules/purchase_orders.md: Draft -> Pending Approval ->
+Approved (immutable revision + PDF) -> Sent -> Received, with required
+header fields, per-line purchase unit, approval/sent/cancel stamps,
+payment status, revisions, email sending, guard rails, organisation
+isolation and permissions. Goods receipts and payments have their own
+test files."""
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
 
 from app.core.roles import TEAM_MEMBER
-from app.models.audit_event import (
-    AuditEvent,
-    PURCHASE_ORDER_ISSUED,
-    PURCHASE_ORDER_SEND_FAILED,
-    PURCHASE_ORDER_SUPPLIER_CONFIRMED,
-)
+from app.models.audit_event import AuditEvent, PURCHASE_ORDER_APPROVED, PURCHASE_ORDER_SEND_FAILED
 from app.models.file import FileRecord
 from app.models.purchase_order import PurchaseOrder
 from app.models.role_permission import RolePermission
+from app.models.raw_material import RawMaterial
+from app.models.unit import UnitOfMeasure
 from app.services import purchase_order_service
+
+FUTURE = (date.today() + timedelta(days=30)).isoformat()
 
 
 def _login_headers(client, username="ada", password="Str0ng!Pass"):
@@ -32,39 +26,41 @@ def _login_headers(client, username="ada", password="Str0ng!Pass"):
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def _create_po(client, headers, supplier_id, warehouse_id, order_date="2026-01-10", notes=None):
-    return client.post(
-        "/api/purchase-orders",
-        json={"supplier_id": supplier_id, "warehouse_id": warehouse_id, "order_date": order_date, "notes": notes},
-        headers=headers,
-    )
+def _create_po(client, headers, supplier_id, warehouse_id, notes=None, **extra):
+    body = {
+        "supplier_id": supplier_id, "warehouse_id": warehouse_id, "expected_delivery_date": FUTURE,
+        "payment_terms": "30 days", "notes": notes, **extra,
+    }
+    return client.post("/api/purchase-orders", json=body, headers=headers)
 
 
-def _add_line(client, headers, po_id, raw_material_id, quantity, unit_price=None):
-    payload = {"raw_material_id": raw_material_id, "quantity": quantity}
+def _add_line(client, headers, po_id, raw_material_id, quantity, unit_price=None, **extra):
+    payload = {"raw_material_id": raw_material_id, "quantity": quantity, **extra}
     if unit_price is not None:
         payload["unit_price"] = unit_price
     return client.post(f"/api/purchase-orders/{po_id}/lines", json=payload, headers=headers)
 
 
+def _submit(client, headers, po_id):
+    return client.post(f"/api/purchase-orders/{po_id}/submit", headers=headers)
+
+
+def _approve(client, headers, po_id):
+    return client.post(f"/api/purchase-orders/{po_id}/approve", headers=headers)
+
+
 def _issue(client, headers, po_id):
-    return client.post(f"/api/purchase-orders/{po_id}/issue", headers=headers)
+    """Submit then approve."""
+    submitted = _submit(client, headers, po_id)
+    return submitted if submitted.status_code != 200 else _approve(client, headers, po_id)
 
 
 def _reopen(client, headers, po_id):
     return client.patch(f"/api/purchase-orders/{po_id}/status", json={"status": "draft"}, headers=headers)
 
 
-def _confirm_supplier(client, headers, po_id, note=None, file_ids=None):
-    return client.post(
-        f"/api/purchase-orders/{po_id}/confirm-supplier",
-        json={"note": note, "file_ids": file_ids or []},
-        headers=headers,
-    )
-
-
-def _send(client, headers, po_id):
-    return client.post(f"/api/purchase-orders/{po_id}/send", headers=headers)
+def _send(client, headers, po_id, email=True):
+    return client.post(f"/api/purchase-orders/{po_id}/send", json={"email": email}, headers=headers)
 
 
 def _cancel(client, headers, po_id, reason="Supplier out of stock"):
@@ -137,27 +133,47 @@ def test_create_rejects_inactive_supplier(client, admin_headers, acme_supplier, 
     assert response.status_code == 422
 
 
-def test_add_line_defaults_unit_price_from_reference_cost(
-    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+def test_create_requires_expected_delivery_and_payment_terms(client, admin_headers, acme_supplier, warehouse_1):
+    body = {"supplier_id": acme_supplier.id, "warehouse_id": warehouse_1.id}
+    assert client.post("/api/purchase-orders", json=body, headers=admin_headers).status_code == 422
+    assert client.post("/api/purchase-orders", json={**body, "expected_delivery_date": FUTURE}, headers=admin_headers).status_code == 422
+    past = (date.today() - timedelta(days=1)).isoformat()
+    assert _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id, expected_delivery_date=past).status_code == 422
+
+
+def test_create_stamps_date_creator_and_currency(client, admin_headers, admin_user, acme_supplier, warehouse_1):
+    body = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id, order_date="2020-01-01", delivery_instructions="Gate 2").json()
+    assert body["order_date"] == date.today().isoformat()
+    assert body["created_by_user_id"] == admin_user.id
+    assert body["currency"] == "KWD"
+    assert body["delivery_instructions"] == "Gate 2"
+    assert body["payment_status"] == "unpaid"
+
+
+def test_add_line_requires_unit_price(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
+    assert _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10").status_code == 422
+
+
+def test_line_unit_defaults_from_item_and_must_convert(
+    client, admin_headers, db_session, organisation, electronics_category, mass_kilogram_unit, acme_supplier, warehouse_1, cement_raw_material
 ):
-    cement_raw_material.reference_cost = Decimal("12.5000")
-    db_session.add(cement_raw_material)
+    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
+    line = _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", "5", remarks="Type 1").json()["lines"][0]
+    assert line["unit_of_measure_id"] == cement_raw_material.unit_of_measure_id
+    assert line["conversion_factor"] == "1.000000"
+    assert line["remarks"] == "Type 1"
+
+    tonne = UnitOfMeasure(organisation_id=organisation.id, name="Tonne", code="MT", dimension="mass", conversion_factor_to_base=1000, is_active=True)
+    gravel = RawMaterial(organisation_id=organisation.id, code="RM9", name="Gravel", category_id=electronics_category.id, unit_of_measure_id=mass_kilogram_unit.id, is_active=True)
+    db_session.add_all([tonne, gravel])
     db_session.commit()
-
-    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
-    response = _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10")
-    assert response.status_code == 201
-    line = response.json()["lines"][0]
-    assert line["unit_price"] == "12.5000"
-    assert line["line_total"] == "125.0000"
-
-
-def test_add_line_requires_unit_price_when_no_reference_cost(
-    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material
-):
-    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
-    response = _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10")
-    assert response.status_code == 422
+    # Cement's plain KG has no dimension -- tonnes don't convert.
+    assert _add_line(client, admin_headers, po["id"], cement_raw_material.id, "1", "5", unit_of_measure_id=tonne.id).status_code == 422
+    ok = _add_line(client, admin_headers, po["id"], gravel.id, "2", "85", unit_of_measure_id=tonne.id)
+    assert ok.status_code == 201
+    gravel_line = next(l for l in ok.json()["lines"] if l["raw_material_id"] == gravel.id)
+    assert (gravel_line["quantity"], gravel_line["conversion_factor"], gravel_line["line_total"]) == ("2.0000", "1000.000000", "170.0000")
 
 
 def test_lines_and_header_not_editable_once_issued(
@@ -176,103 +192,92 @@ def test_lines_and_header_not_editable_once_issued(
     assert edit_header.status_code == 400
 
 
-# --- issue / revision lifecycle ------------------------------------------------
+# --- approval / revision lifecycle ------------------------------------------------
 
 
-def test_cannot_issue_purchase_order_with_no_lines(client, admin_headers, acme_supplier, warehouse_1):
+def test_cannot_submit_purchase_order_with_no_lines(client, admin_headers, acme_supplier, warehouse_1):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
-    response = _issue(client, admin_headers, po["id"])
-    assert response.status_code == 400
+    assert _submit(client, admin_headers, po["id"]).status_code == 400
 
 
-def test_issue_creates_revision_one_with_pdf(
-    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+def test_cannot_approve_a_draft(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
+    _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
+    assert _approve(client, admin_headers, po["id"]).status_code == 400
+
+
+def test_approval_creates_revision_one_with_pdf_and_stamps(
+    client, admin_headers, admin_user, acme_supplier, warehouse_1, cement_raw_material, db_session
 ):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
     _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
-    response = _issue(client, admin_headers, po["id"])
+    submitted = _submit(client, admin_headers, po["id"])
+    assert submitted.json()["status"] == "pending_approval"
+
+    # Pending: not editable.
+    assert client.patch(f"/api/purchase-orders/{po['id']}", json={"notes": "x"}, headers=admin_headers).status_code == 400
+
+    response = _approve(client, admin_headers, po["id"])
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "issued"
+    assert body["status"] == "approved"
+    assert body["approved_by_user_id"] == admin_user.id
+    assert body["approved_at"] is not None
     assert body["revision_number"] == 1
-    assert len(body["revisions"]) == 1
     revision = body["revisions"][0]
-    assert revision["revision_number"] == 1
     assert revision["total_amount"] == "50.0000"
-    assert revision["pdf_file"] is not None
+    assert revision["lines"][0]["unit_of_measure_id"] == cement_raw_material.unit_of_measure_id
     assert revision["pdf_file"]["mime_type"] == "application/pdf"
 
     pdf_record = db_session.query(FileRecord).filter(FileRecord.id == revision["pdf_file"]["id"]).first()
     assert pdf_record.entity_type == "purchase_order_revision"
-
-    event = (
-        db_session.query(AuditEvent).filter(AuditEvent.action == PURCHASE_ORDER_ISSUED, AuditEvent.entity_id == po["id"]).first()
-    )
-    assert event is not None
+    assert db_session.query(AuditEvent).filter(AuditEvent.action == PURCHASE_ORDER_APPROVED, AuditEvent.entity_id == po["id"]).first()
 
 
-def test_renegotiation_preserves_revision_one_unchanged(
+def test_pending_po_can_be_sent_back_to_draft(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
+    _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
+    _submit(client, admin_headers, po["id"])
+    back = _reopen(client, admin_headers, po["id"])
+    assert back.json()["status"] == "draft"
+    assert back.json()["revision_number"] == 0
+
+
+def test_revision_needs_approval_again_and_preserves_revision_one(
     client, admin_headers, acme_supplier, warehouse_1, cement_raw_material
 ):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
     line = _add_line(client, admin_headers, po["id"], cement_raw_material.id, "100", unit_price="1.00").json()["lines"][0]
     _issue(client, admin_headers, po["id"])
+    _send(client, admin_headers, po["id"], email=False)
 
     reopened = _reopen(client, admin_headers, po["id"])
-    assert reopened.status_code == 200
     assert reopened.json()["status"] == "draft"
-
     client.patch(f"/api/purchase-orders/{po['id']}/lines/{line['id']}", json={"unit_price": "0.95"}, headers=admin_headers)
-    second_issue = _issue(client, admin_headers, po["id"])
-    assert second_issue.status_code == 200
-    body = second_issue.json()
-    assert body["status"] == "issued"
+    body = _issue(client, admin_headers, po["id"]).json()
+    assert body["status"] == "approved"
     assert body["revision_number"] == 2
-    assert body["po_number"] == po["po_number"]  # PO number never changes
-    assert len(body["revisions"]) == 2
-
+    assert body["po_number"] == po["po_number"]
     revision_1 = next(r for r in body["revisions"] if r["revision_number"] == 1)
     revision_2 = next(r for r in body["revisions"] if r["revision_number"] == 2)
-    assert revision_1["lines"][0]["unit_price"] == "1.0000"  # untouched by the later edit
+    assert revision_1["lines"][0]["unit_price"] == "1.0000"
     assert revision_2["lines"][0]["unit_price"] == "0.9500"
 
 
 def test_cannot_reopen_a_draft_purchase_order(client, admin_headers, acme_supplier, warehouse_1):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
-    response = _reopen(client, admin_headers, po["id"])
-    assert response.status_code == 400
+    assert _reopen(client, admin_headers, po["id"]).status_code == 400
 
 
-# --- supplier confirmation ------------------------------------------------------
-
-
-def test_cannot_confirm_supplier_before_issued(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+def test_mark_sent_without_email(client, admin_headers, admin_user, acme_supplier, warehouse_1, cement_raw_material):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
     _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
-    response = _confirm_supplier(client, admin_headers, po["id"])
-    assert response.status_code == 400
-
-
-def test_confirm_supplier_records_event_and_is_distinct_from_issuing(
-    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
-):
-    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
-    _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
-    issued = _issue(client, admin_headers, po["id"]).json()
-    assert issued["status"] == "issued"
-    assert issued["supplier_confirmed_at"] is None  # issuing != confirming
-
-    confirmed = _confirm_supplier(client, admin_headers, po["id"], note="Signed PO received").json()
-    assert confirmed["status"] == "supplier_confirmed"
-    assert confirmed["supplier_confirmed_at"] is not None
-    assert confirmed["supplier_confirmation_note"] == "Signed PO received"
-
-    event = (
-        db_session.query(AuditEvent)
-        .filter(AuditEvent.action == PURCHASE_ORDER_SUPPLIER_CONFIRMED, AuditEvent.entity_id == po["id"])
-        .first()
-    )
-    assert event is not None
+    _issue(client, admin_headers, po["id"])
+    sent = _send(client, admin_headers, po["id"], email=False)
+    assert sent.status_code == 200
+    assert sent.json()["status"] == "sent"
+    assert sent.json()["sent_by_user_id"] == admin_user.id
+    assert _send(client, admin_headers, po["id"], email=False).status_code == 400
 
 
 # --- sending ---------------------------------------------------------------------
@@ -303,7 +308,7 @@ def test_send_without_configured_mailbox_fails_and_is_recorded(
     # A failed send never flips the PO's own status.
     db_session.expire_all()
     po_row = db_session.query(PurchaseOrder).filter(PurchaseOrder.id == po["id"]).first()
-    assert po_row.status == "issued"
+    assert po_row.status == "approved"
 
 
 def test_cannot_send_a_draft_purchase_order(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
@@ -334,14 +339,17 @@ def test_cancel_requires_reason(client, admin_headers, acme_supplier, warehouse_
     assert response.status_code == 422
 
 
-def test_cancel_allowed_from_issued(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+def test_cancel_allowed_from_approved_and_stamped(client, admin_headers, admin_user, acme_supplier, warehouse_1, cement_raw_material):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
     _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
     _issue(client, admin_headers, po["id"])
     response = _cancel(client, admin_headers, po["id"])
     assert response.status_code == 200
-    assert response.json()["status"] == "cancelled"
-    assert response.json()["cancel_reason"] == "Supplier out of stock"
+    body = response.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_reason"] == "Supplier out of stock"
+    assert body["cancelled_by_user_id"] == admin_user.id
+    assert body["cancelled_at"] is not None
 
 
 def test_cannot_issue_a_cancelled_purchase_order(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):

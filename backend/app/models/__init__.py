@@ -1,6 +1,7 @@
 from app.models.audit_event import AuditEvent
 from app.models.bom import Bom, BomComponent
 from app.models.category import Category
+from app.models.document_template import DocumentTemplate
 from app.models.customer import Customer
 from app.models.email_account import EmailAccount
 from app.models.file import FileRecord
@@ -37,6 +38,7 @@ __all__ = [
     "Organisation",
     "Category",
     "Customer",
+    "DocumentTemplate",
     "Team",
     "UnitOfMeasure",
     "User",

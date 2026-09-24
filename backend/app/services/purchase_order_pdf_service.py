@@ -23,6 +23,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from xml.sax.saxutils import escape
 
 _TABLE_HEADER_BG = colors.HexColor("#1a1a28")
 _TABLE_HEADER_FG = colors.white
@@ -35,6 +36,8 @@ class PurchaseOrderPdfLine:
     quantity: Decimal
     unit_price: Decimal
     line_total: Decimal
+    unit_code: str = ""
+    remarks: str | None = None
 
 
 @dataclass
@@ -58,6 +61,11 @@ class PurchaseOrderPdfData:
     lines: list[PurchaseOrderPdfLine]
     total_amount: Decimal
     issued_at: datetime
+    currency: str = "KWD"
+    delivery_location: str | None = None
+    delivery_instructions: str | None = None
+    rfq_reference: str | None = None
+    approved_by: str | None = None
 
 
 def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
@@ -68,9 +76,9 @@ def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
     styles = getSampleStyleSheet()
     story = []
 
-    story.append(Paragraph(data.organisation_name, styles["Title"]))
+    story.append(Paragraph(escape(data.organisation_name), styles["Title"]))
     letterhead_line = " &nbsp;|&nbsp; ".join(
-        filter(None, [data.organisation_address, data.organisation_phone, data.organisation_email])
+        escape(part) for part in filter(None, [data.organisation_address, data.organisation_phone, data.organisation_email])
     )
     if letterhead_line:
         story.append(Paragraph(letterhead_line, styles["Normal"]))
@@ -88,6 +96,8 @@ def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
                 "Payment Terms",
                 data.payment_terms or "—",
             ],
+            ["Currency", data.currency, "Delivery Location", data.delivery_location or "—"],
+            ["RFQ Reference", data.rfq_reference or "—", "Approved By", data.approved_by or "—"],
         ],
         colWidths=[38 * mm, 55 * mm, 38 * mm, 55 * mm],
     )
@@ -105,20 +115,24 @@ def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
     story.append(Spacer(1, 6 * mm))
 
     story.append(Paragraph("Supplier", styles["Heading4"]))
-    story.append(Paragraph(data.supplier_name, styles["Normal"]))
+    story.append(Paragraph(escape(data.supplier_name), styles["Normal"]))
     if data.supplier_address:
-        story.append(Paragraph(data.supplier_address, styles["Normal"]))
+        story.append(Paragraph(escape(data.supplier_address), styles["Normal"]))
     supplier_contact = ", ".join(filter(None, [data.supplier_contact_person, data.supplier_phone, data.supplier_email]))
     if supplier_contact:
-        story.append(Paragraph(supplier_contact, styles["Normal"]))
+        story.append(Paragraph(escape(supplier_contact), styles["Normal"]))
     story.append(Spacer(1, 6 * mm))
 
-    line_rows = [["Raw Material", "Quantity", "Unit Price", "Line Total"]]
+    line_rows = [["Material", "Qty", "UOM", "Unit Price", "Total"]]
     for line in data.lines:
-        line_rows.append([line.material_name, str(line.quantity), str(line.unit_price), str(line.line_total)])
-    line_rows.append(["", "", "Total", str(data.total_amount)])
+        name = escape(line.material_name) + (f"<br/><font size=7>{escape(line.remarks)}</font>" if line.remarks else "")
+        line_rows.append(
+            [Paragraph(name, styles["BodyText"]), f"{line.quantity.normalize():,f}", line.unit_code,
+             f"{line.unit_price:,.3f}", f"{line.line_total:,.3f}"]
+        )
+    line_rows.append(["", "", "", "Total", f"{data.total_amount:,.3f} {data.currency}"])
 
-    items_table = Table(line_rows, colWidths=[75 * mm, 35 * mm, 35 * mm, 35 * mm])
+    items_table = Table(line_rows, colWidths=[70 * mm, 25 * mm, 18 * mm, 30 * mm, 37 * mm])
     items_table.setStyle(
         TableStyle(
             [
@@ -137,10 +151,15 @@ def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
     )
     story.append(items_table)
 
+    if data.delivery_instructions:
+        story.append(Spacer(1, 6 * mm))
+        story.append(Paragraph("Delivery Instructions", styles["Heading4"]))
+        story.append(Paragraph(escape(data.delivery_instructions), styles["Normal"]))
+
     if data.notes:
         story.append(Spacer(1, 6 * mm))
         story.append(Paragraph("Notes", styles["Heading4"]))
-        story.append(Paragraph(data.notes, styles["Normal"]))
+        story.append(Paragraph(escape(data.notes), styles["Normal"]))
 
     story.append(Spacer(1, 10 * mm))
     story.append(Paragraph(f"Issued {data.issued_at.strftime('%d %b %Y %H:%M')}", styles["Normal"]))

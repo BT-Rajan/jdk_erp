@@ -20,17 +20,19 @@ from app.models.inventory import PURCHASE_ORDER_RECEIPT_LINE_REFERENCE
 from app.models.purchase_order import (
     ALLOWED_RECEIPT_STATUS_TRANSITIONS,
     ALLOWED_STATUS_TRANSITIONS,
+    APPROVED,
+    DEFAULT_CURRENCY,
     DRAFT,
-    FULLY_RECEIVED,
-    ISSUED,
     PARTIALLY_RECEIVED,
     PAYMENT_CANCELLED,
     PAYMENT_RECORDED,
+    PENDING_APPROVAL,
     RECEIPT_CANCELLED,
     RECEIPT_DRAFT,
     RECEIPT_POSTED,
     RECEIPT_REVERSED,
-    SUPPLIER_CONFIRMED,
+    RECEIVED,
+    SENT,
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseOrderPayment,
@@ -46,21 +48,31 @@ _MAX_CODE_ATTEMPTS = 5
 _MAX_YEARLY_SEQUENCE = 9999
 _MAX_YEARLY_PAYMENT_SEQUENCE = 9999
 _MAX_YEARLY_RECEIPT_SEQUENCE = 9999
-# docs/modules/purchase_orders.md #39 -- only a supplier-confirmed or
-# already-partially-received PO can have a receipt drafted or posted
-# against it, the same gate the removed receive_lines action used.
-_RECEIVABLE_STATUSES = (SUPPLIER_CONFIRMED, PARTIALLY_RECEIVED)
+# docs/modules/purchase_orders.md #39 -- goods can only be received
+# against a PO that has been sent to the supplier.
+_RECEIVABLE_STATUSES = (SENT, PARTIALLY_RECEIVED)
 # docs/modules/purchase_orders.md #30 -- a payment is only meaningful
-# once a real commercial commitment exists (issued) and while the PO
-# isn't already cancelled; DRAFT's total can still change before issue.
-_PAYABLE_STATUSES = (ISSUED, SUPPLIER_CONFIRMED, PARTIALLY_RECEIVED, FULLY_RECEIVED)
+# once the PO is approved (its total is fixed) and not cancelled.
+_PAYABLE_STATUSES = (APPROVED, SENT, PARTIALLY_RECEIVED, RECEIVED)
+
+UNPAID = "unpaid"
+PARTIALLY_PAID = "partially_paid"
+PAID = "paid"
 
 
 @dataclass
 class PurchaseOrderLineInput:
+    """`unit_of_measure_id` None -> the material's own unit (factor 1).
+    Otherwise `conversion_factor` is `1 unit = factor material units`,
+    already resolved by the caller (app/services/uom_conversion.py)."""
+
     raw_material: RawMaterial
     quantity: Decimal
     unit_price: Decimal | None = None
+    unit_of_measure_id: int | None = None
+    conversion_factor: Decimal = Decimal(1)
+    required_by_date: date | None = None
+    remarks: str | None = None
 
 
 def assert_transition_allowed(current_status: str, target_status: str) -> None:
@@ -122,6 +134,12 @@ def create_purchase_order_with_lines(
     notes: str | None,
     lines: list[PurchaseOrderLineInput],
     rfq_id: int | None = None,
+    rfq_response_id: int | None = None,
+    payment_terms: str | None = None,
+    supplier_reference: str | None = None,
+    currency: str = DEFAULT_CURRENCY,
+    delivery_instructions: str | None = None,
+    created_by_user_id: int | None = None,
 ) -> PurchaseOrder:
     """The one place a draft Purchase Order (with its lines) is created
     -- shared by app/api/purchase_orders.py's plain "New Purchase" flow
@@ -143,10 +161,16 @@ def create_purchase_order_with_lines(
             supplier_id=supplier_id,
             warehouse_id=warehouse_id,
             rfq_id=rfq_id,
+            rfq_response_id=rfq_response_id,
             status=DRAFT,
             order_date=order_date,
             expected_delivery_date=expected_delivery_date,
+            payment_terms=payment_terms,
+            supplier_reference=supplier_reference,
+            currency=currency,
+            delivery_instructions=delivery_instructions,
             notes=notes,
+            created_by_user_id=created_by_user_id,
         )
         db.add(purchase_order)
         try:
@@ -166,8 +190,12 @@ def create_purchase_order_with_lines(
                 purchase_order_id=purchase_order.id,
                 raw_material_id=line_input.raw_material.id,
                 quantity=line_input.quantity,
+                unit_of_measure_id=line_input.unit_of_measure_id or line_input.raw_material.unit_of_measure_id,
+                conversion_factor=line_input.conversion_factor if line_input.unit_of_measure_id else Decimal(1),
                 unit_price=unit_price,
                 line_total=compute_line_total(line_input.quantity, unit_price),
+                required_by_date=line_input.required_by_date,
+                remarks=line_input.remarks,
             )
         )
     db.flush()
@@ -184,18 +212,38 @@ def total_amount(lines: list[PurchaseOrderLine]) -> Decimal:
     return total
 
 
-def issue_purchase_order(db: Session, *, purchase_order: PurchaseOrder, issued_by_user_id: int | None) -> PurchaseOrderRevision:
-    """`draft -> issued` (docs/modules/purchase_orders.md #23/#24): snapshots
-    the PO's current header/lines into a new, immutable
-    PurchaseOrderRevision (`revision_number = purchase_order.revision_number
-    + 1`) before flipping status. Requires at least one line, the same
-    "cannot activate/confirm empty" gate every other lifecycle-advancing
-    action in this codebase already has."""
-    assert_transition_allowed(purchase_order.status, ISSUED)
+def submit_for_approval(db: Session, *, purchase_order: PurchaseOrder) -> None:
+    """`draft -> pending_approval`. Every required field must be present:
+    at least one item, expected delivery date, payment terms, currency
+    (docs/modules/purchase_orders.md #2)."""
+    assert_transition_allowed(purchase_order.status, PENDING_APPROVAL)
+    has_line = db.query(PurchaseOrderLine.id).filter(PurchaseOrderLine.purchase_order_id == purchase_order.id).first()
+    missing = [
+        label
+        for label, value in (
+            ("at least one item", has_line),
+            ("expected delivery date", purchase_order.expected_delivery_date),
+            ("payment terms", (purchase_order.payment_terms or "").strip()),
+            ("currency", purchase_order.currency),
+        )
+        if not value
+    ]
+    if missing:
+        raise BusinessRuleError(f"Cannot submit for approval -- missing {', '.join(missing)}.")
+    purchase_order.status = PENDING_APPROVAL
+    db.add(purchase_order)
+
+
+def approve_purchase_order(db: Session, *, purchase_order: PurchaseOrder, approved_by_user_id: int | None) -> PurchaseOrderRevision:
+    """`pending_approval -> approved` (docs/modules/purchase_orders.md
+    #23/#24): snapshots the PO's current header/lines into a new,
+    immutable PurchaseOrderRevision -- the document that gets sent."""
+    assert_transition_allowed(purchase_order.status, APPROVED)
     lines = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.purchase_order_id == purchase_order.id).all()
     if not lines:
-        raise BusinessRuleError("Cannot issue a purchase order with no lines.")
+        raise BusinessRuleError("Cannot approve a purchase order with no items.")
 
+    now = datetime.utcnow()
     next_revision_number = purchase_order.revision_number + 1
     revision = PurchaseOrderRevision(
         purchase_order_id=purchase_order.id,
@@ -206,8 +254,8 @@ def issue_purchase_order(db: Session, *, purchase_order: PurchaseOrder, issued_b
         payment_terms=purchase_order.payment_terms,
         notes=purchase_order.notes,
         total_amount=total_amount(lines),
-        issued_at=datetime.utcnow(),
-        issued_by_user_id=issued_by_user_id,
+        issued_at=now,
+        issued_by_user_id=approved_by_user_id,
     )
     db.add(revision)
     db.flush()
@@ -218,30 +266,35 @@ def issue_purchase_order(db: Session, *, purchase_order: PurchaseOrder, issued_b
                 revision_id=revision.id,
                 raw_material_id=line.raw_material_id,
                 quantity=line.quantity,
+                unit_of_measure_id=line.unit_of_measure_id,
                 unit_price=line.unit_price,
                 line_total=line.line_total,
+                required_by_date=line.required_by_date,
+                remarks=line.remarks,
             )
         )
 
-    purchase_order.status = ISSUED
+    purchase_order.status = APPROVED
     purchase_order.revision_number = next_revision_number
+    purchase_order.approved_at = now
+    purchase_order.approved_by_user_id = approved_by_user_id
     db.add(purchase_order)
     db.flush()
     return revision
 
 
-def confirm_supplier(db: Session, *, purchase_order: PurchaseOrder, note: str | None, confirmed_by_user_id: int | None) -> None:
-    """`issued -> supplier_confirmed` (docs/modules/purchase_orders.md
-    #25) -- a distinct event from issuing (docs/modules/purchase_orders.md
-    #15/#23's "sent != confirmed" rule). Evidence attachment (`file_ids`)
-    is handled by the API layer via file_service.attach_files, the same
-    as RFQ response capture."""
-    assert_transition_allowed(purchase_order.status, SUPPLIER_CONFIRMED)
-    purchase_order.status = SUPPLIER_CONFIRMED
-    purchase_order.supplier_confirmed_at = datetime.utcnow()
-    purchase_order.supplier_confirmed_by_user_id = confirmed_by_user_id
-    purchase_order.supplier_confirmation_note = note
-    db.add(purchase_order)
+def mark_sent(purchase_order: PurchaseOrder, *, sent_by_user_id: int | None) -> None:
+    """`approved -> sent` -- by email or by hand (WhatsApp, delivered)."""
+    assert_transition_allowed(purchase_order.status, SENT)
+    purchase_order.status = SENT
+    purchase_order.sent_at = datetime.utcnow()
+    purchase_order.sent_by_user_id = sent_by_user_id
+
+
+def payment_status(total: Decimal, paid: Decimal) -> str:
+    if paid <= 0:
+        return UNPAID
+    return PAID if paid >= total else PARTIALLY_PAID
 
 
 def generate_receipt_number(db: Session, organisation_id: int, today: date | None = None) -> str:
@@ -287,7 +340,7 @@ def create_receipt(
     time, when concurrent drafts could otherwise both believe the same
     quantity is still available."""
     if purchase_order.status not in _RECEIVABLE_STATUSES:
-        raise BusinessRuleError("Only a supplier-confirmed or partially received purchase order can be received.")
+        raise BusinessRuleError("Goods can only be received against a purchase order that has been sent.")
     if not entries:
         raise ValidationError("At least one line must be received.")
 
@@ -377,6 +430,7 @@ def post_receipt(db: Session, *, receipt: PurchaseOrderReceipt, purchase_order: 
     db.expire(receipt)
 
     receipt_lines = db.query(PurchaseOrderReceiptLine).filter(PurchaseOrderReceiptLine.receipt_id == receipt.id).all()
+    factors = _conversion_factors(db, receipt_lines)
     for receipt_line in receipt_lines:
         po_line_rowcount = (
             db.query(PurchaseOrderLine)
@@ -400,7 +454,7 @@ def post_receipt(db: Session, *, receipt: PurchaseOrderReceipt, purchase_order: 
             organisation_id=purchase_order.organisation_id,
             raw_material_id=receipt_line.raw_material_id,
             warehouse_id=receipt.warehouse_id,
-            quantity=receipt_line.quantity,
+            quantity=_stock_quantity(receipt_line.quantity, factors[receipt_line.purchase_order_line_id]),
             reference_type=PURCHASE_ORDER_RECEIPT_LINE_REFERENCE,
             reference_id=receipt_line.id,
             created_by_user_id=posted_by_user_id,
@@ -438,6 +492,7 @@ def reverse_receipt(
     modified."""
     assert_receipt_transition_allowed(receipt.status, RECEIPT_REVERSED)
     receipt_lines = db.query(PurchaseOrderReceiptLine).filter(PurchaseOrderReceiptLine.receipt_id == receipt.id).all()
+    factors = _conversion_factors(db, receipt_lines)
 
     for receipt_line in receipt_lines:
         po_line_rowcount = (
@@ -462,7 +517,7 @@ def reverse_receipt(
             organisation_id=purchase_order.organisation_id,
             raw_material_id=receipt_line.raw_material_id,
             warehouse_id=receipt.warehouse_id,
-            quantity=receipt_line.quantity,
+            quantity=_stock_quantity(receipt_line.quantity, factors[receipt_line.purchase_order_line_id]),
             reference_type=PURCHASE_ORDER_RECEIPT_LINE_REFERENCE,
             reference_id=receipt_line.id,
             created_by_user_id=reversed_by_user_id,
@@ -477,19 +532,30 @@ def reverse_receipt(
     _recompute_status(db, purchase_order)
 
 
+def _conversion_factors(db: Session, receipt_lines: list[PurchaseOrderReceiptLine]) -> dict[int, Decimal]:
+    ids = {line.purchase_order_line_id for line in receipt_lines}
+    return dict(
+        db.query(PurchaseOrderLine.id, PurchaseOrderLine.conversion_factor).filter(PurchaseOrderLine.id.in_(ids)).all()
+    )
+
+
+def _stock_quantity(quantity: Decimal, factor: Decimal) -> Decimal:
+    """Receipts are in the PO line's purchase unit; stock is always kept
+    in the material's own unit."""
+    return quantity if factor == 1 else (quantity * factor).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
 def _recompute_status(db: Session, purchase_order: PurchaseOrder) -> None:
-    """Called after both post_receipt and reverse_receipt (Revision 4) --
-    a reversal can bring every line's received_quantity back down to zero,
-    which is not `partially_received` (nothing outstanding has actually
-    been received); it reverts the PO to `supplier_confirmed`, the same
-    status it was in before its first receipt."""
+    """Called after both post_receipt and reverse_receipt -- a reversal
+    can bring every line's received_quantity back to zero, which reverts
+    the PO to `sent`, the status it was in before its first receipt."""
     lines = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.purchase_order_id == purchase_order.id).all()
     if all(line.received_quantity >= line.quantity for line in lines):
-        purchase_order.status = FULLY_RECEIVED
+        purchase_order.status = RECEIVED
     elif any(line.received_quantity > 0 for line in lines):
         purchase_order.status = PARTIALLY_RECEIVED
     else:
-        purchase_order.status = SUPPLIER_CONFIRMED
+        purchase_order.status = SENT
     db.add(purchase_order)
 
 
@@ -544,7 +610,7 @@ def record_payment(
     low-concurrency finance entries, not a high-contention counter, so
     that extra mechanism would be disproportionate here."""
     if purchase_order.status not in _PAYABLE_STATUSES:
-        raise BusinessRuleError("Payments can only be recorded against an issued purchase order.")
+        raise BusinessRuleError("Payments can only be recorded against an approved purchase order.")
     if amount <= 0:
         raise ValidationError("Payment amount must be greater than zero.")
 

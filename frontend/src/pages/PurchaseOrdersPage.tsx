@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 import { ActionMenu, type ActionMenuOption } from '@/components/ui/ActionMenu'
 import { Alert } from '@/components/ui/Alert'
@@ -29,8 +30,12 @@ interface PurchaseOrderLine {
   id: number
   raw_material_id: number
   quantity: string
+  unit_of_measure_id: number
+  conversion_factor: string
   unit_price: string
   line_total: string
+  required_by_date: string | null
+  remarks: string | null
   received_quantity: string
 }
 
@@ -38,8 +43,11 @@ interface PurchaseOrderRevisionLine {
   id: number
   raw_material_id: number
   quantity: string
+  unit_of_measure_id: number | null
   unit_price: string
   line_total: string
+  required_by_date: string | null
+  remarks: string | null
 }
 
 interface PurchaseOrderReceiptLine {
@@ -106,7 +114,8 @@ interface PurchaseOrderPayment {
   files: PurchaseFile[]
 }
 
-type PurchaseOrderStatus = 'draft' | 'issued' | 'supplier_confirmed' | 'partially_received' | 'fully_received' | 'cancelled'
+type PurchaseOrderStatus = 'draft' | 'pending_approval' | 'approved' | 'sent' | 'partially_received' | 'received' | 'cancelled'
+type PaymentStatus = 'unpaid' | 'partially_paid' | 'paid'
 
 interface PurchaseOrder {
   id: number
@@ -115,20 +124,30 @@ interface PurchaseOrder {
   supplier_id: number
   warehouse_id: number
   rfq_id: number | null
+  rfq_number: string | null
+  rfq_response_id: number | null
   status: PurchaseOrderStatus
   revision_number: number
   order_date: string
   expected_delivery_date: string | null
   supplier_reference: string | null
   payment_terms: string | null
+  currency: string
+  delivery_instructions: string | null
   notes: string | null
   cancel_reason: string | null
-  supplier_confirmed_at: string | null
-  supplier_confirmed_by_user_id: number | null
-  supplier_confirmation_note: string | null
+  created_at: string
+  created_by_name: string | null
+  approved_at: string | null
+  approved_by_name: string | null
+  sent_at: string | null
+  sent_by_name: string | null
+  cancelled_at: string | null
+  cancelled_by_name: string | null
   total_amount: string
   paid_amount: string
   outstanding_amount: string
+  payment_status: PaymentStatus
   lines: PurchaseOrderLine[]
   revisions: PurchaseOrderRevision[]
   documents: PurchaseFile[]
@@ -142,6 +161,7 @@ interface LookupOption {
   code: string | null
   is_active: boolean
   reference_cost?: string | null
+  unit_of_measure_id?: number
 }
 
 interface PaginatedResponse<T> {
@@ -155,20 +175,36 @@ interface PurchaseOrdersFilters {
 
 const STATUS_LABELS: Record<PurchaseOrderStatus, string> = {
   draft: 'Draft',
-  issued: 'Issued',
-  supplier_confirmed: 'Supplier Confirmed',
+  pending_approval: 'Pending Approval',
+  approved: 'Approved',
+  sent: 'Sent',
   partially_received: 'Partially Received',
-  fully_received: 'Fully Received',
+  received: 'Received',
   cancelled: 'Cancelled',
 }
 
 const STATUS_TONES: Record<PurchaseOrderStatus, BadgeTone> = {
   draft: 'info',
-  issued: 'gold',
-  supplier_confirmed: 'gold',
+  pending_approval: 'warning',
+  approved: 'gold',
+  sent: 'gold',
   partially_received: 'warning',
-  fully_received: 'success',
+  received: 'success',
   cancelled: 'danger',
+}
+
+const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = { unpaid: 'Unpaid', partially_paid: 'Partially Paid', paid: 'Paid' }
+const PAYMENT_STATUS_TONES: Record<PaymentStatus, BadgeTone> = { unpaid: 'neutral', partially_paid: 'warning', paid: 'success' }
+
+const CANCELLABLE: PurchaseOrderStatus[] = ['draft', 'pending_approval', 'approved', 'sent', 'partially_received']
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function stamp(at: string | null, by: string | null): string | null {
+  if (!at) return null
+  return `${new Date(at).toLocaleString()}${by ? ` by ${by}` : ''}`
 }
 
 const RECEIPT_STATUS_LABELS: Record<PurchaseOrderReceiptStatus, string> = {
@@ -189,11 +225,15 @@ const DECIMAL_RE = /^\d+(\.\d+)?$/
 
 const poSchema = z.object({
   supplier_id: z.string().min(1, 'Supplier is required'),
-  warehouse_id: z.string().min(1, 'Warehouse is required'),
-  order_date: z.string().min(1, 'Order date is required'),
-  expected_delivery_date: z.string(),
+  warehouse_id: z.string().min(1, 'Delivery location is required'),
+  expected_delivery_date: z
+    .string()
+    .min(1, 'Expected delivery date is required')
+    .refine((v) => v >= todayIso(), 'Cannot be in the past'),
+  payment_terms: z.string().trim().min(1, 'Payment terms are required'),
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/, 'Enter a 3-letter currency code'),
   supplier_reference: z.string(),
-  payment_terms: z.string(),
+  delivery_instructions: z.string(),
   notes: z.string(),
 })
 
@@ -202,10 +242,11 @@ type PoFormValues = z.infer<typeof poSchema>
 const emptyPoDefaults: PoFormValues = {
   supplier_id: '',
   warehouse_id: '',
-  order_date: new Date().toISOString().slice(0, 10),
   expected_delivery_date: '',
-  supplier_reference: '',
   payment_terms: '',
+  currency: 'KWD',
+  supplier_reference: '',
+  delivery_instructions: '',
   notes: '',
 }
 
@@ -215,21 +256,31 @@ const lineSchema = z.object({
     .string()
     .min(1, 'Quantity is required')
     .refine((v) => DECIMAL_RE.test(v) && Number(v) > 0, 'Enter a positive number'),
-  unit_price: z.string().refine((v) => v === '' || (DECIMAL_RE.test(v) && Number(v) > 0), 'Enter a positive number'),
+  unit_of_measure_id: z.string().min(1, 'Unit is required'),
+  unit_price: z
+    .string()
+    .min(1, 'Unit price is required')
+    .refine((v) => DECIMAL_RE.test(v) && Number(v) > 0, 'Enter a positive number'),
+  required_by_date: z.string(),
+  remarks: z.string(),
 })
 
 type LineFormValues = z.infer<typeof lineSchema>
 
-const emptyLineDefaults: LineFormValues = { raw_material_id: '', quantity: '', unit_price: '' }
+const emptyLineDefaults: LineFormValues = {
+  raw_material_id: '',
+  quantity: '',
+  unit_of_measure_id: '',
+  unit_price: '',
+  required_by_date: '',
+  remarks: '',
+}
 
 const cancelSchema = z.object({
   cancel_reason: z.string().min(1, 'A reason is required to cancel this purchase order.'),
 })
 
 type CancelFormValues = z.infer<typeof cancelSchema>
-
-const confirmSupplierSchema = z.object({ note: z.string() })
-type ConfirmSupplierFormValues = z.infer<typeof confirmSupplierSchema>
 
 const paymentSchema = z.object({
   payment_date: z.string().min(1, 'Payment date is required'),
@@ -311,13 +362,13 @@ function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** Supplier -> Purchase Order -> Issue -> Supplier Confirmation ->
- * Receipt -> Raw Material Inventory (backend/app/api/purchase_orders.py,
+/** Purchase Order: Draft -> Pending Approval -> Approved -> Sent ->
+ * Received (backend/app/api/purchase_orders.py,
  * docs/modules/purchase_orders.md). One flat list plus a single
  * "Purchase Order" Modal per row that carries the whole lifecycle --
- * header, lines (editable while draft), issued revisions (each with its
- * immutable PDF), documents, payments (paid/outstanding, record/cancel),
- * and inline receive controls once supplier-confirmed -- reusing
+ * header, items (editable while draft), approved revisions (each with its
+ * immutable PDF), payments (status, record/cancel), and inline receive
+ * controls once sent -- reusing
  * BomsPage.tsx's list-plus-child-relationship-Modal pattern instead of a
  * separate detail route. Every row's ActionMenu exposes exactly the next
  * valid action for that PO's current status -- no dead ends. */
@@ -328,6 +379,7 @@ export function PurchaseOrdersPage() {
   const [suppliers, setSuppliers] = useState<LookupOption[]>([])
   const [warehouses, setWarehouses] = useState<LookupOption[]>([])
   const [materials, setMaterials] = useState<LookupOption[]>([])
+  const [units, setUnits] = useState<LookupOption[]>([])
   const [pageError, setPageError] = useState<string | undefined>(undefined)
 
   const [searchInput, setSearchInput] = useState('')
@@ -342,15 +394,10 @@ export function PurchaseOrdersPage() {
 
   const [lineFormOpen, setLineFormOpen] = useState(false)
 
-  const [issueBusy, setIssueBusy] = useState(false)
-  const [sendBusy, setSendBusy] = useState(false)
+  const [actionBusy, setActionBusy] = useState<string | null>(null)
 
   const [cancelTarget, setCancelTarget] = useState<PurchaseOrder | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
-
-  const [confirmSupplierOpen, setConfirmSupplierOpen] = useState(false)
-  const [confirmSupplierFiles, setConfirmSupplierFiles] = useState<File[]>([])
-  const [confirmSupplierError, setConfirmSupplierError] = useState<string | null>(null)
 
   const [paymentFormOpen, setPaymentFormOpen] = useState(false)
   const [paymentFiles, setPaymentFiles] = useState<File[]>([])
@@ -385,10 +432,6 @@ export function PurchaseOrdersPage() {
 
   const lineForm = useForm<LineFormValues>({ resolver: zodResolver(lineSchema), defaultValues: emptyLineDefaults })
   const cancelForm = useForm<CancelFormValues>({ resolver: zodResolver(cancelSchema), defaultValues: { cancel_reason: '' } })
-  const confirmSupplierForm = useForm<ConfirmSupplierFormValues>({
-    resolver: zodResolver(confirmSupplierSchema),
-    defaultValues: { note: '' },
-  })
   const paymentForm = useForm<PaymentFormValues>({ resolver: zodResolver(paymentSchema), defaultValues: emptyPaymentDefaults })
   const cancelPaymentForm = useForm<CancelPaymentFormValues>({
     resolver: zodResolver(cancelPaymentSchema),
@@ -421,17 +464,21 @@ export function PurchaseOrdersPage() {
   const suppliersById = useMemo(() => new Map(suppliers.map((s) => [s.id, s])), [suppliers])
   const warehousesById = useMemo(() => new Map(warehouses.map((w) => [w.id, w])), [warehouses])
   const materialsById = useMemo(() => new Map(materials.map((m) => [m.id, m])), [materials])
+  const unitsById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units])
+  const unitCode = (id: number | null) => (id ? unitsById.get(id)?.code ?? '' : '')
 
   const loadLookups = useCallback(async () => {
     try {
-      const [suppliersResponse, warehousesResponse, materialsResponse] = await Promise.all([
+      const [suppliersResponse, warehousesResponse, materialsResponse, unitsResponse] = await Promise.all([
         apiClient.get<PaginatedResponse<LookupOption>>('/api/suppliers', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/warehouses', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/raw-materials', { params: { page_size: 200 } }),
+        apiClient.get<PaginatedResponse<LookupOption>>('/api/units', { params: { page_size: 200 } }),
       ])
       setSuppliers(suppliersResponse.data.data)
       setWarehouses(warehousesResponse.data.data)
       setMaterials(materialsResponse.data.data)
+      setUnits(unitsResponse.data.data)
     } catch (err) {
       setPageError(err instanceof ApiError ? err.message : 'Failed to load suppliers, warehouses, and raw materials.')
     }
@@ -440,6 +487,21 @@ export function PurchaseOrdersPage() {
   useEffect(() => {
     void loadLookups()
   }, [loadLookups])
+
+  // Arriving from an RFQ's PO generation (or "View Purchase Order"):
+  // open that PO straight away, then clear the state so a refresh or
+  // back-navigation doesn't reopen it.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const openPurchaseOrderId = (location.state as { openPurchaseOrderId?: number } | null)?.openPurchaseOrderId
+  useEffect(() => {
+    if (!openPurchaseOrderId) return
+    navigate(location.pathname, { replace: true, state: null })
+    apiClient
+      .get<PurchaseOrder>(`/api/purchase-orders/${openPurchaseOrderId}`)
+      .then(({ data }) => openDetail(data))
+      .catch((err) => setPageError(err instanceof ApiError ? err.message : 'Failed to open the purchase order.'))
+  }, [openPurchaseOrderId])
 
   function openCreate() {
     reset(emptyPoDefaults)
@@ -454,10 +516,11 @@ export function PurchaseOrdersPage() {
         const { data } = await apiClient.post<PurchaseOrder>('/api/purchase-orders', {
           supplier_id: Number(values.supplier_id),
           warehouse_id: Number(values.warehouse_id),
-          order_date: values.order_date,
-          expected_delivery_date: values.expected_delivery_date || null,
+          expected_delivery_date: values.expected_delivery_date,
+          payment_terms: values.payment_terms.trim(),
+          currency: values.currency.trim().toUpperCase(),
           supplier_reference: values.supplier_reference || null,
-          payment_terms: values.payment_terms || null,
+          delivery_instructions: values.delivery_instructions || null,
           notes: values.notes || null,
         })
         setFormOpen(false)
@@ -493,7 +556,6 @@ export function PurchaseOrdersPage() {
     setDetailTarget(po)
     setDetailError(null)
     setLineFormOpen(false)
-    setConfirmSupplierOpen(false)
     setPaymentFormOpen(false)
     setReceiveQuantities({})
     setCreateReceiptFiles([])
@@ -514,8 +576,10 @@ export function PurchaseOrdersPage() {
   }
 
   function onMaterialChosen(materialId: string) {
+    // Purchase UOM defaults from the item master; price from its reference cost.
     const material = materialsById.get(Number(materialId))
-    if (material?.reference_cost) lineForm.setValue('unit_price', material.reference_cost)
+    lineForm.setValue('unit_of_measure_id', material?.unit_of_measure_id ? String(material.unit_of_measure_id) : '')
+    if (material?.reference_cost) lineForm.setValue('unit_price', String(Number(material.reference_cost)))
   }
 
   const onLineFormSubmit = useCallback(
@@ -526,7 +590,10 @@ export function PurchaseOrdersPage() {
         await apiClient.post(`/api/purchase-orders/${detailTarget.id}/lines`, {
           raw_material_id: Number(values.raw_material_id),
           quantity: values.quantity,
-          unit_price: values.unit_price || undefined,
+          unit_of_measure_id: Number(values.unit_of_measure_id),
+          unit_price: values.unit_price,
+          required_by_date: values.required_by_date || null,
+          remarks: values.remarks || null,
         })
         setLineFormOpen(false)
         await refreshDetail(detailTarget.id)
@@ -548,44 +615,28 @@ export function PurchaseOrdersPage() {
     }
   }
 
-  async function issuePurchaseOrder() {
+  /** One lifecycle step: submit / approve / send back / revise / send. */
+  async function runAction(key: string, request: () => Promise<unknown>, failure: string) {
     if (!detailTarget) return
-    setIssueBusy(true)
+    setActionBusy(key)
     setDetailError(null)
     try {
-      await apiClient.post(`/api/purchase-orders/${detailTarget.id}/issue`)
+      await request()
       await refreshDetail(detailTarget.id)
     } catch (err) {
-      setDetailError(err instanceof ApiError ? err.message : 'Failed to issue purchase order.')
+      setDetailError(err instanceof ApiError ? err.message : failure)
     } finally {
-      setIssueBusy(false)
+      setActionBusy(null)
     }
   }
 
-  async function reopenForRevision() {
-    if (!detailTarget) return
-    setDetailError(null)
-    try {
-      await apiClient.patch(`/api/purchase-orders/${detailTarget.id}/status`, { status: 'draft' })
-      await refreshDetail(detailTarget.id)
-    } catch (err) {
-      setDetailError(err instanceof ApiError ? err.message : 'Failed to reopen purchase order.')
-    }
-  }
-
-  async function sendPurchaseOrder() {
-    if (!detailTarget) return
-    setSendBusy(true)
-    setDetailError(null)
-    try {
-      await apiClient.post(`/api/purchase-orders/${detailTarget.id}/send`)
-      await refreshDetail(detailTarget.id)
-    } catch (err) {
-      setDetailError(err instanceof ApiError ? err.message : 'Failed to send purchase order.')
-    } finally {
-      setSendBusy(false)
-    }
-  }
+  const poUrl = (suffix: string) => `/api/purchase-orders/${detailTarget?.id}${suffix}`
+  const submitForApproval = () => runAction('submit', () => apiClient.post(poUrl('/submit')), 'Failed to submit for approval.')
+  const approvePurchaseOrder = () => runAction('approve', () => apiClient.post(poUrl('/approve')), 'Failed to approve purchase order.')
+  const backToDraft = () =>
+    runAction('draft', () => apiClient.patch(poUrl('/status'), { status: 'draft' }), 'Failed to return purchase order to draft.')
+  const emailPurchaseOrder = () => runAction('email', () => apiClient.post(poUrl('/send'), { email: true }), 'Failed to send purchase order.')
+  const markSent = () => runAction('mark-sent', () => apiClient.post(poUrl('/send'), { email: false }), 'Failed to mark as sent.')
 
   function openCancel(po: PurchaseOrder) {
     setCancelTarget(po)
@@ -610,38 +661,6 @@ export function PurchaseOrdersPage() {
       }
     },
     [cancelTarget, detailTarget, refreshDetail, table],
-  )
-
-  function openConfirmSupplier() {
-    confirmSupplierForm.reset({ note: '' })
-    setConfirmSupplierFiles([])
-    setConfirmSupplierError(null)
-    setConfirmSupplierOpen(true)
-  }
-
-  const onConfirmSupplierSubmit = useCallback(
-    async (values: ConfirmSupplierFormValues) => {
-      if (!detailTarget) return
-      setConfirmSupplierError(null)
-      try {
-        const fileIds: number[] = []
-        for (const file of confirmSupplierFiles) {
-          const form = new FormData()
-          form.append('upload', file)
-          const { data } = await apiClient.post<{ id: number }>('/api/files', form)
-          fileIds.push(data.id)
-        }
-        await apiClient.post(`/api/purchase-orders/${detailTarget.id}/confirm-supplier`, {
-          note: values.note || null,
-          file_ids: fileIds,
-        })
-        setConfirmSupplierOpen(false)
-        await refreshDetail(detailTarget.id)
-      } catch (err) {
-        setConfirmSupplierError(err instanceof ApiError ? err.message : 'Failed to record supplier confirmation.')
-      }
-    },
-    [confirmSupplierFiles, detailTarget, refreshDetail],
   )
 
   function openRecordPayment() {
@@ -815,19 +834,26 @@ export function PurchaseOrdersPage() {
     }
   }
 
-  const canReceive = detailTarget?.status === 'supplier_confirmed' || detailTarget?.status === 'partially_received'
-  const canCancelStatus =
-    detailTarget?.status === 'draft' ||
-    detailTarget?.status === 'issued' ||
-    detailTarget?.status === 'supplier_confirmed' ||
-    detailTarget?.status === 'partially_received'
+  const canReceive = detailTarget?.status === 'sent' || detailTarget?.status === 'partially_received'
+  const canCancelStatus = !!detailTarget && CANCELLABLE.includes(detailTarget.status)
+  const hasPayments = !!detailTarget && !['draft', 'pending_approval'].includes(detailTarget.status)
 
   const columns: DataTableColumn<PurchaseOrder>[] = [
     { key: 'po_number', label: 'PO Number', render: (po) => po.po_number },
     { key: 'supplier', label: 'Supplier', render: (po) => suppliersById.get(po.supplier_id)?.name ?? `#${po.supplier_id}` },
     { key: 'order_date', label: 'Order Date', hideBelow: 'sm', render: (po) => po.order_date },
-    { key: 'total', label: 'Outstanding', hideBelow: 'md', render: (po) => `${po.outstanding_amount} / ${po.total_amount}` },
+    { key: 'expected', label: 'Expected Delivery', hideBelow: 'md', render: (po) => po.expected_delivery_date ?? '—' },
+    { key: 'total', label: 'Total', hideBelow: 'md', render: (po) => `${po.total_amount} ${po.currency}` },
     { key: 'status', label: 'Status', render: (po) => <Badge tone={STATUS_TONES[po.status]}>{STATUS_LABELS[po.status]}</Badge> },
+    {
+      key: 'payment',
+      label: 'Payment',
+      hideBelow: 'lg',
+      render: (po) =>
+        ['draft', 'pending_approval', 'cancelled'].includes(po.status) ? '—' : (
+          <Badge tone={PAYMENT_STATUS_TONES[po.payment_status]}>{PAYMENT_STATUS_LABELS[po.payment_status]}</Badge>
+        ),
+    },
     {
       key: 'actions',
       label: '',
@@ -836,13 +862,14 @@ export function PurchaseOrdersPage() {
       render: (po: PurchaseOrder) => {
         const options: ActionMenuOption[] = [{ key: 'view', label: 'View', onSelect: () => openDetail(po) }]
         if (canManage) {
-          if (po.status === 'draft') options.push({ key: 'manage', label: 'Manage Lines...', onSelect: () => openDetail(po) })
-          if (po.status === 'issued') options.push({ key: 'send', label: 'Send / Confirm...', onSelect: () => openDetail(po) })
-          if (po.status === 'supplier_confirmed' || po.status === 'partially_received')
+          if (po.status === 'draft') options.push({ key: 'manage', label: 'Edit Items / Submit...', onSelect: () => openDetail(po) })
+          if (po.status === 'pending_approval') options.push({ key: 'approve', label: 'Approve...', onSelect: () => openDetail(po) })
+          if (po.status === 'approved') options.push({ key: 'send', label: 'Send...', onSelect: () => openDetail(po) })
+          if (po.status === 'sent' || po.status === 'partially_received')
             options.push({ key: 'receive', label: 'Receive...', onSelect: () => openDetail(po) })
-          if (po.status !== 'draft') options.push({ key: 'payment', label: 'Payments...', onSelect: () => openDetail(po) })
-          if (po.status === 'draft' || po.status === 'issued' || po.status === 'supplier_confirmed' || po.status === 'partially_received')
-            options.push({ key: 'cancel', label: 'Cancel', danger: true, onSelect: () => openCancel(po) })
+          if (!['draft', 'pending_approval', 'cancelled'].includes(po.status))
+            options.push({ key: 'payment', label: 'Payments...', onSelect: () => openDetail(po) })
+          if (CANCELLABLE.includes(po.status)) options.push({ key: 'cancel', label: 'Cancel', danger: true, onSelect: () => openCancel(po) })
         }
         return <ActionMenu label={`Actions for ${po.po_number}`} options={options} />
       },
@@ -853,7 +880,7 @@ export function PurchaseOrdersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Purchase Orders"
-        subtitle="Supplier → Purchase Order → Issue → Supplier Confirmation → Receipt → Inventory."
+        subtitle="Draft → Approval → Sent → Payment → Goods Receipt → Inventory."
         actions={canManage ? <Button onClick={openCreate}>New Purchase</Button> : undefined}
       />
 
@@ -902,22 +929,24 @@ export function PurchaseOrdersPage() {
           submitLabel="Create Draft"
         >
           <Alert variant="danger">{formError}</Alert>
+          <p className="text-sm text-gold-100/60">PO number and PO date ({todayIso()}) are assigned automatically. Add items after creating the draft.</p>
           <SelectField label="Supplier" required {...register('supplier_id')} error={errors.supplier_id?.message}>
             <option value="">Select a supplier...</option>
             {suppliers.filter((s) => s.is_active).map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </SelectField>
-          <SelectField label="Warehouse" required {...register('warehouse_id')} error={errors.warehouse_id?.message}>
+          <SelectField label="Delivery Location" required {...register('warehouse_id')} error={errors.warehouse_id?.message}>
             <option value="">Select a warehouse...</option>
             {warehouses.filter((w) => w.is_active).map((w) => (
               <option key={w.id} value={w.id}>{w.name}</option>
             ))}
           </SelectField>
-          <DateField label="Order Date" required {...register('order_date')} error={errors.order_date?.message} />
-          <DateField label="Expected Delivery Date" {...register('expected_delivery_date')} error={errors.expected_delivery_date?.message} />
-          <TextField label="Supplier Reference" {...register('supplier_reference')} />
-          <TextField label="Payment Terms" hint="e.g. Advance, Credit 30 days, Payment on delivery." {...register('payment_terms')} />
+          <DateField label="Expected Delivery Date" required min={todayIso()} {...register('expected_delivery_date')} error={errors.expected_delivery_date?.message} />
+          <TextField label="Payment Terms" required hint="e.g. Advance, 30 days, Payment on delivery." {...register('payment_terms')} error={errors.payment_terms?.message} />
+          <TextField label="Currency" required {...register('currency')} error={errors.currency?.message} />
+          <TextField label="Supplier Reference" hint="Supplier's quotation / reference number." {...register('supplier_reference')} />
+          <TextareaField label="Delivery Instructions" {...register('delivery_instructions')} />
           <TextareaField label="Notes" {...register('notes')} error={errors.notes?.message} />
         </FormDialog>
       )}
@@ -930,16 +959,27 @@ export function PurchaseOrdersPage() {
         footer={
           <>
             {canManage && detailTarget?.status === 'draft' && (
-              <Button onClick={issuePurchaseOrder} isLoading={issueBusy} disabled={detailTarget.lines.length === 0}>
-                Issue
+              <Button onClick={submitForApproval} isLoading={actionBusy === 'submit'} disabled={detailTarget.lines.length === 0}>
+                Submit for Approval
               </Button>
             )}
-            {canManage && detailTarget?.status === 'issued' && (
+            {canManage && detailTarget?.status === 'pending_approval' && (
               <>
-                <Button onClick={sendPurchaseOrder} isLoading={sendBusy}>Send to Supplier</Button>
-                <Button variant="secondary" onClick={openConfirmSupplier}>Confirm Supplier...</Button>
-                <Button variant="secondary" onClick={reopenForRevision}>Create Revision</Button>
+                <Button onClick={approvePurchaseOrder} isLoading={actionBusy === 'approve'}>Approve</Button>
+                <Button variant="secondary" onClick={backToDraft} isLoading={actionBusy === 'draft'}>Send Back to Draft</Button>
               </>
+            )}
+            {canManage && detailTarget?.status === 'approved' && (
+              <>
+                <Button onClick={emailPurchaseOrder} isLoading={actionBusy === 'email'}>Email to Supplier</Button>
+                <Button variant="secondary" onClick={markSent} isLoading={actionBusy === 'mark-sent'}>Mark as Sent</Button>
+              </>
+            )}
+            {canManage && detailTarget?.status === 'sent' && (
+              <Button variant="secondary" onClick={emailPurchaseOrder} isLoading={actionBusy === 'email'}>Re-send Email</Button>
+            )}
+            {canManage && (detailTarget?.status === 'approved' || detailTarget?.status === 'sent') && (
+              <Button variant="secondary" onClick={backToDraft} isLoading={actionBusy === 'draft'}>Create Revision</Button>
             )}
             {canManage && canCancelStatus && (
               <Button variant="danger" onClick={() => detailTarget && openCancel(detailTarget)}>Cancel...</Button>
@@ -954,36 +994,40 @@ export function PurchaseOrdersPage() {
 
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
               <div><span className="text-gold-100/50">Supplier: </span>{suppliersById.get(detailTarget.supplier_id)?.name ?? `#${detailTarget.supplier_id}`}</div>
-              <div><span className="text-gold-100/50">Warehouse: </span>{warehousesById.get(detailTarget.warehouse_id)?.name ?? `#${detailTarget.warehouse_id}`}</div>
-              <div><span className="text-gold-100/50">Order Date: </span>{detailTarget.order_date}</div>
+              <div><span className="text-gold-100/50">Delivery Location: </span>{warehousesById.get(detailTarget.warehouse_id)?.name ?? `#${detailTarget.warehouse_id}`}</div>
+              <div><span className="text-gold-100/50">PO Date: </span>{detailTarget.order_date}</div>
               <div><span className="text-gold-100/50">Expected Delivery: </span>{detailTarget.expected_delivery_date ?? '—'}</div>
+              <div><span className="text-gold-100/50">Payment Terms: </span>{detailTarget.payment_terms ?? '—'}</div>
+              <div><span className="text-gold-100/50">Currency: </span>{detailTarget.currency}</div>
               <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
               <div><span className="text-gold-100/50">Revision: </span>{detailTarget.revision_number || '—'}</div>
               {detailTarget.supplier_reference && <div><span className="text-gold-100/50">Supplier Reference: </span>{detailTarget.supplier_reference}</div>}
-              {detailTarget.payment_terms && <div><span className="text-gold-100/50">Payment Terms: </span>{detailTarget.payment_terms}</div>}
+              {detailTarget.rfq_number && <div><span className="text-gold-100/50">RFQ: </span>{detailTarget.rfq_number}</div>}
+              {detailTarget.delivery_instructions && <div className="col-span-2"><span className="text-gold-100/50">Delivery Instructions: </span>{detailTarget.delivery_instructions}</div>}
               {detailTarget.notes && <div className="col-span-2"><span className="text-gold-100/50">Notes: </span>{detailTarget.notes}</div>}
               {detailTarget.cancel_reason && <div className="col-span-2"><span className="text-gold-100/50">Cancel Reason: </span>{detailTarget.cancel_reason}</div>}
-              {detailTarget.supplier_confirmed_at && (
-                <div className="col-span-2">
-                  <span className="text-gold-100/50">Supplier Confirmed: </span>
-                  {new Date(detailTarget.supplier_confirmed_at).toLocaleString()}
-                  {detailTarget.supplier_confirmation_note ? ` — ${detailTarget.supplier_confirmation_note}` : ''}
-                </div>
-              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gold-100/70">
+              <div>Created: {stamp(detailTarget.created_at, detailTarget.created_by_name)}</div>
+              {detailTarget.approved_at && <div>Approved: {stamp(detailTarget.approved_at, detailTarget.approved_by_name)}</div>}
+              {detailTarget.sent_at && <div>Sent: {stamp(detailTarget.sent_at, detailTarget.sent_by_name)}</div>}
+              {detailTarget.cancelled_at && <div>Cancelled: {stamp(detailTarget.cancelled_at, detailTarget.cancelled_by_name)}</div>}
             </div>
 
             {/* Lines */}
             <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Lines</h3>
+              <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Items</h3>
               {detailTarget.lines.length === 0 ? (
-                <p className="text-sm text-gold-100/60">No lines on this purchase order yet.</p>
+                <p className="text-sm text-gold-100/60">No items on this purchase order yet.</p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
-                        <th className="py-2 pr-3">Raw Material</th>
+                        <th className="py-2 pr-3">Product / Material</th>
                         <th className="py-2 pr-3">Ordered</th>
+                        <th className="py-2 pr-3">UOM</th>
                         <th className="py-2 pr-3">Unit Price</th>
                         <th className="py-2 pr-3">Line Total</th>
                         <th className="py-2 pr-3">Received</th>
@@ -997,8 +1041,13 @@ export function PurchaseOrdersPage() {
                         const remaining = lineRemaining(line)
                         return (
                           <tr key={line.id} className="border-t border-ink-700">
-                            <td className="py-2 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
+                            <td className="py-2 pr-3">
+                              {materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}
+                              {line.remarks && <span className="block text-xs text-gold-100/50">{line.remarks}</span>}
+                              {line.required_by_date && <span className="block text-xs text-gold-100/50">Required by {line.required_by_date}</span>}
+                            </td>
                             <td className="py-2 pr-3">{line.quantity}</td>
+                            <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
                             <td className="py-2 pr-3">{line.unit_price}</td>
                             <td className="py-2 pr-3">{line.line_total}</td>
                             <td className="py-2 pr-3">{line.received_quantity}</td>
@@ -1036,12 +1085,12 @@ export function PurchaseOrdersPage() {
               )}
 
               {canManage && detailTarget.status === 'draft' && !lineFormOpen && (
-                <Button type="button" variant="secondary" className="mt-2" onClick={openAddLine}>Add Line</Button>
+                <Button type="button" variant="secondary" className="mt-2" onClick={openAddLine}>Add Item</Button>
               )}
               {canManage && detailTarget.status === 'draft' && lineFormOpen && (
                 <form onSubmit={lineForm.handleSubmit(onLineFormSubmit)} className="mt-2 flex flex-col gap-4 rounded-md border border-ink-700 p-4">
                   <SelectField
-                    label="Raw Material"
+                    label="Product / Material"
                     required
                     {...lineForm.register('raw_material_id', { onChange: (e) => onMaterialChosen(e.target.value) })}
                     error={lineForm.formState.errors.raw_material_id?.message}
@@ -1052,14 +1101,17 @@ export function PurchaseOrdersPage() {
                     ))}
                   </SelectField>
                   <TextField label="Quantity" required {...lineForm.register('quantity')} error={lineForm.formState.errors.quantity?.message} />
-                  <TextField
-                    label="Unit Price"
-                    hint="Defaults to the material's reference cost if left blank."
-                    {...lineForm.register('unit_price')}
-                    error={lineForm.formState.errors.unit_price?.message}
-                  />
+                  <SelectField label="Purchase UOM" required {...lineForm.register('unit_of_measure_id')} error={lineForm.formState.errors.unit_of_measure_id?.message}>
+                    <option value="">Select a unit...</option>
+                    {units.filter((u) => u.is_active).map((u) => (
+                      <option key={u.id} value={u.id}>{u.code}</option>
+                    ))}
+                  </SelectField>
+                  <TextField label="Unit Price" required hint="Agreed supplier price per unit." {...lineForm.register('unit_price')} error={lineForm.formState.errors.unit_price?.message} />
+                  <DateField label="Required By" hint="Only if different from the expected delivery date." {...lineForm.register('required_by_date')} />
+                  <TextField label="Specification / Remarks" {...lineForm.register('remarks')} />
                   <div className="flex gap-2">
-                    <Button type="submit" isLoading={lineForm.formState.isSubmitting}>Add line</Button>
+                    <Button type="submit" isLoading={lineForm.formState.isSubmitting}>Add item</Button>
                     <Button type="button" variant="secondary" onClick={() => setLineFormOpen(false)}>Cancel</Button>
                   </div>
                 </form>
@@ -1176,7 +1228,10 @@ export function PurchaseOrdersPage() {
                                   {receipt.lines.map((line) => (
                                     <tr key={line.id}>
                                       <td className="py-1 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
-                                      <td className="py-1 pr-3">{line.quantity}</td>
+                                      <td className="py-1 pr-3">
+                                        {line.quantity}{' '}
+                                        {unitCode(detailTarget.lines.find((l) => l.id === line.purchase_order_line_id)?.unit_of_measure_id ?? null)}
+                                      </td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -1192,12 +1247,15 @@ export function PurchaseOrdersPage() {
             )}
 
             {/* Payments */}
-            {detailTarget.status !== 'draft' && (
+            {hasPayments && (
               <div>
                 <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-xs uppercase tracking-wide text-gold-100/50">Payments</h3>
+                  <h3 className="text-xs uppercase tracking-wide text-gold-100/50">
+                    Payments{' '}
+                    <Badge tone={PAYMENT_STATUS_TONES[detailTarget.payment_status]}>{PAYMENT_STATUS_LABELS[detailTarget.payment_status]}</Badge>
+                  </h3>
                   <div className="text-sm">
-                    <span className="text-gold-100/50">Total </span>{detailTarget.total_amount}
+                    <span className="text-gold-100/50">Total </span>{detailTarget.total_amount} {detailTarget.currency}
                     <span className="mx-2 text-gold-100/30">|</span>
                     <span className="text-gold-100/50">Paid </span>{detailTarget.paid_amount}
                     <span className="mx-2 text-gold-100/30">|</span>
@@ -1255,7 +1313,7 @@ export function PurchaseOrdersPage() {
                     </tbody>
                   </table>
                 )}
-                {canManage && !paymentFormOpen && (
+                {canManage && !paymentFormOpen && detailTarget.status !== 'cancelled' && (
                   <Button type="button" variant="secondary" className="mt-2" onClick={openRecordPayment}>Record Payment</Button>
                 )}
                 {canManage && paymentFormOpen && (
@@ -1284,7 +1342,7 @@ export function PurchaseOrdersPage() {
                   <thead>
                     <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
                       <th className="py-2 pr-3">Rev</th>
-                      <th className="py-2 pr-3">Issued</th>
+                      <th className="py-2 pr-3">Approved</th>
                       <th className="py-2 pr-3">Total</th>
                       <th className="py-2 pr-3">Document</th>
                       <th className="py-2"></th>
@@ -1327,6 +1385,7 @@ export function PurchaseOrdersPage() {
                                   <tr className="text-left uppercase tracking-wide text-gold-100/40">
                                     <th className="py-1 pr-3">Raw Material</th>
                                     <th className="py-1 pr-3">Qty</th>
+                                    <th className="py-1 pr-3">UOM</th>
                                     <th className="py-1 pr-3">Unit Price</th>
                                     <th className="py-1 pr-3">Line Total</th>
                                   </tr>
@@ -1336,6 +1395,7 @@ export function PurchaseOrdersPage() {
                                     <tr key={line.id}>
                                       <td className="py-1 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
                                       <td className="py-1 pr-3">{line.quantity}</td>
+                                      <td className="py-1 pr-3">{unitCode(line.unit_of_measure_id)}</td>
                                       <td className="py-1 pr-3">{line.unit_price}</td>
                                       <td className="py-1 pr-3">{line.line_total}</td>
                                     </tr>
@@ -1371,22 +1431,6 @@ export function PurchaseOrdersPage() {
             )}
           </div>
         )}
-      </Modal>
-
-      <Modal open={confirmSupplierOpen} title="Confirm Supplier" onClose={() => setConfirmSupplierOpen(false)} footer={
-        <>
-          <Button variant="secondary" onClick={() => setConfirmSupplierOpen(false)}>Cancel</Button>
-          <Button onClick={confirmSupplierForm.handleSubmit(onConfirmSupplierSubmit)} isLoading={confirmSupplierForm.formState.isSubmitting}>
-            Confirm Supplier
-          </Button>
-        </>
-      }>
-        <form className="flex flex-col gap-4">
-          <Alert variant="danger">{confirmSupplierError}</Alert>
-          <p className="text-sm text-gold-100/70">Record that the supplier has actually accepted this purchase order -- distinct from having sent it.</p>
-          <FileUploadField label="Evidence (signed PO, confirmation email, etc.)" multiple accept=".pdf,.png,.jpg,.jpeg" value={confirmSupplierFiles} onChange={setConfirmSupplierFiles} />
-          <TextareaField label="Note" hint="Optional." {...confirmSupplierForm.register('note')} />
-        </form>
       </Modal>
 
       <Modal open={!!cancelPaymentTarget} title="Cancel Payment" onClose={() => setCancelPaymentTarget(null)} footer={

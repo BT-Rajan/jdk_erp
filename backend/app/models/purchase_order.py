@@ -8,34 +8,32 @@ from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
 DRAFT = "draft"
-ISSUED = "issued"
-SUPPLIER_CONFIRMED = "supplier_confirmed"
+PENDING_APPROVAL = "pending_approval"
+APPROVED = "approved"
+SENT = "sent"
 PARTIALLY_RECEIVED = "partially_received"
-FULLY_RECEIVED = "fully_received"
+RECEIVED = "received"
 CANCELLED = "cancelled"
-PURCHASE_ORDER_STATUSES = (DRAFT, ISSUED, SUPPLIER_CONFIRMED, PARTIALLY_RECEIVED, FULLY_RECEIVED, CANCELLED)
+PURCHASE_ORDER_STATUSES = (DRAFT, PENDING_APPROVAL, APPROVED, SENT, PARTIALLY_RECEIVED, RECEIVED, CANCELLED)
 
-# docs/modules/purchase_orders.md #23 -- "sent", "confirmed" and
-# "received" are three distinct business events (the task's own explicit
-# rule), so what this module's first version called a single `confirmed`
-# status is now two: `issued` (a formal document exists / was sent -- it
-# does NOT mean the supplier accepted it) and `supplier_confirmed` (the
-# supplier's actual acceptance was recorded). Only supplier_confirmed/
-# partially_received are receivable -- issued alone is not.
-# `issued -> draft` ("Create Revision") reopens an issued PO for
-# editing without losing its history (#24) -- not a separate
-# "negotiating" status, the same draft state every PO starts in.
-# partially_received/fully_received are never a direct transition
-# target -- they're the side effect app/services/
-# purchase_order_service.receive_lines recomputes from line data.
+# docs/modules/purchase_orders.md #23.
+# draft -> pending_approval (submit) -> approved (approve: snapshots the
+# revision + PDF) -> sent (emailed or marked sent) -> partially_received /
+# received (side effects of posting receipts, never direct targets).
+# pending_approval -> draft is "send back"; approved/sent -> draft is
+# "Create Revision" (only before anything is received) and needs approval
+# again. Cancel from any open status.
 ALLOWED_STATUS_TRANSITIONS = {
-    DRAFT: {ISSUED, CANCELLED},
-    ISSUED: {DRAFT, SUPPLIER_CONFIRMED, CANCELLED},
-    SUPPLIER_CONFIRMED: {CANCELLED},
+    DRAFT: {PENDING_APPROVAL, CANCELLED},
+    PENDING_APPROVAL: {APPROVED, DRAFT, CANCELLED},
+    APPROVED: {SENT, DRAFT, CANCELLED},
+    SENT: {DRAFT, CANCELLED},
     PARTIALLY_RECEIVED: {CANCELLED},
-    FULLY_RECEIVED: set(),
+    RECEIVED: set(),
     CANCELLED: set(),
 }
+
+DEFAULT_CURRENCY = "KWD"
 
 
 class PurchaseOrder(Base, TimestampMixin, OrganisationScopedMixin):
@@ -59,15 +57,14 @@ class PurchaseOrder(Base, TimestampMixin, OrganisationScopedMixin):
     directly with no RFQ.
 
     `revision_number` starts at 0 (never issued) and increments by one on
-    every `draft -> issued` transition, each one snapshotted into its own
+    every approval, each one snapshotted into its own
     immutable `PurchaseOrderRevision` row (#24) -- the PO's own header/
     lines here always reflect the *current* (possibly still-being-
     negotiated) state, never a specific historical revision.
 
-    `supplier_confirmed_at`/`by`/`note` record the one supplier-
-    confirmation event this PO can have -- reopening for a new revision
-    (`issued -> draft`) is not allowed once confirmed, so there is no
-    "reconfirm" case to handle.
+    `currency` is the PO's own (default KWD). Approval/send/cancel
+    stamps record who did each step and when; `created_by_user_id` who
+    raised it.
 
     No commercial total fields stored here -- `total_amount` is always
     the sum of line totals, computed at read time (app/services/
@@ -95,14 +92,38 @@ class PurchaseOrder(Base, TimestampMixin, OrganisationScopedMixin):
         nullable=True,
         index=True,
     )
+    # The supplier quotation this PO was generated from (RFQ -> Supplier
+    # Quotation -> PO traceability). Reference only: the PO's own lines
+    # hold the final agreed quantities/prices. use_alter: part of the
+    # rfqs <-> purchase_orders FK cycle.
+    rfq_response_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "rfq_responses.id", ondelete="SET NULL", use_alter=True, name="fk_purchase_orders_rfq_response_id_rfq_responses"
+        ),
+        nullable=True,
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=DRAFT, server_default=DRAFT)
     revision_number: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     order_date: Mapped[date] = mapped_column(Date, nullable=False)
     expected_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     supplier_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     payment_terms: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    currency: Mapped[str] = mapped_column(
+        String(3), nullable=False, default=DEFAULT_CURRENCY, server_default=DEFAULT_CURRENCY
+    )
+    delivery_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Approval & history (docs/modules/purchase_orders.md #23). The full
+    # change log is the audit trail (audit_events).
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Retired "supplier confirmed" step -- kept only for historical rows.
     supplier_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     supplier_confirmed_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -111,9 +132,11 @@ class PurchaseOrder(Base, TimestampMixin, OrganisationScopedMixin):
 
 
 class PurchaseOrderLine(Base, TimestampMixin):
-    """One Raw Material on a Purchase Order, in the material's own
-    `unit_of_measure_id` -- no purchase UoM, no conversion
-    (docs/modules/purchase_orders.md #5). No `organisation_id` of its own
+    """One Raw Material on a Purchase Order, in its purchase unit
+    (`unit_of_measure_id`, defaulting to the material's own unit).
+    `conversion_factor` is `1 purchase unit = factor material units`,
+    fixed when the line is written, and used only when a receipt posts
+    stock in the material's own unit (docs/modules/purchase_orders.md #5). No `organisation_id` of its own
     -- a child of an already organisation-scoped `PurchaseOrder`, the same
     shape `BomComponent` already uses. Always the PO's *current* line
     state -- what the next revision would snapshot if issued
@@ -138,8 +161,14 @@ class PurchaseOrderLine(Base, TimestampMixin):
         ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    unit_of_measure_id: Mapped[int] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    conversion_factor: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=1, server_default="1")
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     line_total: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    required_by_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0, server_default="0")
 
 
@@ -189,8 +218,13 @@ class PurchaseOrderRevisionLine(Base):
         ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    unit_of_measure_id: Mapped[int | None] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=True
+    )
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     line_total: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    required_by_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 PAYMENT_RECORDED = "recorded"
