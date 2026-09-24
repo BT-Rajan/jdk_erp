@@ -115,7 +115,8 @@ describe('RawMaterialsPage', () => {
     expect(await screen.findByText('Cement')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Raw Material' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Actions for/ })).not.toBeInTheDocument()
-    expect(getMock.mock.calls.some(([url]) => url === '/api/categories')).toBe(false)
+    // Category names are loaded for everyone -- the list shows them.
+    expect(getMock.mock.calls.some(([url]) => url === '/api/categories')).toBe(true)
   })
 
   it('shows an error state when the request fails', async () => {

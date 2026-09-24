@@ -27,6 +27,7 @@ function makeCategory(overrides: Partial<Record<string, unknown>> = {}) {
     name: 'Electronics',
     code: 'ELEC',
     description: 'Electronic parts',
+    applies_to: 'product',
     is_active: true,
     ...overrides,
   }
@@ -106,10 +107,11 @@ describe('CategoriesPage', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'New Category' }))
     await userEvent.type(screen.getByLabelText('Name'), 'Hardware')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^Type/ }), 'product')
     await userEvent.click(screen.getByRole('button', { name: 'Create category' }))
 
     await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith('/api/categories', expect.objectContaining({ name: 'Hardware' })),
+      expect(postMock).toHaveBeenCalledWith('/api/categories', expect.objectContaining({ name: 'Hardware', applies_to: 'product' })),
     )
     await waitFor(() => {
       const calls = getMock.mock.calls.filter(([url]) => url === '/api/categories')
@@ -125,6 +127,7 @@ describe('CategoriesPage', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'New Category' }))
     await userEvent.type(screen.getByLabelText('Name'), 'Electronics')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^Type/ }), 'product')
     await userEvent.click(screen.getByRole('button', { name: 'Create category' }))
 
     expect(await screen.findByText('A category with this name or code already exists.')).toBeInTheDocument()

@@ -88,8 +88,8 @@ describe('ProductsPage', () => {
     expect(await screen.findByText('Widget')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Product' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Actions for/ })).not.toBeInTheDocument()
-    // team_member never fetches the category/unit lookups -- no manage capability.
-    expect(getMock.mock.calls.some(([url]) => url === '/api/categories')).toBe(false)
+    // Category names are loaded for everyone -- the list shows them.
+    expect(getMock.mock.calls.some(([url]) => url === '/api/categories')).toBe(true)
   })
 
   it('shows an error state when the request fails', async () => {

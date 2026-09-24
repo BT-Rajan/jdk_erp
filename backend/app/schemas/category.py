@@ -1,4 +1,8 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, field_validator
+
+CategoryType = Literal["product", "raw_material"]
 
 
 class CategoryOut(BaseModel):
@@ -9,6 +13,7 @@ class CategoryOut(BaseModel):
     name: str
     code: str
     description: str | None
+    applies_to: str
     is_active: bool
 
 
@@ -19,6 +24,7 @@ class CategoryCreateRequest(BaseModel):
     (docs/modules/categories.md #4), same as every other Phase 2 master."""
 
     name: str
+    applies_to: CategoryType
     description: str | None = None
 
     @field_validator("name")
@@ -37,6 +43,7 @@ class CategoryUpdateRequest(BaseModel):
     consequential change than editing name/description."""
 
     name: str | None = None
+    applies_to: CategoryType | None = None
     description: str | None = None
 
     @field_validator("name")

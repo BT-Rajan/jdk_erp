@@ -220,3 +220,23 @@ a `CATEGORY_MODULE` constant scoped to this one entity) — every future
 Phase 2 master-data entity (Units of Measure next, then Products, Raw
 Materials, ...) logs under the same module name, per Principle 2 (one
 source of truth) rather than growing a new module constant per entity.
+
+## Revision 2 — category type
+
+- Every category has a **Type**: `product` or `raw_material`
+  (`categories.applies_to`, required). Products only take product
+  categories, Raw Materials only raw-material categories (422 otherwise,
+  `app/services/category_service.py`); each form's dropdown lists only
+  its own type. `GET /api/categories?applies_to=` filters.
+- The type can't change while any product or raw material uses the
+  category (400).
+- A product / raw material keeps a category that has since been
+  deactivated: editing it re-sends the unchanged category and saves;
+  only choosing a *different* category must be active. The dropdown
+  still shows the current (inactive) one.
+- The Products and Raw Materials lists load category names for every
+  user, not only admins (the Category column was blank for non-admins).
+- Migration `0037_category_applies_to.py` backfills: used only by raw
+  materials → `raw_material`, otherwise `product`; a category used by
+  both stays `product` and gets a "<name> (Raw Material)" copy that its
+  raw materials move to.

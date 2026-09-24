@@ -29,7 +29,7 @@ def test_list_products_returns_only_my_organisation(
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -59,7 +59,7 @@ def test_get_product_in_other_organisation_returns_404(
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -164,7 +164,7 @@ def test_product_code_unique_within_organisation_but_not_across(
         db_session.commit()
     db_session.rollback()
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -373,7 +373,7 @@ def test_create_product_rejects_nonexistent_category(client, admin_user, kilogra
 def test_create_product_rejects_inactive_category(client, admin_user, db_session, organisation, kilogram_unit):
     from app.models.category import Category
 
-    inactive_category = Category(organisation_id=organisation.id, name="Discontinued", code="DISC", is_active=False)
+    inactive_category = Category(applies_to="product", organisation_id=organisation.id, name="Discontinued", code="DISC", is_active=False)
     db_session.add(inactive_category)
     db_session.commit()
     db_session.refresh(inactive_category)
@@ -412,7 +412,7 @@ def test_create_product_rejects_cross_organisation_category(
 ):
     from app.models.category import Category
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     db_session.refresh(other_category)
@@ -450,7 +450,7 @@ def test_create_product_in_one_organisation_does_not_block_another(
         password_hash=hash_password("Str0ng!Pass"),
         is_active=True,
     )
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_admin, other_category, other_unit])
     db_session.commit()
@@ -575,7 +575,7 @@ def test_edit_product_in_other_organisation_returns_404(client, admin_user, othe
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()

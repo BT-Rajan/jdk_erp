@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.id_formats import CATEGORY_CODE
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
@@ -17,6 +17,8 @@ from app.models.audit_event import (
     MASTER_DATA_MODULE,
 )
 from app.models.category import Category
+from app.models.product import Product
+from app.models.raw_material import RawMaterial
 from app.models.user import User
 from app.schemas.category import (
     CategoryCreateRequest,
@@ -33,6 +35,7 @@ router = APIRouter(prefix="/api/categories", tags=["categories"])
 _SORT_FIELDS = {
     "name": Category.name,
     "code": Category.code,
+    "applies_to": Category.applies_to,
     "created_at": Category.created_at,
 }
 
@@ -42,6 +45,13 @@ _MAX_CODE_ATTEMPTS = 5
 def _generate_category_code(db: Session, organisation_id: int) -> str:
     existing = db.query(Category).filter(Category.organisation_id == organisation_id).count()
     return CATEGORY_CODE.format(existing + 1)
+
+
+def _in_use(db: Session, category: Category) -> bool:
+    return (
+        db.query(Product.id).filter(Product.category_id == category.id).first() is not None
+        or db.query(RawMaterial.id).filter(RawMaterial.category_id == category.id).first() is not None
+    )
 
 
 def _get_category_in_org(db: Session, category_id: int, organisation_id: int) -> Category:
@@ -65,6 +75,7 @@ def list_categories(
     sort_by: str | None = Query(None),
     sort_direction: Literal["asc", "desc"] = Query("asc"),
     include_inactive: bool = Query(False),
+    applies_to: Literal["product", "raw_material"] | None = Query(None),
     q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -79,6 +90,8 @@ def list_categories(
     query = db.query(Category).filter(Category.organisation_id == current_user.organisation_id)
     if not include_inactive:
         query = query.filter(Category.is_active.is_(True))
+    if applies_to:
+        query = query.filter(Category.applies_to == applies_to)
     query = apply_keyword_filter(query, q, Category.name, Category.code)
     query = apply_sort(query, sort_by, sort_direction, _SORT_FIELDS, default=Category.id)
 
@@ -114,6 +127,7 @@ def create_category(
             organisation_id=admin.organisation_id,
             name=payload.name,
             code=code,
+            applies_to=payload.applies_to,
             description=payload.description,
         )
         db.add(category)
@@ -160,6 +174,13 @@ def update_category(
     category = _get_category_in_org(db, category_id, admin.organisation_id)
 
     updates = payload.model_dump(exclude_unset=True)
+    if updates.get("applies_to") is None:
+        updates.pop("applies_to", None)
+    elif updates["applies_to"] != category.applies_to and _in_use(db, category):
+        raise BusinessRuleError(
+            "This category is already used by products or raw materials, so its type can't change.",
+            fields={"applies_to": "Already in use."},
+        )
     before = {field: getattr(category, field) for field in updates}
     for field, value in updates.items():
         setattr(category, field, value)

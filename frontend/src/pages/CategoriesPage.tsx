@@ -12,6 +12,7 @@ import { FilterBar } from '@/components/ui/FilterBar'
 import { FormPage } from '@/components/ui/FormPage'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
+import { SelectField } from '@/components/forms/SelectField'
 import { TextField } from '@/components/forms/TextField'
 import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
@@ -28,8 +29,13 @@ interface Category {
   name: string
   code: string
   description: string | null
+  applies_to: CategoryType
   is_active: boolean
 }
+
+type CategoryType = 'product' | 'raw_material'
+
+const TYPE_LABELS: Record<CategoryType, string> = { product: 'Product', raw_material: 'Raw Material' }
 
 /** Mirrors backend/app/schemas/pagination.py's PaginatedResponse -- the
  * one shape every server-backed list endpoint returns
@@ -42,19 +48,21 @@ interface PaginatedResponse<T> {
 
 interface CategoriesFilters {
   search: string
+  appliesTo: string
 }
 
 const categorySchema = z.object({
   name: z.string().min(1, 'Name is required'),
+  applies_to: z.string().min(1, 'Type is required'),
   description: z.string(),
 })
 
 type CategoryFormValues = z.infer<typeof categorySchema>
 
-const emptyDefaults: CategoryFormValues = { name: '', description: '' }
+const emptyDefaults: CategoryFormValues = { name: '', applies_to: '', description: '' }
 
 function toFormValues(category: Category): CategoryFormValues {
-  return { name: category.name, description: category.description ?? '' }
+  return { name: category.name, applies_to: category.applies_to, description: category.description ?? '' }
 }
 
 async function fetchCategories({
@@ -78,6 +86,7 @@ async function fetchCategories({
       sort_by: sort?.field,
       sort_direction: sort?.direction,
       include_inactive: true,
+      applies_to: filters.appliesTo || undefined,
       q: filters.search || undefined,
     },
   })
@@ -104,6 +113,7 @@ export function CategoriesPage() {
 
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
+  const [typeFilter, setTypeFilter] = useState('')
 
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -122,7 +132,7 @@ export function CategoriesPage() {
   const table = useServerTable<Category, CategoriesFilters>({
     fetcher: fetchCategories,
     pageSize: 20,
-    initialFilters: { search: '' },
+    initialFilters: { search: '', appliesTo: '' },
   })
 
   // Debounced search feeding into the table's own filter state -- see
@@ -134,8 +144,8 @@ export function CategoriesPage() {
       isFirstSearchRender.current = false
       return
     }
-    table.setFilters({ search: debouncedSearch })
-  }, [debouncedSearch])
+    table.setFilters({ search: debouncedSearch, appliesTo: typeFilter })
+  }, [debouncedSearch, typeFilter])
 
   function prepareCreate() {
     setEditingCategory(null)
@@ -160,6 +170,7 @@ export function CategoriesPage() {
       setFormError(null)
       const payload = {
         name: values.name,
+        applies_to: values.applies_to,
         description: values.description || null,
       }
       try {
@@ -204,6 +215,7 @@ export function CategoriesPage() {
   const columns: DataTableColumn<Category>[] = [
     { key: 'name', label: 'Name', sortable: true, render: (c) => c.name },
     { key: 'code', label: 'Code', sortable: true, hideBelow: 'sm', render: (c) => c.code },
+    { key: 'applies_to', label: 'Type', sortable: true, render: (c) => TYPE_LABELS[c.applies_to] },
     {
       key: 'description',
       label: 'Description',
@@ -254,6 +266,11 @@ export function CategoriesPage() {
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
           />
+          <SelectField label="Type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+            <option value="">All</option>
+            <option value="product">Product</option>
+            <option value="raw_material">Raw Material</option>
+          </SelectField>
         </FilterBar>
 
         <DataTable
@@ -298,6 +315,17 @@ export function CategoriesPage() {
               <TextField label="Code" disabled readOnly hint="System-generated. Cannot be changed." value={editingCategory.code} />
             )}
             <TextField label="Name" required {...register('name')} error={errors.name?.message} />
+            <SelectField
+              label="Type"
+              required
+              hint="Which items this category is for. Can't change once it's in use."
+              {...register('applies_to')}
+              error={errors.applies_to?.message}
+            >
+              <option value="">Select...</option>
+              <option value="product">Product</option>
+              <option value="raw_material">Raw Material</option>
+            </SelectField>
             <TextareaField label="Description" {...register('description')} error={errors.description?.message} />
           </FormPage>
 

@@ -150,7 +150,16 @@ def sales_team(db_session, organisation):
 
 @pytest.fixture()
 def electronics_category(db_session, organisation):
-    category = Category(organisation_id=organisation.id, name="Electronics", code="ELEC", is_active=True)
+    category = Category(applies_to="product", organisation_id=organisation.id, name="Electronics", code="ELEC", is_active=True)
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+    return category
+
+
+@pytest.fixture()
+def raw_material_category(db_session, organisation):
+    category = Category(applies_to="raw_material", organisation_id=organisation.id, name="Building Materials", code="BLD", is_active=True)
     db_session.add(category)
     db_session.commit()
     db_session.refresh(category)
@@ -210,12 +219,12 @@ def widget_product(db_session, organisation, electronics_category, kilogram_unit
 
 
 @pytest.fixture()
-def cement_raw_material(db_session, organisation, electronics_category, kilogram_unit):
+def cement_raw_material(db_session, organisation, raw_material_category, kilogram_unit):
     material = RawMaterial(
         organisation_id=organisation.id,
         code="RM001",
         name="Cement",
-        category_id=electronics_category.id,
+        category_id=raw_material_category.id,
         unit_of_measure_id=kilogram_unit.id,
         is_active=True,
     )

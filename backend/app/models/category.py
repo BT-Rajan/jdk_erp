@@ -4,6 +4,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
+PRODUCT = "product"
+RAW_MATERIAL = "raw_material"
+CATEGORY_TYPES = (PRODUCT, RAW_MATERIAL)
+
 
 class Category(Base, TimestampMixin, OrganisationScopedMixin):
     """The one authoritative classification master for Products/Raw
@@ -21,7 +25,12 @@ class Category(Base, TimestampMixin, OrganisationScopedMixin):
     required, and immutable -- per explicit user instruction that every
     Phase 2 master's code be auto-assigned and never caller-edited,
     superseding this module's original optional/caller-editable code
-    (docs/modules/categories.md #4)."""
+    (docs/modules/categories.md #4).
+
+    `applies_to` (`product` | `raw_material`): a category classifies one
+    kind of item only, so the Product and Raw Material dropdowns never
+    mix (docs/modules/categories.md Revision 2). It can't change while
+    any record uses the category."""
 
     __tablename__ = "categories"
     __table_args__ = (
@@ -33,4 +42,5 @@ class Category(Base, TimestampMixin, OrganisationScopedMixin):
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     code: Mapped[str] = mapped_column(String(30), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applies_to: Mapped[str] = mapped_column(String(20), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)

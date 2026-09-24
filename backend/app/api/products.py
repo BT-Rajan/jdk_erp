@@ -16,7 +16,7 @@ from app.models.audit_event import (
     PRODUCT_STATUS_CHANGED,
     PRODUCT_UPDATED,
 )
-from app.models.category import Category
+from app.models.category import PRODUCT
 from app.models.product import Product
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
@@ -27,7 +27,7 @@ from app.schemas.product import (
     ProductUpdateRequest,
 )
 from app.schemas.pagination import PaginatedResponse
-from app.services import audit_service
+from app.services import audit_service, category_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -59,24 +59,6 @@ def _get_product_in_org(db: Session, product_id: int, organisation_id: int) -> P
         # (docs/modules/organisation.md #3).
         raise NotFoundError("Product not found.")
     return product
-
-
-def _resolve_active_category(db: Session, category_id: int, organisation_id: int) -> Category:
-    """Product is the first real consumer of Category by foreign key --
-    enforcing "must be an active category in your organisation" here is
-    what docs/modules/categories.md #6's own "deactivation only governs
-    whether it can be newly selected" rule actually means in practice."""
-    category = (
-        db.query(Category)
-        .filter(Category.id == category_id, Category.organisation_id == organisation_id, Category.is_active.is_(True))
-        .first()
-    )
-    if category is None:
-        raise ValidationError(
-            "category_id must be an active category in your organisation.",
-            fields={"category_id": "Not a valid active category in your organisation."},
-        )
-    return category
 
 
 def _resolve_active_unit(db: Session, unit_of_measure_id: int, organisation_id: int) -> UnitOfMeasure:
@@ -143,7 +125,7 @@ def create_product(
     superseding this module's original caller-supplied code -- see
     docs/audit/PRODUCTS_AUDIT.md #2 for the now-superseded jdk_clean
     precedent)."""
-    _resolve_active_category(db, payload.category_id, admin.organisation_id)
+    category_service.resolve_category(db, payload.category_id, admin.organisation_id, PRODUCT)
     _resolve_active_unit(db, payload.unit_of_measure_id, admin.organisation_id)
 
     product: Product | None = None
@@ -204,8 +186,9 @@ def update_product(
     product = _get_product_in_org(db, product_id, admin.organisation_id)
 
     updates = payload.model_dump(exclude_unset=True)
-    if "category_id" in updates:
-        _resolve_active_category(db, updates["category_id"], admin.organisation_id)
+    # Unchanged is fine even if the category has since been deactivated.
+    if "category_id" in updates and updates["category_id"] != product.category_id:
+        category_service.resolve_category(db, updates["category_id"], admin.organisation_id, PRODUCT)
     if "unit_of_measure_id" in updates:
         _resolve_active_unit(db, updates["unit_of_measure_id"], admin.organisation_id)
 

@@ -30,7 +30,7 @@ def test_list_raw_materials_returns_only_my_organisation(
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="raw_material", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -57,7 +57,7 @@ def test_get_raw_material_in_other_organisation_returns_404(client, active_user,
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="raw_material", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -85,13 +85,13 @@ def test_get_nonexistent_raw_material_returns_404(client, active_user):
 
 
 def test_list_raw_materials_excludes_inactive_by_default(
-    client, active_user, organisation, electronics_category, kilogram_unit, db_session
+    client, active_user, organisation, raw_material_category, kilogram_unit, db_session
 ):
     inactive = RawMaterial(
         organisation_id=organisation.id,
         code="RM999",
         name="Discontinued Resin",
-        category_id=electronics_category.id,
+        category_id=raw_material_category.id,
         unit_of_measure_id=kilogram_unit.id,
         is_active=False,
     )
@@ -109,13 +109,13 @@ def test_list_raw_materials_excludes_inactive_by_default(
 
 
 def test_list_raw_materials_search_narrows_by_name_or_code(
-    client, active_user, cement_raw_material, organisation, electronics_category, kilogram_unit, db_session
+    client, active_user, cement_raw_material, organisation, raw_material_category, kilogram_unit, db_session
 ):
     other = RawMaterial(
         organisation_id=organisation.id,
         code="RM002",
         name="Sand",
-        category_id=electronics_category.id,
+        category_id=raw_material_category.id,
         unit_of_measure_id=kilogram_unit.id,
         is_active=True,
     )
@@ -132,7 +132,7 @@ def test_list_raw_materials_search_narrows_by_name_or_code(
 
 
 def test_raw_material_code_unique_within_organisation_but_not_across(
-    db_session, organisation, other_organisation, electronics_category, kilogram_unit
+    db_session, organisation, other_organisation, raw_material_category, kilogram_unit
 ):
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
@@ -141,7 +141,7 @@ def test_raw_material_code_unique_within_organisation_but_not_across(
         organisation_id=organisation.id,
         code="RM001",
         name="Cement",
-        category_id=electronics_category.id,
+        category_id=raw_material_category.id,
         unit_of_measure_id=kilogram_unit.id,
         is_active=True,
     )
@@ -152,7 +152,7 @@ def test_raw_material_code_unique_within_organisation_but_not_across(
         organisation_id=organisation.id,
         code="RM001",
         name="Different Material",
-        category_id=electronics_category.id,
+        category_id=raw_material_category.id,
         unit_of_measure_id=kilogram_unit.id,
         is_active=True,
     )
@@ -161,7 +161,7 @@ def test_raw_material_code_unique_within_organisation_but_not_across(
         db_session.commit()
     db_session.rollback()
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="raw_material", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()
@@ -178,13 +178,13 @@ def test_raw_material_code_unique_within_organisation_but_not_across(
 
 
 def test_raw_material_name_unique_within_organisation(
-    db_session, organisation, electronics_category, kilogram_unit, cement_raw_material
+    db_session, organisation, raw_material_category, kilogram_unit, cement_raw_material
 ):
     duplicate_name = RawMaterial(
         organisation_id=organisation.id,
         code="RM002",
         name="Cement",
-        category_id=electronics_category.id,
+        category_id=raw_material_category.id,
         unit_of_measure_id=kilogram_unit.id,
         is_active=True,
     )
@@ -197,13 +197,13 @@ def test_raw_material_name_unique_within_organisation(
 # --- create ------------------------------------------------------------
 
 
-def test_non_admin_cannot_create_raw_material(client, active_user, electronics_category, kilogram_unit):
+def test_non_admin_cannot_create_raw_material(client, active_user, raw_material_category, kilogram_unit):
     headers = _login_headers(client)
     response = client.post(
         "/api/raw-materials",
         json={
             "name": "Cement",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": kilogram_unit.id,
         },
         headers=headers,
@@ -211,25 +211,25 @@ def test_non_admin_cannot_create_raw_material(client, active_user, electronics_c
     assert response.status_code == 403
 
 
-def test_create_raw_material_requires_authentication(client, admin_user, electronics_category, kilogram_unit):
+def test_create_raw_material_requires_authentication(client, admin_user, raw_material_category, kilogram_unit):
     response = client.post(
         "/api/raw-materials",
         json={
             "name": "Cement",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": kilogram_unit.id,
         },
     )
     assert response.status_code == 401
 
 
-def test_admin_can_create_raw_material(client, db_session, admin_user, electronics_category, kilogram_unit):
+def test_admin_can_create_raw_material(client, db_session, admin_user, raw_material_category, kilogram_unit):
     headers = _login_headers(client, "admin_person")
     response = client.post(
         "/api/raw-materials",
         json={
             "name": "Cement",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": kilogram_unit.id,
             "description": "Portland cement, 50kg bags",
             "reference_cost": "12.50",
@@ -255,24 +255,24 @@ def test_admin_can_create_raw_material(client, db_session, admin_user, electroni
     assert "100001" in event.details
 
 
-def test_create_raw_material_ignores_a_caller_supplied_code(client, admin_user, electronics_category, kilogram_unit):
+def test_create_raw_material_ignores_a_caller_supplied_code(client, admin_user, raw_material_category, kilogram_unit):
     headers = _login_headers(client, "admin_person")
     response = client.post(
         "/api/raw-materials",
-        json={"code": "HACKED", "name": "Cement", "category_id": electronics_category.id, "unit_of_measure_id": kilogram_unit.id},
+        json={"code": "HACKED", "name": "Cement", "category_id": raw_material_category.id, "unit_of_measure_id": kilogram_unit.id},
         headers=headers,
     )
     assert response.status_code == 201
     assert response.json()["code"] == "100001"
 
 
-def test_create_raw_material_rejects_negative_reference_cost(client, admin_user, electronics_category, kilogram_unit):
+def test_create_raw_material_rejects_negative_reference_cost(client, admin_user, raw_material_category, kilogram_unit):
     headers = _login_headers(client, "admin_person")
     response = client.post(
         "/api/raw-materials",
         json={
             "name": "Cement",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": kilogram_unit.id,
             "reference_cost": "-1.00",
         },
@@ -281,9 +281,9 @@ def test_create_raw_material_rejects_negative_reference_cost(client, admin_user,
     assert response.status_code == 422
 
 
-def test_create_raw_material_generates_sequential_codes(client, admin_user, electronics_category, kilogram_unit):
+def test_create_raw_material_generates_sequential_codes(client, admin_user, raw_material_category, kilogram_unit):
     headers = _login_headers(client, "admin_person")
-    payload = {"category_id": electronics_category.id, "unit_of_measure_id": kilogram_unit.id}
+    payload = {"category_id": raw_material_category.id, "unit_of_measure_id": kilogram_unit.id}
     first = client.post("/api/raw-materials", json={**payload, "name": "Cement"}, headers=headers)
     second = client.post("/api/raw-materials", json={**payload, "name": "Sand"}, headers=headers)
     assert first.json()["code"] == "100001"
@@ -293,7 +293,7 @@ def test_create_raw_material_generates_sequential_codes(client, admin_user, elec
 def test_create_raw_material_rejects_inactive_category(client, admin_user, db_session, organisation, kilogram_unit):
     from app.models.category import Category
 
-    inactive_category = Category(organisation_id=organisation.id, name="Discontinued", code="DISC", is_active=False)
+    inactive_category = Category(applies_to="raw_material", organisation_id=organisation.id, name="Discontinued", code="DISC", is_active=False)
     db_session.add(inactive_category)
     db_session.commit()
     db_session.refresh(inactive_category)
@@ -312,7 +312,7 @@ def test_create_raw_material_rejects_inactive_category(client, admin_user, db_se
 
 
 def test_create_raw_material_rejects_cross_organisation_unit(
-    client, admin_user, other_organisation, electronics_category, db_session
+    client, admin_user, other_organisation, raw_material_category, db_session
 ):
     from app.models.unit import UnitOfMeasure
 
@@ -326,7 +326,7 @@ def test_create_raw_material_rejects_cross_organisation_unit(
         "/api/raw-materials",
         json={
             "name": "Cement",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": other_unit.id,
         },
         headers=headers,
@@ -338,7 +338,7 @@ def test_create_raw_material_rejects_cross_organisation_unit(
 
 
 def test_admin_can_create_raw_material_with_alternate_conversion(
-    client, db_session, admin_user, electronics_category, volume_litre_unit, mass_kilogram_unit
+    client, db_session, admin_user, raw_material_category, volume_litre_unit, mass_kilogram_unit
 ):
     headers = _login_headers(client, "admin_person")
     response = client.post(
@@ -346,7 +346,7 @@ def test_admin_can_create_raw_material_with_alternate_conversion(
         json={
             "code": "RM-N",
             "name": "Material N",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": volume_litre_unit.id,
             "alternate_conversion_unit_of_measure_id": mass_kilogram_unit.id,
             "alternate_conversion_factor": "1.25",
@@ -360,7 +360,7 @@ def test_admin_can_create_raw_material_with_alternate_conversion(
 
 
 def test_create_raw_material_rejects_alternate_unit_without_factor(
-    client, admin_user, electronics_category, volume_litre_unit, mass_kilogram_unit
+    client, admin_user, raw_material_category, volume_litre_unit, mass_kilogram_unit
 ):
     headers = _login_headers(client, "admin_person")
     response = client.post(
@@ -368,7 +368,7 @@ def test_create_raw_material_rejects_alternate_unit_without_factor(
         json={
             "code": "RM-N",
             "name": "Material N",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": volume_litre_unit.id,
             "alternate_conversion_unit_of_measure_id": mass_kilogram_unit.id,
         },
@@ -378,7 +378,7 @@ def test_create_raw_material_rejects_alternate_unit_without_factor(
 
 
 def test_create_raw_material_rejects_alternate_factor_without_unit(
-    client, admin_user, electronics_category, volume_litre_unit
+    client, admin_user, raw_material_category, volume_litre_unit
 ):
     headers = _login_headers(client, "admin_person")
     response = client.post(
@@ -386,7 +386,7 @@ def test_create_raw_material_rejects_alternate_factor_without_unit(
         json={
             "code": "RM-N",
             "name": "Material N",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": volume_litre_unit.id,
             "alternate_conversion_factor": "1.25",
         },
@@ -396,7 +396,7 @@ def test_create_raw_material_rejects_alternate_factor_without_unit(
 
 
 def test_create_raw_material_rejects_non_positive_alternate_factor(
-    client, admin_user, electronics_category, volume_litre_unit, mass_kilogram_unit
+    client, admin_user, raw_material_category, volume_litre_unit, mass_kilogram_unit
 ):
     headers = _login_headers(client, "admin_person")
     response = client.post(
@@ -404,7 +404,7 @@ def test_create_raw_material_rejects_non_positive_alternate_factor(
         json={
             "code": "RM-N",
             "name": "Material N",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": volume_litre_unit.id,
             "alternate_conversion_unit_of_measure_id": mass_kilogram_unit.id,
             "alternate_conversion_factor": "0",
@@ -415,7 +415,7 @@ def test_create_raw_material_rejects_non_positive_alternate_factor(
 
 
 def test_create_raw_material_rejects_alternate_unit_same_as_own_unit(
-    client, admin_user, electronics_category, mass_kilogram_unit
+    client, admin_user, raw_material_category, mass_kilogram_unit
 ):
     headers = _login_headers(client, "admin_person")
     response = client.post(
@@ -423,7 +423,7 @@ def test_create_raw_material_rejects_alternate_unit_same_as_own_unit(
         json={
             "code": "RM-M",
             "name": "Material M",
-            "category_id": electronics_category.id,
+            "category_id": raw_material_category.id,
             "unit_of_measure_id": mass_kilogram_unit.id,
             "alternate_conversion_unit_of_measure_id": mass_kilogram_unit.id,
             "alternate_conversion_factor": "1",
@@ -518,7 +518,7 @@ def test_edit_raw_material_in_other_organisation_returns_404(client, admin_user,
     from app.models.category import Category
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="raw_material", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()

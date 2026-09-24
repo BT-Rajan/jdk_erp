@@ -66,7 +66,7 @@ def test_list_boms_returns_only_my_organisation(
     from app.models.product import Product
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Tonne", code="TON", is_active=True)
@@ -99,7 +99,7 @@ def test_get_bom_in_other_organisation_returns_404(client, admin_user, other_org
     from app.models.product import Product
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Tonne", code="TON", is_active=True)
@@ -220,7 +220,7 @@ def test_bom_product_unique_within_organisation_but_not_across(
         db_session.commit()
     db_session.rollback()
 
-    other_category = Category(organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Tonne", code="TON", is_active=True)
@@ -282,7 +282,7 @@ def test_update_bom_in_other_organisation_returns_404(client, admin_user, other_
     from app.models.product import Product
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
+    other_category = Category(applies_to="product", organisation_id=other_organisation.id, name="Cat", code="CAT1", is_active=True)
     db_session.add(other_category)
     db_session.commit()
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Tonne", code="TON", is_active=True)

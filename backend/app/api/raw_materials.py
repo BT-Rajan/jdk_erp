@@ -16,7 +16,7 @@ from app.models.audit_event import (
     RAW_MATERIAL_STATUS_CHANGED,
     RAW_MATERIAL_UPDATED,
 )
-from app.models.category import Category
+from app.models.category import RAW_MATERIAL
 from app.models.raw_material import RawMaterial
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
@@ -27,7 +27,7 @@ from app.schemas.raw_material import (
     RawMaterialUpdateRequest,
 )
 from app.schemas.pagination import PaginatedResponse
-from app.services import audit_service
+from app.services import audit_service, category_service
 
 router = APIRouter(prefix="/api/raw-materials", tags=["raw-materials"])
 
@@ -60,20 +60,6 @@ def get_raw_material_in_org(db: Session, raw_material_id: int, organisation_id: 
         # (docs/modules/organisation.md #3).
         raise NotFoundError("Raw material not found.")
     return raw_material
-
-
-def _resolve_active_category(db: Session, category_id: int, organisation_id: int) -> Category:
-    category = (
-        db.query(Category)
-        .filter(Category.id == category_id, Category.organisation_id == organisation_id, Category.is_active.is_(True))
-        .first()
-    )
-    if category is None:
-        raise ValidationError(
-            "category_id must be an active category in your organisation.",
-            fields={"category_id": "Not a valid active category in your organisation."},
-        )
-    return category
 
 
 def _resolve_active_unit(
@@ -142,7 +128,7 @@ def create_raw_material(
     superseding this module's original caller-supplied code -- see
     docs/audit/RAW_MATERIALS_AUDIT.md #2 for the now-superseded
     jdk_clean precedent)."""
-    _resolve_active_category(db, payload.category_id, admin.organisation_id)
+    category_service.resolve_category(db, payload.category_id, admin.organisation_id, RAW_MATERIAL)
     _resolve_active_unit(db, payload.unit_of_measure_id, admin.organisation_id)
     if payload.alternate_conversion_unit_of_measure_id is not None:
         _resolve_active_unit(
@@ -210,8 +196,9 @@ def update_raw_material(
     raw_material = get_raw_material_in_org(db, raw_material_id, admin.organisation_id)
 
     updates = payload.model_dump(exclude_unset=True)
-    if "category_id" in updates:
-        _resolve_active_category(db, updates["category_id"], admin.organisation_id)
+    # Unchanged is fine even if the category has since been deactivated.
+    if "category_id" in updates and updates["category_id"] != raw_material.category_id:
+        category_service.resolve_category(db, updates["category_id"], admin.organisation_id, RAW_MATERIAL)
     if "unit_of_measure_id" in updates:
         _resolve_active_unit(db, updates["unit_of_measure_id"], admin.organisation_id)
     if updates.get("alternate_conversion_unit_of_measure_id") is not None:

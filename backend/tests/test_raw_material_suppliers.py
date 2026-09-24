@@ -46,7 +46,7 @@ def test_list_suppliers_for_material_in_other_organisation_returns_404(
     from app.models.raw_material import RawMaterial
     from app.models.unit import UnitOfMeasure
 
-    other_category = Category(organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
+    other_category = Category(applies_to="raw_material", organisation_id=other_organisation.id, name="Electronics", code="OTH1", is_active=True)
     other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
     db_session.add_all([other_category, other_unit])
     db_session.commit()

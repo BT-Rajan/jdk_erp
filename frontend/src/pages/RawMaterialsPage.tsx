@@ -267,6 +267,7 @@ export function RawMaterialsPage() {
 
   const {
     register,
+    watch,
     handleSubmit,
     reset,
     setError: setFieldError,
@@ -314,7 +315,7 @@ export function RawMaterialsPage() {
       const [categoriesResponse, unitsResponse, suppliersResponse] =
         await Promise.all([
           apiClient.get<PaginatedResponse<LookupOption>>("/api/categories", {
-            params: { page_size: 200 },
+            params: { page_size: 200, applies_to: "raw_material", include_inactive: true },
           }),
           apiClient.get<PaginatedResponse<LookupOption>>(
             "/api/units-of-measure",
@@ -337,8 +338,9 @@ export function RawMaterialsPage() {
   }, []);
 
   useEffect(() => {
-    if (canManage) void loadLookups();
-  }, [canManage, loadLookups]);
+    // Everyone needs the names for the list; only the form needs is_active.
+    void loadLookups();
+  }, [loadLookups]);
 
   function prepareCreate() {
     setEditingMaterial(null);
@@ -692,7 +694,7 @@ export function RawMaterialsPage() {
             >
               <option value="">Select a category...</option>
               {categories
-                .filter((c) => c.is_active)
+                .filter((c) => c.is_active || String(c.id) === watch("category_id"))
                 .map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}

@@ -148,6 +148,7 @@ export function ProductsPage() {
 
   const {
     register,
+    watch,
     handleSubmit,
     reset,
     setError: setFieldError,
@@ -175,7 +176,9 @@ export function ProductsPage() {
   const loadLookups = useCallback(async () => {
     try {
       const [categoriesResponse, unitsResponse] = await Promise.all([
-        apiClient.get<PaginatedResponse<LookupOption>>('/api/categories', { params: { page_size: 200 } }),
+        apiClient.get<PaginatedResponse<LookupOption>>('/api/categories', {
+          params: { page_size: 200, applies_to: 'product', include_inactive: true },
+        }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/units-of-measure', { params: { page_size: 200 } }),
       ])
       setCategories(categoriesResponse.data.data)
@@ -186,8 +189,9 @@ export function ProductsPage() {
   }, [])
 
   useEffect(() => {
-    if (canManage) void loadLookups()
-  }, [canManage, loadLookups])
+    // Everyone needs the names for the list; only the form needs is_active.
+    void loadLookups()
+  }, [loadLookups])
 
   function prepareCreate() {
     setEditingProduct(null)
@@ -377,7 +381,7 @@ export function ProductsPage() {
             <SelectField label="Category" required {...register('category_id')} error={errors.category_id?.message}>
               <option value="">Select a category...</option>
               {categories
-                .filter((c) => c.is_active)
+                .filter((c) => c.is_active || String(c.id) === watch('category_id'))
                 .map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
