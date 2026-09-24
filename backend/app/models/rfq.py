@@ -72,6 +72,10 @@ class Rfq(Base, TimestampMixin, OrganisationScopedMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     rfq_number: Mapped[str] = mapped_column(String(10), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=DRAFT, server_default=DRAFT)
+    # 0 while a draft has never been submitted; each submit (first issue,
+    # or a revision of an issued RFQ before any quote) adds one and
+    # generates a fresh PDF per supplier -- earlier PDFs are kept.
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     priority: Mapped[str] = mapped_column(
         String(10), nullable=False, default=PRIORITY_NORMAL, server_default=PRIORITY_NORMAL
     )
@@ -103,9 +107,8 @@ class Rfq(Base, TimestampMixin, OrganisationScopedMixin):
 
 
 class RfqLine(Base, TimestampMixin):
-    """One requested Raw Material, in the material's own
-    `unit_of_measure_id` -- no purchase UoM (docs/modules/rfq.md #3). No
-    price field -- an RFQ line is a request, never a commitment.
+    """One requested Raw Material in its requested unit
+    (docs/modules/rfq.md #3). No price field -- an RFQ line is a request, never a commitment.
     `remarks` is a free-text grade/size/quality note on the request
     itself. No `organisation_id` of its own -- a child of an already
     organisation-scoped `Rfq`."""
@@ -118,6 +121,13 @@ class RfqLine(Base, TimestampMixin):
         ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    # The unit the quantity is requested in -- defaults to the material's
+    # own unit, and is only ever accepted when it converts to that unit
+    # (app/services/uom_conversion.py), so conversion to a PO never fails.
+    unit_of_measure_id: Mapped[int] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    required_by_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -142,6 +152,7 @@ class RfqSupplierInvitation(Base, TimestampMixin):
         String(10), nullable=False, default=INVITATION_SENT, server_default=INVITATION_SENT
     )
     invited_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    last_emailed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class RfqResponse(Base, TimestampMixin, OrganisationScopedMixin):

@@ -7,13 +7,14 @@ with the same change."""
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.orm import Session
 
 from app.core.errors import BusinessRuleError, ConflictError, ValidationError
 from app.models.purchase_order import PurchaseOrder
 from app.models.raw_material import RawMaterial
+from app.models.unit import UnitOfMeasure
 from app.models.rfq import (
     ALLOWED_STATUS_TRANSITIONS,
     CONVERTED,
@@ -29,9 +30,10 @@ from app.models.rfq import (
     RfqResponseLine,
     RfqSupplierInvitation,
 )
-from app.services import purchase_order_service
+from app.services import purchase_order_service, uom_conversion
 
 _MAX_YEARLY_SEQUENCE = 9999
+_FOUR_DP = Decimal("0.0001")
 
 
 def generate_rfq_number(db: Session, organisation_id: int, today: date | None = None) -> str:
@@ -56,13 +58,27 @@ def assert_transition_allowed(current_status: str, target_status: str) -> None:
         raise BusinessRuleError(f"Cannot change RFQ status from '{current_status}' to '{target_status}'.")
 
 
-def assert_can_issue(db: Session, rfq: Rfq) -> None:
-    """docs/modules/rfq.md #9 -- an RFQ with nothing requested or nobody
-    invited has nothing to issue."""
-    if db.query(RfqLine.id).filter(RfqLine.rfq_id == rfq.id).first() is None:
-        raise BusinessRuleError("Cannot issue an RFQ with no lines.")
-    if db.query(RfqSupplierInvitation.id).filter(RfqSupplierInvitation.rfq_id == rfq.id).first() is None:
-        raise BusinessRuleError("Cannot issue an RFQ with no invited suppliers.")
+def line_unit_ratio(
+    unit: UnitOfMeasure, material: RawMaterial, material_alternate_unit: UnitOfMeasure | None, material_unit: UnitOfMeasure
+) -> Decimal | None:
+    """`1 [unit] = ratio [material's own unit]`, or None when no valid
+    conversion exists (app/services/uom_conversion.py). An RFQ line is
+    only accepted in a unit with a ratio, so its PO line -- always in the
+    material's own unit (docs/modules/purchase_orders.md #5) -- can
+    always be derived."""
+    return uom_conversion.resolve_conversion_ratio(unit, material_unit, material, material_alternate_unit)
+
+
+def to_material_unit(quantity: Decimal, unit_price: Decimal, ratio: Decimal) -> tuple[Decimal, Decimal]:
+    """Re-expresses an RFQ-unit quantity/price in the material's own unit
+    for the PO: quantity scales up by the ratio, price per unit scales
+    down by it (2 MT at 85.000/MT -> 2000 KG at 0.0850/KG)."""
+    if ratio == 1:
+        return quantity, unit_price
+    return (
+        (quantity * ratio).quantize(_FOUR_DP, rounding=ROUND_HALF_UP),
+        (unit_price / ratio).quantize(_FOUR_DP, rounding=ROUND_HALF_UP),
+    )
 
 
 @dataclass
@@ -179,7 +195,9 @@ def decide(
 ) -> None:
     """docs/modules/rfq.md #7 -- only valid from response_received.
     `selected_response_id` is required when selecting, and must reference
-    a response captured against any invitation on *this* RFQ."""
+    a response captured against any invitation on *this* RFQ. The
+    accepted-quotation files are attached by the caller in the same
+    transaction. `rejected` is terminal: nothing further can happen."""
     if rfq.status != RESPONSE_RECEIVED:
         raise BusinessRuleError("A decision can only be made once a supplier response has been received.")
 
@@ -278,6 +296,10 @@ def convert_to_purchase_order(
     rfq: Rfq,
     supplier_id: int,
     warehouse_id: int,
+    expected_delivery_date: date,
+    payment_terms: str,
+    supplier_reference: str | None,
+    notes: str | None,
     lines: list[RfqConversionLine],
 ) -> PurchaseOrder:
     """docs/modules/rfq.md #8/#14 -- only valid from `selected`. Supplier
@@ -296,8 +318,8 @@ def convert_to_purchase_order(
         supplier_id=supplier_id,
         warehouse_id=warehouse_id,
         order_date=date.today(),
-        expected_delivery_date=rfq.required_delivery_date,
-        notes=f"Converted from RFQ {rfq.rfq_number}.",
+        expected_delivery_date=expected_delivery_date,
+        notes=notes or f"Converted from RFQ {rfq.rfq_number}.",
         rfq_id=rfq.id,
         lines=[
             purchase_order_service.PurchaseOrderLineInput(
@@ -306,6 +328,12 @@ def convert_to_purchase_order(
             for line in lines
         ],
     )
+
+    # The PO keeps the final agreed terms as its own values -- never read
+    # back from the quotation later.
+    purchase_order.payment_terms = payment_terms
+    purchase_order.supplier_reference = supplier_reference
+    db.add(purchase_order)
 
     rfq.purchase_order_id = purchase_order.id
     rfq.status = CONVERTED

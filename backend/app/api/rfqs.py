@@ -1,9 +1,11 @@
+import io
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from sqlalchemy import exists
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -13,28 +15,31 @@ from app.core.entity_access import register_entity_access_check
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
+from app.core.storage import default_storage
 from app.models.audit_event import (
     PROCUREMENT_MODULE,
     RFQ_CONVERTED,
     RFQ_CREATED,
     RFQ_DECIDED,
-    RFQ_INVITATION_ADDED,
     RFQ_INVITATION_DECLINED,
-    RFQ_INVITATION_REMOVED,
-    RFQ_LINE_ADDED,
-    RFQ_LINE_REMOVED,
-    RFQ_LINE_UPDATED,
     RFQ_RESPONSE_CAPTURED,
+    RFQ_SEND_FAILED,
+    RFQ_SENT,
     RFQ_STATUS_CHANGED,
     RFQ_UPDATED,
 )
+from app.models.document_template import RFQ_DOCUMENT, DocumentTemplate
 from app.models.file import FileRecord
 from app.models.raw_material import RawMaterial
+from app.models.organisation import Organisation
 from app.models.rfq import (
     CANCELLED,
     CONVERTED,
     DRAFT,
+    ISSUED,
+    RESPONSE_RECEIVED,
     RFQ_PRIORITIES,
+    SELECTED,
     RFQ_STATUSES,
     Rfq,
     RfqLine,
@@ -44,6 +49,7 @@ from app.models.rfq import (
 )
 from app.models.supplier import Supplier
 from app.models.team import Team
+from app.models.unit import UnitOfMeasure
 from app.models.user import User
 from app.models.warehouse import Warehouse
 from app.schemas.file import FileOut
@@ -51,20 +57,18 @@ from app.schemas.pagination import PaginatedResponse
 from app.schemas.rfq import (
     RfqCaptureResponseRequest,
     RfqConvertRequest,
-    RfqCreateRequest,
     RfqDecisionRequest,
-    RfqInvitationCreateRequest,
     RfqInvitationOut,
-    RfqLineCreateRequest,
     RfqLineOut,
-    RfqLineUpdateRequest,
     RfqOut,
+    RfqRaiseNewRequest,
     RfqResponseLineOut,
     RfqResponseOut,
+    RfqSaveRequest,
     RfqStatusChangeRequest,
-    RfqUpdateRequest,
 )
-from app.services import audit_service, file_service, rfq_scope, rfq_service
+from app.services import audit_service, email_service, file_service, rfq_scope, rfq_service
+from app.services.rfq_pdf_service import RfqPdfData, RfqPdfLine, generate_rfq_pdf
 
 router = APIRouter(prefix="/api/rfqs", tags=["rfqs"])
 
@@ -77,6 +81,12 @@ _SORT_FIELDS = {
 }
 
 _MAX_CODE_ATTEMPTS = 5
+
+# FileRecord.entity_type values owned by this module.
+_RESPONSE_FILE = "rfq_response"
+_INVITATION_PDF = "rfq_invitation"
+_ACCEPTANCE_FILE = "rfq_acceptance"
+_ACCEPTANCE_MIME_TYPES = ("application/pdf", "image/png", "image/jpeg")
 
 
 def _client_ip(request: Request) -> str | None:
@@ -91,13 +101,6 @@ def _get_rfq_in_org(db: Session, rfq_id: int, organisation_id: int) -> Rfq:
         # (docs/modules/organisation.md #3).
         raise NotFoundError("RFQ not found.")
     return rfq
-
-
-def _get_line_in_rfq(db: Session, rfq_id: int, line_id: int) -> RfqLine:
-    line = db.query(RfqLine).filter(RfqLine.id == line_id, RfqLine.rfq_id == rfq_id).first()
-    if line is None:
-        raise NotFoundError("RFQ line not found.")
-    return line
 
 
 def _get_invitation_in_rfq(db: Session, rfq_id: int, invitation_id: int) -> RfqSupplierInvitation:
@@ -171,15 +174,10 @@ def _resolve_active_raw_material(db: Session, raw_material_id: int, organisation
     return material
 
 
-def _require_draft(rfq: Rfq) -> None:
-    if rfq.status != DRAFT:
-        raise BusinessRuleError("Only a draft RFQ can be edited.")
-
-
 def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
     """Assembles the full nested shape (lines, invitations -> responses ->
-    response lines + files) for any number of RFQs in a fixed five
-    queries, never one-per-row -- the list endpoint returns the same
+    response lines, plus all files) for any number of RFQs in a fixed
+    six queries, never one-per-row -- the list endpoint returns the same
     shape as the detail endpoint (docs/modules/rfq.md #6/#18). Every
     child query is keyed by ids already scoped to the caller's
     organisation through the parent `Rfq` rows."""
@@ -210,7 +208,6 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
     response_ids = [response.id for response in responses]
 
     response_lines_by_response: dict[int, list[RfqResponseLine]] = defaultdict(list)
-    files_by_response: dict[int, list[FileRecord]] = defaultdict(list)
     if response_ids:
         for response_line in (
             db.query(RfqResponseLine)
@@ -218,16 +215,21 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
             .order_by(RfqResponseLine.id)
         ):
             response_lines_by_response[response_line.response_id].append(response_line)
-        for record in (
-            db.query(FileRecord)
-            .filter(
-                FileRecord.entity_type == "rfq_response",
-                FileRecord.entity_id.in_(response_ids),
-                FileRecord.deleted_at.is_(None),
-            )
-            .order_by(FileRecord.id)
-        ):
-            files_by_response[record.entity_id].append(record)
+
+    # Every file this module owns (response evidence, per-supplier RFQ
+    # PDFs, accepted-quotation uploads) in one query.
+    files: dict[tuple[str, int], list[FileRecord]] = defaultdict(list)
+    file_scopes = [and_(FileRecord.entity_type == _ACCEPTANCE_FILE, FileRecord.entity_id.in_(rfq_ids))]
+    if invitation_ids:
+        file_scopes.append(and_(FileRecord.entity_type == _INVITATION_PDF, FileRecord.entity_id.in_(invitation_ids)))
+    if response_ids:
+        file_scopes.append(and_(FileRecord.entity_type == _RESPONSE_FILE, FileRecord.entity_id.in_(response_ids)))
+    for record in (
+        db.query(FileRecord)
+        .filter(FileRecord.organisation_id == rfqs[0].organisation_id, FileRecord.deleted_at.is_(None), or_(*file_scopes))
+        .order_by(FileRecord.id)
+    ):
+        files[(record.entity_type, record.entity_id)].append(record)
 
     responses_by_invitation: dict[int, list[RfqResponseOut]] = defaultdict(list)
     for response in responses:
@@ -245,9 +247,14 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
                 note=response.note,
                 created_by_user_id=response.created_by_user_id,
                 lines=[RfqResponseLineOut.model_validate(row) for row in response_lines_by_response[response.id]],
-                files=[FileOut.model_validate(f) for f in files_by_response[response.id]],
+                files=[FileOut.model_validate(f) for f in files[(_RESPONSE_FILE, response.id)]],
             )
         )
+
+    requester_ids = {rfq.requested_by_user_id for rfq in rfqs if rfq.requested_by_user_id}
+    requester_names = (
+        dict(db.query(User.id, User.full_name).filter(User.id.in_(requester_ids)).all()) if requester_ids else {}
+    )
 
     invitations_by_rfq: dict[int, list[RfqInvitationOut]] = defaultdict(list)
     for invitation in invitations:
@@ -257,6 +264,13 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
                 supplier_id=invitation.supplier_id,
                 status=invitation.status,
                 invited_at=invitation.invited_at,
+                last_emailed_at=invitation.last_emailed_at,
+                # The latest generated PDF is the one to download/email.
+                pdf_file=(
+                    FileOut.model_validate(files[(_INVITATION_PDF, invitation.id)][-1])
+                    if files[(_INVITATION_PDF, invitation.id)]
+                    else None
+                ),
                 responses=responses_by_invitation[invitation.id],
             )
         )
@@ -267,11 +281,13 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
             organisation_id=rfq.organisation_id,
             rfq_number=rfq.rfq_number,
             status=rfq.status,
+            revision_number=rfq.revision_number,
             priority=rfq.priority,
             rfq_date=rfq.rfq_date,
             required_delivery_date=rfq.required_delivery_date,
             team_id=rfq.team_id,
             requested_by_user_id=rfq.requested_by_user_id,
+            requested_by_name=requester_names.get(rfq.requested_by_user_id),
             notes=rfq.notes,
             cancel_reason=rfq.cancel_reason,
             decided_by_user_id=rfq.decided_by_user_id,
@@ -281,6 +297,7 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
             purchase_order_id=rfq.purchase_order_id,
             lines=[RfqLineOut.model_validate(line) for line in lines_by_rfq[rfq.id]],
             invitations=invitations_by_rfq[rfq.id],
+            acceptance_files=[FileOut.model_validate(f) for f in files[(_ACCEPTANCE_FILE, rfq.id)]],
         )
         for rfq in rfqs
     ]
@@ -356,34 +373,254 @@ def get_rfq(rfq_id: int, current_user: User = Depends(get_current_user), db: Ses
     return _build_rfq_out(db, rfq)
 
 
+def _validate_form(db: Session, payload: RfqSaveRequest, organisation_id: int) -> tuple[Team, list[Supplier], dict]:
+    """Every rule of the RFQ form (docs/modules/rfq.md #2-#4), checked
+    before anything is written: active department, active registered
+    suppliers, active materials, and a unit that converts to each
+    material's own unit. Returns the resolved rows."""
+    team = _resolve_active_team(db, payload.team_id, organisation_id)
+    today = date.today()
+    if payload.required_delivery_date < today:
+        raise ValidationError(
+            "Required By date cannot be in the past.", fields={"required_delivery_date": "Cannot be in the past."}
+        )
+
+    suppliers = (
+        db.query(Supplier)
+        .filter(Supplier.id.in_(payload.supplier_ids), Supplier.organisation_id == organisation_id, Supplier.is_active.is_(True))
+        .all()
+    )
+    if len(suppliers) != len(payload.supplier_ids):
+        raise ValidationError(
+            "Every supplier must be an active registered supplier in your organisation.",
+            fields={"supplier_ids": "One or more suppliers are not valid."},
+        )
+
+    material_ids = {line.raw_material_id for line in payload.lines}
+    materials = {
+        m.id: m
+        for m in db.query(RawMaterial).filter(
+            RawMaterial.id.in_(material_ids), RawMaterial.organisation_id == organisation_id, RawMaterial.is_active.is_(True)
+        )
+    }
+    unit_ids = {line.unit_of_measure_id for line in payload.lines} | {m.unit_of_measure_id for m in materials.values()} | {
+        m.alternate_conversion_unit_of_measure_id for m in materials.values() if m.alternate_conversion_unit_of_measure_id
+    }
+    units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids), UnitOfMeasure.organisation_id == organisation_id)}
+
+    for index, line in enumerate(payload.lines, start=1):
+        material = materials.get(line.raw_material_id)
+        if material is None:
+            raise ValidationError(
+                f"Item {index}: not an active product/material in your organisation.",
+                fields={"lines": f"Item {index}: invalid product/material."},
+            )
+        unit = units.get(line.unit_of_measure_id)
+        if unit is None or not unit.is_active:
+            raise ValidationError(
+                f"Item {index}: not an active unit in your organisation.", fields={"lines": f"Item {index}: invalid unit."}
+            )
+        material_unit = units[material.unit_of_measure_id]
+        alternate = units.get(material.alternate_conversion_unit_of_measure_id) if material.alternate_conversion_unit_of_measure_id else None
+        if rfq_service.line_unit_ratio(unit, material, alternate, material_unit) is None:
+            raise ValidationError(
+                f"Item {index}: {material.name} cannot be requested in {unit.code} -- "
+                f"there is no conversion to its unit {material_unit.code}.",
+                fields={"lines": f"Item {index}: unit has no conversion to {material_unit.code}."},
+            )
+        if line.required_by_date is not None and line.required_by_date < today:
+            raise ValidationError(
+                f"Item {index}: Required By date cannot be in the past.", fields={"lines": f"Item {index}: date in the past."}
+            )
+    return team, suppliers, {"materials": materials, "units": units}
+
+
+def _write_form(db: Session, rfq: Rfq, payload: RfqSaveRequest) -> None:
+    """Applies the form to `rfq`: header fields, lines replaced wholesale
+    (only ever called while no quote references them), invitations
+    reconciled by supplier so a kept supplier keeps its invitation and
+    PDF history."""
+    rfq.required_delivery_date = payload.required_delivery_date
+    rfq.team_id = payload.team_id
+    rfq.priority = payload.priority
+    rfq.notes = payload.notes
+    db.add(rfq)
+
+    db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id).delete(synchronize_session=False)
+    db.add_all(
+        RfqLine(
+            rfq_id=rfq.id,
+            raw_material_id=line.raw_material_id,
+            quantity=line.quantity,
+            unit_of_measure_id=line.unit_of_measure_id,
+            required_by_date=line.required_by_date,
+            remarks=line.remarks,
+        )
+        for line in payload.lines
+    )
+
+    existing = {
+        invitation.supplier_id: invitation
+        for invitation in db.query(RfqSupplierInvitation).filter(RfqSupplierInvitation.rfq_id == rfq.id)
+    }
+    wanted = set(payload.supplier_ids)
+    for supplier_id, invitation in existing.items():
+        if supplier_id not in wanted:
+            db.delete(invitation)
+    now = datetime.utcnow()
+    db.add_all(
+        RfqSupplierInvitation(rfq_id=rfq.id, supplier_id=supplier_id, invited_at=now)
+        for supplier_id in payload.supplier_ids
+        if supplier_id not in existing
+    )
+    db.flush()
+
+
+def _render_pdfs(db: Session, rfq: Rfq, team: Team, resolved: dict) -> list[tuple[RfqSupplierInvitation, bytes]]:
+    """One letterhead PDF per invited supplier for the current revision
+    (docs/modules/rfq.md #11). Rendered in memory, before anything is
+    committed."""
+    organisation = db.query(Organisation).filter(Organisation.id == rfq.organisation_id).one()
+    template = (
+        db.query(DocumentTemplate)
+        .filter(DocumentTemplate.organisation_id == rfq.organisation_id, DocumentTemplate.document_type == RFQ_DOCUMENT)
+        .first()
+    )
+    letterhead: bytes | None = None
+    if template is not None and template.letterhead_file_id is not None:
+        record = (
+            db.query(FileRecord)
+            .filter(
+                FileRecord.id == template.letterhead_file_id,
+                FileRecord.organisation_id == rfq.organisation_id,
+                FileRecord.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if record is not None:
+            letterhead = b"".join(default_storage.download(record.storage_key))
+
+    requested_by = db.query(User.full_name).filter(User.id == rfq.requested_by_user_id).scalar()
+    materials, units = resolved["materials"], resolved["units"]
+    lines = db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id).order_by(RfqLine.id).all()
+    pdf_lines = [
+        RfqPdfLine(
+            material_name=materials[line.raw_material_id].name,
+            quantity=line.quantity,
+            unit_code=units[line.unit_of_measure_id].code,
+            required_by_date=line.required_by_date,
+            remarks=line.remarks,
+        )
+        for line in lines
+    ]
+    suppliers = {s.id: s for s in resolved["suppliers"]}
+    invitations = (
+        db.query(RfqSupplierInvitation).filter(RfqSupplierInvitation.rfq_id == rfq.id).order_by(RfqSupplierInvitation.id).all()
+    )
+
+    rendered = []
+    for invitation in invitations:
+        supplier = suppliers[invitation.supplier_id]
+        rendered.append(
+            (
+                invitation,
+                generate_rfq_pdf(
+                    RfqPdfData(
+                        organisation_name=organisation.name,
+                        organisation_address=organisation.address,
+                        organisation_phone=organisation.contact_phone,
+                        organisation_email=organisation.contact_email,
+                        rfq_number=rfq.rfq_number,
+                        revision_number=rfq.revision_number,
+                        rfq_date=rfq.rfq_date,
+                        required_delivery_date=rfq.required_delivery_date,
+                        department=team.name,
+                        requested_by=requested_by,
+                        priority=rfq.priority,
+                        notes=rfq.notes,
+                        supplier_name=supplier.name,
+                        supplier_address=supplier.address,
+                        supplier_contact_person=supplier.contact_person,
+                        supplier_email=supplier.email,
+                        lines=pdf_lines,
+                        letterhead_image=letterhead,
+                        margin_top_mm=template.margin_top_mm if template else 40,
+                        margin_bottom_mm=template.margin_bottom_mm if template else 25,
+                        intro_text=template.intro_text if template else None,
+                        terms_text=template.terms_text if template else None,
+                        signature_text=template.signature_text if template else None,
+                    )
+                ),
+            )
+        )
+    return rendered
+
+
+def _save(db: Session, request: Request, user: User, rfq: Rfq, payload: RfqSaveRequest, team: Team, resolved: dict, created: bool) -> RfqOut:
+    """Shared tail of create/edit: write the form, and on submit move to
+    the next revision (`draft -> issued`, or a new revision of an issued
+    RFQ) and store one PDF per supplier. `upload_file` commits, so the
+    audit event is logged first and lands in the same commit as the RFQ
+    changes."""
+    _write_form(db, rfq, payload)
+
+    rendered: list[tuple[RfqSupplierInvitation, bytes]] = []
+    if payload.submit:
+        if rfq.status == DRAFT:
+            rfq_service.assert_transition_allowed(rfq.status, ISSUED)
+            rfq.status = ISSUED
+        rfq.revision_number += 1
+        db.add(rfq)
+        db.flush()
+        rendered = _render_pdfs(db, rfq, team, resolved)
+
+    action = RFQ_CREATED if created else RFQ_UPDATED
+    details = f"rfq_number: {rfq.rfq_number}, items: {len(payload.lines)}, suppliers: {len(payload.supplier_ids)}"
+    if payload.submit:
+        details += f", submitted revision {rfq.revision_number}"
+    _log(db, request, user, rfq, action, details)
+
+    if not rendered:
+        db.commit()
+    for invitation, pdf_bytes in rendered:
+        file_service.upload_file(
+            db,
+            organisation_id=user.organisation_id,
+            uploaded_by_user_id=user.id,
+            filename=f"RFQ-{rfq.rfq_number}-Rev{rfq.revision_number}-{invitation.supplier_id}.pdf",
+            stream=io.BytesIO(pdf_bytes),
+            entity_type=_INVITATION_PDF,
+            entity_id=invitation.id,
+        )
+    db.refresh(rfq)
+    return _build_rfq_out(db, rfq)
+
+
 @router.post("", response_model=RfqOut, status_code=status.HTTP_201_CREATED)
 def create_rfq(
-    payload: RfqCreateRequest,
+    payload: RfqSaveRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RfqOut:
-    """Always starts `draft` with no lines and no invitations -- both are
-    added afterward (docs/modules/rfq.md #3/#4). `requested_by_user_id`
-    is the session user, never client-supplied."""
+    """The New RFQ modal (docs/modules/rfq.md #2-#4): saves a draft, or
+    with `submit` issues revision 1 and generates the supplier PDFs."""
     rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
-    if payload.team_id is not None:
-        _resolve_active_team(db, payload.team_id, current_user.organisation_id)
+    if payload.submit:
+        rfq_scope.require_permission(db, current_user, rfq_scope.ISSUE)
+    team, suppliers, resolved = _validate_form(db, payload, current_user.organisation_id)
+    resolved["suppliers"] = suppliers
 
     rfq: Rfq | None = None
     last_error: IntegrityError | None = None
     for _ in range(_MAX_CODE_ATTEMPTS):
-        rfq_number = rfq_service.generate_rfq_number(db, current_user.organisation_id)
         rfq = Rfq(
             organisation_id=current_user.organisation_id,
-            rfq_number=rfq_number,
+            rfq_number=rfq_service.generate_rfq_number(db, current_user.organisation_id),
             status=DRAFT,
-            priority=payload.priority,
-            rfq_date=payload.rfq_date,
+            rfq_date=date.today(),
             required_delivery_date=payload.required_delivery_date,
-            team_id=payload.team_id,
             requested_by_user_id=current_user.id,
-            notes=payload.notes,
         )
         db.add(rfq)
         try:
@@ -396,179 +633,111 @@ def create_rfq(
     if last_error is not None or rfq is None:
         raise ConflictError("Could not generate a unique RFQ number. Please try again.") from last_error
 
-    _log(db, request, current_user, rfq, RFQ_CREATED, f"rfq_number: {rfq.rfq_number}, priority: {rfq.priority}")
-    db.commit()
-    db.refresh(rfq)
-    return _build_rfq_out(db, rfq)
+    return _save(db, request, current_user, rfq, payload, team, resolved, created=True)
 
 
-@router.patch("/{rfq_id}", response_model=RfqOut)
+@router.put("/{rfq_id}", response_model=RfqOut)
 def update_rfq(
     rfq_id: int,
-    payload: RfqUpdateRequest,
+    payload: RfqSaveRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RfqOut:
-    """Draft-only. `requested_by_user_id` has no update path."""
+    """Edit the RFQ in the same modal (docs/modules/rfq.md #9). A draft
+    can be saved or submitted. An issued RFQ can be revised -- always
+    re-submitted as the next revision with fresh PDFs -- only until the
+    first quote is captured, since quotes are against its lines."""
     rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
     rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
-    _require_draft(rfq)
-
-    updates = payload.model_dump(exclude_unset=True)
-    if updates.get("team_id") is not None:
-        _resolve_active_team(db, updates["team_id"], current_user.organisation_id)
-    rfq_date = updates.get("rfq_date", rfq.rfq_date)
-    required_delivery_date = updates.get("required_delivery_date", rfq.required_delivery_date)
-    if required_delivery_date is not None and required_delivery_date < rfq_date:
-        raise ValidationError(
-            "Required delivery date cannot be before the RFQ date.",
-            fields={"required_delivery_date": "Cannot be before the RFQ date."},
-        )
-
-    before = {field: getattr(rfq, field) for field in updates}
-    for field, value in updates.items():
-        setattr(rfq, field, value)
-    db.add(rfq)
-    db.flush()
-
-    changes = audit_service.diff_fields(before, updates)
-    if changes:
-        _log(db, request, current_user, rfq, RFQ_UPDATED, audit_service.format_changes(changes))
-    db.commit()
-    db.refresh(rfq)
-    return _build_rfq_out(db, rfq)
-
-
-@router.post("/{rfq_id}/lines", response_model=RfqOut, status_code=status.HTTP_201_CREATED)
-def add_rfq_line(
-    rfq_id: int,
-    payload: RfqLineCreateRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> RfqOut:
-    rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
-    rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
-    _require_draft(rfq)
-    material = _resolve_active_raw_material(db, payload.raw_material_id, current_user.organisation_id)
-
-    line = RfqLine(rfq_id=rfq.id, raw_material_id=material.id, quantity=payload.quantity, remarks=payload.remarks)
-    db.add(line)
-    db.flush()
-
-    _log(
-        db, request, current_user, rfq, RFQ_LINE_ADDED,
-        f"raw_material_id: {line.raw_material_id}, quantity: {line.quantity}",
-    )
-    db.commit()
-    db.refresh(rfq)
-    return _build_rfq_out(db, rfq)
-
-
-@router.patch("/{rfq_id}/lines/{line_id}", response_model=RfqOut)
-def update_rfq_line(
-    rfq_id: int,
-    line_id: int,
-    payload: RfqLineUpdateRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> RfqOut:
-    rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
-    rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
-    _require_draft(rfq)
-    line = _get_line_in_rfq(db, rfq.id, line_id)
-
-    updates = payload.model_dump(exclude_unset=True)
-    for field, value in updates.items():
-        setattr(line, field, value)
-    db.add(line)
-    db.flush()
-
-    _log(
-        db, request, current_user, rfq, RFQ_LINE_UPDATED,
-        f"line_id: {line.id}, quantity: {line.quantity}, remarks: {line.remarks or '-'}",
-    )
-    db.commit()
-    db.refresh(rfq)
-    return _build_rfq_out(db, rfq)
-
-
-@router.delete("/{rfq_id}/lines/{line_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_rfq_line(
-    rfq_id: int,
-    line_id: int,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> None:
-    rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
-    rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
-    _require_draft(rfq)
-    line = _get_line_in_rfq(db, rfq.id, line_id)
-
-    _log(db, request, current_user, rfq, RFQ_LINE_REMOVED, f"raw_material_id: {line.raw_material_id}")
-    db.delete(line)
-    db.commit()
-
-
-@router.post("/{rfq_id}/invitations", response_model=RfqOut, status_code=status.HTTP_201_CREATED)
-def add_rfq_invitation(
-    rfq_id: int,
-    payload: RfqInvitationCreateRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> RfqOut:
-    """docs/modules/rfq.md #4 -- invitations are part of the draft, so
-    they share the "create" permission and the draft-only rule."""
-    rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
-    rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
-    _require_draft(rfq)
-    supplier = _resolve_active_supplier(db, payload.supplier_id, current_user.organisation_id)
-
-    already_invited = (
-        db.query(RfqSupplierInvitation.id)
-        .filter(RfqSupplierInvitation.rfq_id == rfq.id, RfqSupplierInvitation.supplier_id == supplier.id)
+    if rfq.status == ISSUED:
+        if not payload.submit:
+            raise BusinessRuleError("An issued RFQ can only be changed by submitting a new revision.")
+    elif rfq.status != DRAFT:
+        raise BusinessRuleError("This RFQ can no longer be changed.")
+    if payload.submit:
+        rfq_scope.require_permission(db, current_user, rfq_scope.ISSUE)
+    has_quote = (
+        db.query(RfqResponse.id)
+        .join(RfqSupplierInvitation, RfqSupplierInvitation.id == RfqResponse.invitation_id)
+        .filter(RfqSupplierInvitation.rfq_id == rfq.id)
         .first()
+        is not None
     )
-    if already_invited is not None:
-        raise ConflictError("This supplier is already invited to this RFQ.")
+    if has_quote:
+        raise BusinessRuleError("This RFQ can no longer be changed -- a supplier quote has already been captured.")
 
-    invitation = RfqSupplierInvitation(rfq_id=rfq.id, supplier_id=supplier.id, invited_at=datetime.utcnow())
-    db.add(invitation)
-    try:
-        db.flush()
-    except IntegrityError as exc:
-        # Concurrent duplicate invite lost the race to the unique constraint.
-        db.rollback()
-        raise ConflictError("This supplier is already invited to this RFQ.") from exc
-
-    _log(db, request, current_user, rfq, RFQ_INVITATION_ADDED, f"supplier_id: {supplier.id}")
-    db.commit()
-    db.refresh(rfq)
-    return _build_rfq_out(db, rfq)
+    team, suppliers, resolved = _validate_form(db, payload, current_user.organisation_id)
+    resolved["suppliers"] = suppliers
+    return _save(db, request, current_user, rfq, payload, team, resolved, created=False)
 
 
-@router.delete("/{rfq_id}/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_rfq_invitation(
+@router.post("/{rfq_id}/invitations/{invitation_id}/send", response_model=RfqOut)
+def send_rfq_to_supplier(
     rfq_id: int,
     invitation_id: int,
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> None:
-    """Draft-only -- a draft invitation can have no responses yet, so
-    removing it never discards captured history."""
-    rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
+) -> RfqOut:
+    """Emails this supplier's current-revision PDF via the organisation's
+    mailbox (app/services/email_service.py, same flow as the PO send). A
+    failed send is audited and re-raised; nothing is marked sent."""
+    rfq_scope.require_permission(db, current_user, rfq_scope.ISSUE)
     rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
-    _require_draft(rfq)
     invitation = _get_invitation_in_rfq(db, rfq.id, invitation_id)
+    if rfq.status not in (ISSUED, RESPONSE_RECEIVED):
+        raise BusinessRuleError("Only a submitted RFQ that is still open can be emailed.")
 
-    _log(db, request, current_user, rfq, RFQ_INVITATION_REMOVED, f"supplier_id: {invitation.supplier_id}")
-    db.delete(invitation)
+    pdf_file = (
+        db.query(FileRecord)
+        .filter(
+            FileRecord.entity_type == _INVITATION_PDF,
+            FileRecord.entity_id == invitation.id,
+            FileRecord.organisation_id == current_user.organisation_id,
+            FileRecord.deleted_at.is_(None),
+        )
+        .order_by(FileRecord.id.desc())
+        .first()
+    )
+    if pdf_file is None:
+        raise BusinessRuleError("No RFQ document has been generated for this supplier.")
+    supplier = db.query(Supplier).filter(Supplier.id == invitation.supplier_id).one()
+    if not supplier.email:
+        raise ValidationError("This supplier has no email address on file.", fields={"supplier_id": "Missing email address."})
+
+    pdf_bytes = b"".join(default_storage.download(pdf_file.storage_key))
+    subject = f"Request for Quotation {rfq.rfq_number} (Rev {rfq.revision_number})"
+    body = (
+        f"Dear {supplier.name},\n\nPlease find attached our Request for Quotation {rfq.rfq_number} "
+        f"(Revision {rfq.revision_number}). Kindly send us your best quotation.\n\nRegards."
+    )
+    try:
+        email_service.send_email(
+            db, current_user.organisation_id, supplier.email, subject, body, pdf_bytes, pdf_file.original_filename
+        )
+    except BusinessRuleError as exc:
+        audit_service.log_event(
+            db,
+            action=RFQ_SEND_FAILED,
+            module=PROCUREMENT_MODULE,
+            organisation_id=current_user.organisation_id,
+            actor_user_id=current_user.id,
+            entity_type="rfq",
+            entity_id=rfq.id,
+            result="failure",
+            details=str(exc),
+            ip_address=_client_ip(request),
+        )
+        db.commit()
+        raise
+
+    invitation.last_emailed_at = datetime.utcnow()
+    db.add(invitation)
+    _log(db, request, current_user, rfq, RFQ_SENT, f"revision: {rfq.revision_number}, to: {supplier.email}")
     db.commit()
+    db.refresh(rfq)
+    return _build_rfq_out(db, rfq)
 
 
 @router.post("/{rfq_id}/invitations/{invitation_id}/decline", response_model=RfqOut)
@@ -603,27 +772,20 @@ def change_rfq_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RfqOut:
-    """Issue or cancel (docs/modules/rfq.md #9/#11) -- gated by the
-    "issue" RFQ permission, which covers both lifecycle decisions.
-    Issuing requires at least one line and at least one invitation, and
-    sends nothing."""
+    """Cancel only (docs/modules/rfq.md #9) -- requires a reason.
+    Submitting is done through the RFQ form itself."""
     rfq_scope.require_permission(db, current_user, rfq_scope.ISSUE)
     rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
     rfq_service.assert_transition_allowed(rfq.status, payload.status)
 
-    if payload.status != CANCELLED:
-        rfq_service.assert_can_issue(db, rfq)
-
     before_status = rfq.status
     rfq.status = payload.status
-    if payload.status == CANCELLED:
-        rfq.cancel_reason = payload.cancel_reason
+    rfq.cancel_reason = payload.cancel_reason
     db.add(rfq)
 
     _log(
         db, request, current_user, rfq, RFQ_STATUS_CHANGED,
-        f"status: {before_status} -> {payload.status}"
-        + (f", reason: {payload.cancel_reason}" if payload.status == CANCELLED else ""),
+        f"status: {before_status} -> {payload.status}, reason: {payload.cancel_reason}",
     )
     db.commit()
     db.refresh(rfq)
@@ -701,10 +863,28 @@ def decide_rfq(
     db: Session = Depends(get_db),
 ) -> RfqOut:
     """docs/modules/rfq.md #7 -- only valid once a response has been
-    received. The selected response may belong to any invited supplier on
-    this RFQ; the choice is always a person's, never computed."""
+    received. Accepting (`selected`) requires the accepted quotation as
+    PDF/image (`file_ids`, uploaded via POST /api/files), attached in the
+    same transaction -- no PO can be created without it. Rejecting ends
+    the RFQ."""
     rfq_scope.require_permission(db, current_user, rfq_scope.DECIDE)
     rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
+
+    if payload.decision == SELECTED:
+        uploads = (
+            db.query(FileRecord)
+            .filter(
+                FileRecord.id.in_(payload.file_ids),
+                FileRecord.organisation_id == current_user.organisation_id,
+                FileRecord.deleted_at.is_(None),
+            )
+            .all()
+        )
+        if len(uploads) != len(set(payload.file_ids)) or any(f.mime_type not in _ACCEPTANCE_MIME_TYPES for f in uploads):
+            raise ValidationError(
+                "The supplier's document must be a PDF or image (PNG/JPEG) uploaded to your organisation.",
+                fields={"file_ids": "Upload a PDF, PNG or JPEG file."},
+            )
 
     rfq_service.decide(
         db,
@@ -714,14 +894,106 @@ def decide_rfq(
         decision_note=payload.note,
         decided_by_user_id=current_user.id,
     )
+    if payload.decision == SELECTED:
+        file_service.attach_files(
+            db,
+            file_ids=payload.file_ids,
+            entity_type=_ACCEPTANCE_FILE,
+            entity_id=rfq.id,
+            organisation_id=current_user.organisation_id,
+        )
 
     _log(
         db, request, current_user, rfq, RFQ_DECIDED,
-        f"decision: {payload.decision}, selected_response_id: {rfq.selected_response_id}",
+        f"decision: {payload.decision}, selected_response_id: {rfq.selected_response_id}, "
+        f"files: {len(payload.file_ids) if payload.decision == SELECTED else 0}",
     )
     db.commit()
     db.refresh(rfq)
     return _build_rfq_out(db, rfq)
+
+
+@router.post("/{rfq_id}/raise-new", response_model=RfqOut, status_code=status.HTTP_201_CREATED)
+def raise_new_rfq(
+    rfq_id: int,
+    payload: RfqRaiseNewRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RfqOut:
+    """The agreed quantity differs from the request, so this RFQ can't be
+    approved (docs/modules/rfq.md #7): it is cancelled, naming its
+    replacement, and a new draft RFQ is raised -- same department,
+    priority, suppliers and items, at the agreed quantities -- for the
+    user to check and submit. One transaction. Returns the new draft."""
+    rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
+    rfq_scope.require_permission(db, current_user, rfq_scope.ISSUE)
+    rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
+    if rfq.status != RESPONSE_RECEIVED:
+        raise BusinessRuleError("Another RFQ can only be raised from an RFQ awaiting approval.")
+
+    lines = db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id).order_by(RfqLine.id).all()
+    lines_by_id = {line.id: line for line in lines}
+    agreed = {entry.rfq_line_id: entry.quantity for entry in payload.lines}
+    if len(agreed) != len(payload.lines) or any(line_id not in lines_by_id for line_id in agreed):
+        raise ValidationError("One or more lines do not belong to this RFQ.", fields={"lines": "Invalid line."})
+    if all(agreed[line_id] == lines_by_id[line_id].quantity for line_id in agreed):
+        raise BusinessRuleError("The agreed quantities match the request -- approve this RFQ instead.")
+
+    new_rfq: Rfq | None = None
+    last_error: IntegrityError | None = None
+    for _ in range(_MAX_CODE_ATTEMPTS):
+        new_rfq = Rfq(
+            organisation_id=rfq.organisation_id,
+            rfq_number=rfq_service.generate_rfq_number(db, rfq.organisation_id),
+            status=DRAFT,
+            rfq_date=date.today(),
+            required_delivery_date=rfq.required_delivery_date,
+            team_id=rfq.team_id,
+            priority=rfq.priority,
+            notes=rfq.notes,
+            requested_by_user_id=current_user.id,
+        )
+        db.add(new_rfq)
+        try:
+            db.flush()
+            last_error = None
+            break
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+    if last_error is not None or new_rfq is None:
+        raise ConflictError("Could not generate a unique RFQ number. Please try again.") from last_error
+
+    db.add_all(
+        RfqLine(
+            rfq_id=new_rfq.id,
+            raw_material_id=line.raw_material_id,
+            quantity=agreed.get(line.id, line.quantity),
+            unit_of_measure_id=line.unit_of_measure_id,
+            required_by_date=line.required_by_date,
+            remarks=line.remarks,
+        )
+        for line in lines
+    )
+    now = datetime.utcnow()
+    db.add_all(
+        RfqSupplierInvitation(rfq_id=new_rfq.id, supplier_id=invitation.supplier_id, invited_at=now)
+        for invitation in db.query(RfqSupplierInvitation)
+        .filter(RfqSupplierInvitation.rfq_id == rfq.id)
+        .order_by(RfqSupplierInvitation.id)
+    )
+
+    rfq_service.assert_transition_allowed(rfq.status, CANCELLED)
+    rfq.status = CANCELLED
+    rfq.cancel_reason = f"Agreed quantity differs from the request -- replaced by RFQ {new_rfq.rfq_number}."
+    db.add(rfq)
+
+    _log(db, request, current_user, rfq, RFQ_STATUS_CHANGED, f"status: response_received -> cancelled, reason: {rfq.cancel_reason}")
+    _log(db, request, current_user, new_rfq, RFQ_CREATED, f"rfq_number: {new_rfq.rfq_number}, raised from RFQ {rfq.rfq_number}")
+    db.commit()
+    db.refresh(new_rfq)
+    return _build_rfq_out(db, new_rfq)
 
 
 @router.post("/{rfq_id}/convert-to-po", response_model=RfqOut)
@@ -744,6 +1016,24 @@ def convert_rfq_to_purchase_order(
     # Transition guard first, so a repeat submission fails as a business
     # rule before any other lookup can mask it with a different error.
     rfq_service.assert_transition_allowed(rfq.status, CONVERTED)
+    has_acceptance = (
+        db.query(FileRecord.id)
+        .filter(
+            FileRecord.entity_type == _ACCEPTANCE_FILE,
+            FileRecord.entity_id == rfq.id,
+            FileRecord.organisation_id == current_user.organisation_id,
+            FileRecord.deleted_at.is_(None),
+        )
+        .first()
+        is not None
+    )
+    if not has_acceptance:
+        raise BusinessRuleError("Upload the supplier's document before creating the purchase order.")
+    if payload.expected_delivery_date < date.today():
+        raise ValidationError(
+            "Expected delivery date cannot be in the past.",
+            fields={"expected_delivery_date": "Cannot be in the past."},
+        )
     _resolve_active_warehouse(db, payload.warehouse_id, current_user.organisation_id)
     invitation = rfq_service.get_selected_invitation(db, rfq)
     _resolve_active_supplier(db, invitation.supplier_id, current_user.organisation_id)
@@ -753,20 +1043,40 @@ def convert_rfq_to_purchase_order(
         overrides = {entry.rfq_line_id: entry.unit_price for entry in payload.lines}
     priced_lines = rfq_service.resolve_conversion_prices(db, rfq=rfq, overrides=overrides)
 
-    conversion_lines = [
-        rfq_service.RfqConversionLine(
-            raw_material=_resolve_active_raw_material(db, rfq_line.raw_material_id, current_user.organisation_id),
-            quantity=rfq_line.quantity,
-            unit_price=unit_price,
-        )
-        for rfq_line, unit_price in priced_lines
-    ]
+    # PO lines are always in the material's own unit
+    # (docs/modules/purchase_orders.md #5): re-express each RFQ-unit
+    # quantity/price through the same ratio the RFQ line was validated on.
+    conversion_lines = []
+    for rfq_line, unit_price in priced_lines:
+        material = _resolve_active_raw_material(db, rfq_line.raw_material_id, current_user.organisation_id)
+        ratio = Decimal(1)
+        if rfq_line.unit_of_measure_id != material.unit_of_measure_id:
+            unit_ids = [rfq_line.unit_of_measure_id, material.unit_of_measure_id]
+            if material.alternate_conversion_unit_of_measure_id:
+                unit_ids.append(material.alternate_conversion_unit_of_measure_id)
+            units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids))}
+            ratio = rfq_service.line_unit_ratio(
+                units[rfq_line.unit_of_measure_id],
+                material,
+                units.get(material.alternate_conversion_unit_of_measure_id),
+                units[material.unit_of_measure_id],
+            )
+            if ratio is None:
+                raise BusinessRuleError(
+                    f"{material.name}: the requested unit no longer converts to its unit. Update the unit setup first."
+                )
+        quantity, price = rfq_service.to_material_unit(rfq_line.quantity, unit_price, ratio)
+        conversion_lines.append(rfq_service.RfqConversionLine(raw_material=material, quantity=quantity, unit_price=price))
 
     purchase_order = rfq_service.convert_to_purchase_order(
         db,
         rfq=rfq,
         supplier_id=invitation.supplier_id,
         warehouse_id=payload.warehouse_id,
+        expected_delivery_date=payload.expected_delivery_date,
+        payment_terms=payload.payment_terms,
+        supplier_reference=payload.supplier_reference,
+        notes=payload.notes,
         lines=conversion_lines,
     )
 
@@ -790,4 +1100,23 @@ def _check_rfq_response_file_access(db: Session, user: User, response_id: int) -
     return rfq_scope.can_perform(db, user, rfq_scope.VIEW)
 
 
-register_entity_access_check("rfq_response", _check_rfq_response_file_access)
+def _check_rfq_invitation_file_access(db: Session, user: User, invitation_id: int) -> bool:
+    """A supplier's RFQ PDF inherits the RFQ's access rules."""
+    organisation_id = (
+        db.query(Rfq.organisation_id)
+        .join(RfqSupplierInvitation, RfqSupplierInvitation.rfq_id == Rfq.id)
+        .filter(RfqSupplierInvitation.id == invitation_id)
+        .scalar()
+    )
+    return organisation_id == user.organisation_id and rfq_scope.can_perform(db, user, rfq_scope.VIEW)
+
+
+def _check_rfq_acceptance_file_access(db: Session, user: User, rfq_id: int) -> bool:
+    """The accepted-quotation upload inherits the RFQ's access rules."""
+    organisation_id = db.query(Rfq.organisation_id).filter(Rfq.id == rfq_id).scalar()
+    return organisation_id == user.organisation_id and rfq_scope.can_perform(db, user, rfq_scope.VIEW)
+
+
+register_entity_access_check(_RESPONSE_FILE, _check_rfq_response_file_access)
+register_entity_access_check(_INVITATION_PDF, _check_rfq_invitation_file_access)
+register_entity_access_check(_ACCEPTANCE_FILE, _check_rfq_acceptance_file_access)

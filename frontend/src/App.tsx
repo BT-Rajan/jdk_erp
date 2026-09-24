@@ -6,6 +6,7 @@ import { BomsPage } from '@/pages/BomsPage'
 import { CategoriesPage } from '@/pages/CategoriesPage'
 import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { DocumentSettingsPage } from '@/pages/DocumentSettingsPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
@@ -54,6 +55,7 @@ export function App() {
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />
+          <Route path="/settings/documents" element={<DocumentSettingsPage />} />
           <Route path="/styleguide" element={<StyleGuidePage />} />
         </Route>
       </Routes>

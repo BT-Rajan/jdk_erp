@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models.rfq import CANCELLED, ISSUED, PRIORITY_NORMAL, REJECTED, RFQ_PRIORITIES, SELECTED
+from app.models.rfq import CANCELLED, PRIORITY_NORMAL, REJECTED, RFQ_PRIORITIES, SELECTED
 from app.schemas.file import FileOut
 
 
@@ -20,12 +20,20 @@ def _check_priority(value: str) -> str:
     return value
 
 
+def _check_positive_quantity(value: Decimal) -> Decimal:
+    if value <= 0:
+        raise ValueError("Quantity must be greater than zero.")
+    return value
+
+
 class RfqLineOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     raw_material_id: int
     quantity: Decimal
+    unit_of_measure_id: int
+    required_by_date: date | None
     remarks: str | None
 
 
@@ -64,6 +72,8 @@ class RfqInvitationOut(BaseModel):
     supplier_id: int
     status: str
     invited_at: datetime
+    last_emailed_at: datetime | None
+    pdf_file: FileOut | None = None
     responses: list[RfqResponseOut] = []
 
 
@@ -78,11 +88,13 @@ class RfqOut(BaseModel):
     organisation_id: int
     rfq_number: str
     status: str
+    revision_number: int
     priority: str
     rfq_date: date
     required_delivery_date: date | None
     team_id: int | None
     requested_by_user_id: int | None
+    requested_by_name: str | None = None
     notes: str | None
     cancel_reason: str | None
     decided_by_user_id: int | None
@@ -92,64 +104,14 @@ class RfqOut(BaseModel):
     purchase_order_id: int | None
     lines: list[RfqLineOut]
     invitations: list[RfqInvitationOut]
-
-
-class RfqCreateRequest(BaseModel):
-    """organisation_id, rfq_number and requested_by_user_id are never part
-    of this payload -- all three are server-stamped (docs/modules/rfq.md
-    #2/#10). Always starts `draft` with no lines and no invitations."""
-
-    rfq_date: date
-    required_delivery_date: date | None = None
-    team_id: int | None = None
-    priority: str = PRIORITY_NORMAL
-    notes: str | None = None
-
-    @field_validator("priority")
-    @classmethod
-    def _validate_priority(cls, value: str) -> str:
-        return _check_priority(value)
-
-    @model_validator(mode="after")
-    def _check_dates(self) -> "RfqCreateRequest":
-        if self.required_delivery_date is not None and self.required_delivery_date < self.rfq_date:
-            raise ValueError("Required delivery date cannot be before the RFQ date.")
-        return self
-
-
-class RfqUpdateRequest(BaseModel):
-    """Only meaningful while the RFQ is still `draft` -- enforced in
-    app/api/rfqs.py, which also re-checks the date ordering against the
-    stored values."""
-
-    rfq_date: date | None = None
-    required_delivery_date: date | None = None
-    team_id: int | None = None
-    priority: str | None = None
-    notes: str | None = None
-
-    @field_validator("rfq_date", "priority")
-    @classmethod
-    def _not_null(cls, value, info):
-        if value is None:
-            raise ValueError(f"{info.field_name} cannot be null.")
-        return value
-
-    @field_validator("priority")
-    @classmethod
-    def _validate_priority(cls, value: str) -> str:
-        return _check_priority(value)
-
-
-def _check_positive_quantity(value: Decimal) -> Decimal:
-    if value <= 0:
-        raise ValueError("Quantity must be greater than zero.")
-    return value
+    acceptance_files: list[FileOut] = []
 
 
 class RfqLineCreateRequest(BaseModel):
     raw_material_id: int
-    quantity: Decimal
+    quantity: Decimal = Field(max_digits=14, decimal_places=4)
+    unit_of_measure_id: int
+    required_by_date: date | None = None
     remarks: str | None = Field(default=None, max_length=2000)
 
     @field_validator("quantity")
@@ -163,35 +125,54 @@ class RfqLineCreateRequest(BaseModel):
         return _strip_or_none(value)
 
 
-class RfqLineUpdateRequest(BaseModel):
-    """`raw_material_id` is immutable -- remove and re-add the line
-    instead of repointing it."""
+class RfqSaveRequest(BaseModel):
+    """The whole RFQ form, for both create (POST) and edit (PUT)
+    (docs/modules/rfq.md #2-#4): header, at least one item, at least one
+    registered supplier. `rfq_number`, `rfq_date` (today) and
+    `requested_by_user_id` are server-stamped, never client-supplied.
+    `submit=false` saves a draft; `submit=true` issues the next revision
+    and generates one letterhead PDF per supplier."""
 
-    quantity: Decimal | None = None
-    remarks: str | None = Field(default=None, max_length=2000)
+    submit: bool = False
 
-    @field_validator("quantity")
+    required_delivery_date: date
+    team_id: int
+    priority: str = PRIORITY_NORMAL
+    notes: str | None = Field(default=None, max_length=4000)
+    lines: list[RfqLineCreateRequest] = Field(max_length=200)
+    supplier_ids: list[int] = Field(max_length=50)
+
+    @field_validator("priority")
     @classmethod
-    def _check_quantity(cls, value: Decimal | None) -> Decimal:
-        if value is None:
-            raise ValueError("Quantity cannot be null.")
-        return _check_positive_quantity(value)
+    def _validate_priority(cls, value: str) -> str:
+        return _check_priority(value)
 
-    @field_validator("remarks")
+    @field_validator("notes")
     @classmethod
-    def _strip_remarks(cls, value: str | None) -> str | None:
+    def _strip_notes(cls, value: str | None) -> str | None:
         return _strip_or_none(value)
 
+    @field_validator("lines")
+    @classmethod
+    def _check_lines(cls, value: list[RfqLineCreateRequest]) -> list[RfqLineCreateRequest]:
+        if not value:
+            raise ValueError("Add at least one item.")
+        return value
 
-class RfqInvitationCreateRequest(BaseModel):
-    supplier_id: int
+    @field_validator("supplier_ids")
+    @classmethod
+    def _check_suppliers(cls, value: list[int]) -> list[int]:
+        if not value:
+            raise ValueError("Select at least one supplier.")
+        if len(set(value)) != len(value):
+            raise ValueError("Each supplier can only be selected once.")
+        return value
 
 
 class RfqStatusChangeRequest(BaseModel):
-    """`status` must be `issued` or `cancelled` -- every other status is
-    only ever a side effect of a real action (capture response, decide,
-    convert), never a direct target of this endpoint
-    (docs/modules/rfq.md #9)."""
+    """Cancel only -- every other status is the side effect of a real
+    action (submit, capture response, decide, convert), never a direct
+    target of this endpoint (docs/modules/rfq.md #9)."""
 
     status: str
     cancel_reason: str | None = None
@@ -199,8 +180,8 @@ class RfqStatusChangeRequest(BaseModel):
     @field_validator("status")
     @classmethod
     def _check_status(cls, value: str) -> str:
-        if value not in (ISSUED, CANCELLED):
-            raise ValueError(f"status must be one of {(ISSUED, CANCELLED)}.")
+        if value != CANCELLED:
+            raise ValueError("status must be 'cancelled'.")
         return value
 
     @model_validator(mode="after")
@@ -272,9 +253,17 @@ class RfqCaptureResponseRequest(BaseModel):
 
 
 class RfqDecisionRequest(BaseModel):
+    """Approving (`selected`) requires `file_ids` -- the document received
+    from the supplier, as PDF/image, already uploaded via POST /api/files
+    -- and `quantities_confirmed`: the agreed quantities equal the
+    requested ones. If they differ, raise another RFQ instead
+    (POST .../raise-new). Rejecting ends the RFQ (docs/modules/rfq.md #7)."""
+
     decision: str
     selected_response_id: int | None = None
     note: str | None = Field(default=None, max_length=4000)
+    file_ids: list[int] = Field(default_factory=list, max_length=10)
+    quantities_confirmed: bool = False
 
     @field_validator("decision")
     @classmethod
@@ -282,6 +271,35 @@ class RfqDecisionRequest(BaseModel):
         if value not in (SELECTED, REJECTED):
             raise ValueError(f"decision must be one of {(SELECTED, REJECTED)}.")
         return value
+
+    @model_validator(mode="after")
+    def _check_acceptance_files(self) -> "RfqDecisionRequest":
+        if self.decision == SELECTED:
+            if not self.file_ids:
+                raise ValueError("Upload the supplier's document (PDF or image) to approve.")
+            if not self.quantities_confirmed:
+                raise ValueError(
+                    "Confirm the agreed quantities match the request. If they differ, raise another RFQ."
+                )
+        return self
+
+
+class RfqRaiseNewLineRequest(BaseModel):
+    rfq_line_id: int
+    quantity: Decimal = Field(max_digits=14, decimal_places=4)
+
+    @field_validator("quantity")
+    @classmethod
+    def _check_quantity(cls, value: Decimal) -> Decimal:
+        return _check_positive_quantity(value)
+
+
+class RfqRaiseNewRequest(BaseModel):
+    """The agreed quantity per RFQ line, when it differs from the request
+    (docs/modules/rfq.md #7). Lines not listed keep their requested
+    quantity."""
+
+    lines: list[RfqRaiseNewLineRequest] = Field(min_length=1, max_length=200)
 
 
 class RfqConvertLineRequest(BaseModel):
@@ -300,12 +318,30 @@ class RfqConvertLineRequest(BaseModel):
 
 
 class RfqConvertRequest(BaseModel):
-    """`lines` omitted -> every RFQ line converts at the selected
-    response's quoted price. `lines` given -> exactly those lines convert
-    (a subset is allowed, as in v1), each at its override price or, when
-    none is given, the quoted one."""
+    """PO generation (docs/modules/rfq.md #8). `warehouse_id` is the
+    delivery location; `expected_delivery_date` and `payment_terms` are
+    required. `lines` omitted -> every RFQ line converts at the approved
+    quote's price. `lines` given -> exactly those lines, each at its
+    override price or, when none is given, the quoted one."""
 
     warehouse_id: int
+    expected_delivery_date: date
+    payment_terms: str = Field(min_length=1, max_length=200)
+    supplier_reference: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("payment_terms")
+    @classmethod
+    def _check_payment_terms(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Payment terms are required.")
+        return value
+
+    @field_validator("supplier_reference", "notes")
+    @classmethod
+    def _strip_optional(cls, value: str | None) -> str | None:
+        return _strip_or_none(value)
     lines: list[RfqConvertLineRequest] | None = Field(default=None, max_length=500)
 
     @field_validator("lines")

@@ -19,6 +19,7 @@ from app.api.production_lines import router as production_lines_router
 from app.api.products import router as products_router
 from app.api.purchase_orders import router as purchase_orders_router
 from app.api.rfqs import router as rfqs_router
+from app.api.document_templates import router as document_templates_router
 from app.api.raw_material_suppliers import router as raw_material_suppliers_router
 from app.api.raw_materials import router as raw_materials_router
 from app.api.warehouses import router as warehouses_router
@@ -80,6 +81,7 @@ app.include_router(production_lines_router)
 app.include_router(products_router)
 app.include_router(purchase_orders_router)
 app.include_router(rfqs_router)
+app.include_router(document_templates_router)
 app.include_router(raw_material_suppliers_router)
 app.include_router(raw_materials_router)
 app.include_router(suppliers_router)
