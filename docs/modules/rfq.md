@@ -125,12 +125,13 @@ from `response_received`.
 
 ## 8. PO generation
 
-`POST /api/rfqs/{id}/convert-to-po`: `{warehouse_id, expected_delivery_date,
+`POST /api/rfqs/{id}/convert-to-po`: `{expected_delivery_date,
 payment_terms, supplier_reference?, notes?, lines?: [{rfq_line_id,
 unit_price?}]}`. Only from `selected` with the supplier document on file.
 
 - Supplier: the approved quotation's supplier. Items/quantities: the RFQ.
-- `warehouse_id` = delivery location (required). `expected_delivery_date`
+- No delivery location or currency: the organisation's one warehouse,
+  always KWD. `expected_delivery_date`
   (required, not past — pre-filled from the RFQ's Required By).
   `payment_terms` (required — pre-filled from the quotation).
   `supplier_reference` pre-filled from the quotation number.
@@ -216,7 +217,7 @@ no `OWN`/`TEAM` scope.
 `rfqs`/`rfq_responses` are organisation-scoped. `rfq_lines`,
 `rfq_supplier_invitations` and `rfq_response_lines` are children of an
 already-scoped `Rfq`/`RfqResponse` (no `organisation_id` of their own).
-`supplier_id`/`raw_material_id`/`warehouse_id` are validated
+`supplier_id`/`raw_material_id` are validated
 active-and-same-organisation on every write. An invitation id is always
 resolved within the RFQ in the path. A cross-organisation id anywhere in
 this module 404s, never 403s.

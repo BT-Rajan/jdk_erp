@@ -69,7 +69,6 @@ class PurchaseOrderPdfData:
     total_amount: Decimal
     issued_at: datetime
     currency: str = "KWD"
-    delivery_location: str | None = None
     delivery_instructions: str | None = None
     rfq_reference: str | None = None
     approved_by: str | None = None
@@ -103,7 +102,6 @@ def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
                 "Payment Terms",
                 data.payment_terms or "—",
             ],
-            ["Currency", data.currency, "Delivery Location", data.delivery_location or "—"],
             ["RFQ Reference", data.rfq_reference or "—", "Approved By", data.approved_by or "—"],
         ],
         colWidths=[38 * mm, 55 * mm, 38 * mm, 55 * mm],

@@ -204,7 +204,6 @@ export function GoodsReceivingPage() {
     { key: 'supplier', label: 'Supplier', render: (po) => po.supplier_name },
     { key: 'expected', label: 'Expected Delivery', render: (po) => formatDate(po.expected_delivery_date) },
     { key: 'items', label: 'Items', hideBelow: 'sm', render: (po) => po.lines.length },
-    { key: 'location', label: 'Delivery Location', hideBelow: 'md', render: (po) => po.warehouse_name },
     {
       key: 'actions',
       label: '',
@@ -260,7 +259,6 @@ export function GoodsReceivingPage() {
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
               <div><span className="text-gold-100/50">Supplier: </span>{target.supplier_name}</div>
               <div><span className="text-gold-100/50">Expected Delivery: </span>{formatDate(target.expected_delivery_date)}</div>
-              <div><span className="text-gold-100/50">Delivery Location: </span>{target.warehouse_name}</div>
               {!target.can_receive && <div><Badge tone="warning">Not open for receiving</Badge></div>}
               {target.delivery_instructions && (
                 <div className="col-span-2"><span className="text-gold-100/50">Instructions: </span>{target.delivery_instructions}</div>

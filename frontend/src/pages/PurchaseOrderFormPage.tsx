@@ -6,7 +6,6 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import { Spinner } from '@/components/ui/Spinner'
 import { DateField } from '@/components/forms/DateField'
 import { SearchSelectField } from '@/components/forms/SearchSelectField'
-import { SelectField } from '@/components/forms/SelectField'
 import { TextField } from '@/components/forms/TextField'
 import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
@@ -27,7 +26,6 @@ interface Po {
   id: number
   po_number: string
   supplier_id: number
-  warehouse_id: number
   status: string
   order_date: string
   expected_delivery_date: string | null
@@ -56,10 +54,8 @@ interface ItemDraft {
 
 interface PoFormState {
   supplier_id: string
-  warehouse_id: string
   expected_delivery_date: string
   payment_terms: string
-  currency: string
   supplier_reference: string
   delivery_instructions: string
   notes: string
@@ -76,10 +72,8 @@ function formFromPo(po: Po | null): PoFormState {
   if (!po) {
     return {
       supplier_id: '',
-      warehouse_id: '',
       expected_delivery_date: '',
       payment_terms: '',
-      currency: 'KWD',
       supplier_reference: '',
       delivery_instructions: '',
       notes: '',
@@ -88,10 +82,8 @@ function formFromPo(po: Po | null): PoFormState {
   }
   return {
     supplier_id: String(po.supplier_id),
-    warehouse_id: String(po.warehouse_id),
     expected_delivery_date: po.expected_delivery_date ?? '',
     payment_terms: po.payment_terms ?? '',
-    currency: po.currency,
     supplier_reference: po.supplier_reference ?? '',
     delivery_instructions: po.delivery_instructions ?? '',
     notes: po.notes ?? '',
@@ -111,11 +103,9 @@ function formFromPo(po: Po | null): PoFormState {
  * them regardless (docs/modules/purchase_orders.md #2-#3). */
 function validateForm(form: PoFormState, submit: boolean): string | null {
   if (!form.supplier_id) return 'Supplier is required.'
-  if (!form.warehouse_id) return 'Delivery location is required.'
   if (!form.expected_delivery_date) return 'Expected delivery date is required.'
   if (form.expected_delivery_date < todayIso()) return 'Expected delivery date cannot be in the past.'
   if (!form.payment_terms.trim()) return 'Payment terms are required.'
-  if (!/^[A-Za-z]{3}$/.test(form.currency.trim())) return 'Enter a 3-letter currency code.'
   if (submit && form.items.length === 0) return 'Add at least one item.'
   for (const [index, item] of form.items.entries()) {
     const n = index + 1
@@ -144,7 +134,6 @@ export function PurchaseOrderFormPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [suppliers, setSuppliers] = useState<LookupOption[]>([])
-  const [warehouses, setWarehouses] = useState<LookupOption[]>([])
   const [materials, setMaterials] = useState<MaterialOption[]>([])
   const [units, setUnits] = useState<LookupOption[]>([])
 
@@ -158,16 +147,14 @@ export function PurchaseOrderFormPage() {
       setLoading(true)
       setLoadError(null)
       try {
-        const [suppliersResponse, warehousesResponse, materialsResponse, unitsResponse, poResponse] = await Promise.all([
+        const [suppliersResponse, materialsResponse, unitsResponse, poResponse] = await Promise.all([
           apiClient.get<PaginatedResponse<LookupOption>>('/api/suppliers', { params: { page_size: 200 } }),
-          apiClient.get<PaginatedResponse<LookupOption>>('/api/warehouses', { params: { page_size: 200 } }),
           apiClient.get<PaginatedResponse<MaterialOption>>('/api/raw-materials', { params: { page_size: 200 } }),
           apiClient.get<PaginatedResponse<LookupOption>>('/api/units-of-measure', { params: { page_size: 200 } }),
           purchaseOrderId ? apiClient.get<Po>(`/api/purchase-orders/${purchaseOrderId}`) : Promise.resolve(null),
         ])
         if (cancelled) return
         setSuppliers(suppliersResponse.data.data)
-        setWarehouses(warehousesResponse.data.data)
         setMaterials(materialsResponse.data.data)
         setUnits(unitsResponse.data.data)
         const loaded = poResponse ? poResponse.data : null
@@ -226,7 +213,6 @@ export function PurchaseOrderFormPage() {
     const header = {
       expected_delivery_date: form.expected_delivery_date,
       payment_terms: form.payment_terms.trim(),
-      currency: form.currency.trim().toUpperCase(),
       supplier_reference: form.supplier_reference.trim() || null,
       delivery_instructions: form.delivery_instructions.trim() || null,
       notes: form.notes.trim() || null,
@@ -239,7 +225,6 @@ export function PurchaseOrderFormPage() {
         await apiClient.post<Po>('/api/purchase-orders', {
           ...header,
           supplier_id: Number(form.supplier_id),
-          warehouse_id: Number(form.warehouse_id),
         })
       ).data
       setPo(saved)
@@ -343,18 +328,6 @@ export function PurchaseOrderFormPage() {
                 onChange={(value) => setField('supplier_id', value ?? '')}
               />
             )}
-            <SelectField
-              label="Delivery Location"
-              required
-              disabled={locked}
-              value={form.warehouse_id}
-              onChange={(e) => setField('warehouse_id', e.target.value)}
-            >
-              <option value="">Select a warehouse...</option>
-              {warehouses.filter((w) => w.is_active || String(w.id) === form.warehouse_id).map((w) => (
-                <option key={w.id} value={w.id}>{w.name}</option>
-              ))}
-            </SelectField>
             <DateField
               label="Expected Delivery Date"
               required
@@ -369,7 +342,6 @@ export function PurchaseOrderFormPage() {
               value={form.payment_terms}
               onChange={(e) => setField('payment_terms', e.target.value)}
             />
-            <TextField label="Currency" required value={form.currency} onChange={(e) => setField('currency', e.target.value)} />
             <TextField
               label="Supplier Reference"
               hint="Supplier's quotation / reference number."
@@ -472,7 +444,7 @@ export function PurchaseOrderFormPage() {
               <Button type="button" variant="secondary" onClick={() => setForm((prev) => ({ ...prev, items: [...prev.items, emptyItem()] }))}>
                 Add Item
               </Button>
-              <span className="text-sm"><span className="text-gold-100/50">Total: </span>{orderTotal.toFixed(3)} {form.currency.toUpperCase()}</span>
+              <span className="text-sm"><span className="text-gold-100/50">Total: </span>{orderTotal.toFixed(3)} KWD</span>
             </div>
           </div>
 

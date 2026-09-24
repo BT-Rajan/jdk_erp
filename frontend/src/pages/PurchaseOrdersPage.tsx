@@ -385,7 +385,6 @@ export function PurchaseOrdersPage() {
   const canManage = isAdminRole(currentUser?.role)
 
   const [suppliers, setSuppliers] = useState<LookupOption[]>([])
-  const [warehouses, setWarehouses] = useState<LookupOption[]>([])
   const [materials, setMaterials] = useState<LookupOption[]>([])
   const [units, setUnits] = useState<LookupOption[]>([])
   const [pageError, setPageError] = useState<string | undefined>(undefined)
@@ -457,25 +456,22 @@ export function PurchaseOrdersPage() {
   }, [debouncedSearch])
 
   const suppliersById = useMemo(() => new Map(suppliers.map((s) => [s.id, s])), [suppliers])
-  const warehousesById = useMemo(() => new Map(warehouses.map((w) => [w.id, w])), [warehouses])
   const materialsById = useMemo(() => new Map(materials.map((m) => [m.id, m])), [materials])
   const unitsById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units])
   const unitCode = (id: number | null) => (id ? unitsById.get(id)?.code ?? '' : '')
 
   const loadLookups = useCallback(async () => {
     try {
-      const [suppliersResponse, warehousesResponse, materialsResponse, unitsResponse] = await Promise.all([
+      const [suppliersResponse, materialsResponse, unitsResponse] = await Promise.all([
         apiClient.get<PaginatedResponse<LookupOption>>('/api/suppliers', { params: { page_size: 200 } }),
-        apiClient.get<PaginatedResponse<LookupOption>>('/api/warehouses', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/raw-materials', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/units-of-measure', { params: { page_size: 200 } }),
       ])
       setSuppliers(suppliersResponse.data.data)
-      setWarehouses(warehousesResponse.data.data)
       setMaterials(materialsResponse.data.data)
       setUnits(unitsResponse.data.data)
     } catch (err) {
-      setPageError(err instanceof ApiError ? err.message : 'Failed to load suppliers, warehouses, and raw materials.')
+      setPageError(err instanceof ApiError ? err.message : 'Failed to load suppliers and raw materials.')
     }
   }, [])
 
@@ -892,11 +888,9 @@ export function PurchaseOrdersPage() {
 
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                   <div><span className="text-gold-100/50">Supplier: </span>{suppliersById.get(detailTarget.supplier_id)?.name ?? `#${detailTarget.supplier_id}`}</div>
-                  <div><span className="text-gold-100/50">Delivery Location: </span>{warehousesById.get(detailTarget.warehouse_id)?.name ?? `#${detailTarget.warehouse_id}`}</div>
                   <div><span className="text-gold-100/50">PO Date: </span>{formatDate(detailTarget.order_date)}</div>
                   <div><span className="text-gold-100/50">Expected Delivery: </span>{formatDate(detailTarget.expected_delivery_date)}</div>
                   <div><span className="text-gold-100/50">Payment Terms: </span>{detailTarget.payment_terms ?? '—'}</div>
-                  <div><span className="text-gold-100/50">Currency: </span>{detailTarget.currency}</div>
                   <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
                   <div><span className="text-gold-100/50">Revision: </span>{detailTarget.revision_number || '—'}</div>
                   {detailTarget.supplier_reference && <div><span className="text-gold-100/50">Supplier Reference: </span>{detailTarget.supplier_reference}</div>}

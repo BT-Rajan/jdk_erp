@@ -258,11 +258,10 @@ describe('RfqsPage', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Generate Purchase Order...' }))
     const convert = await screen.findByRole('dialog', { name: 'Generate Purchase Order' })
     expect((within(convert).getByLabelText('Unit price for Cement') as HTMLInputElement).value).toBe('39.5')
-    await user.selectOptions(within(convert).getByLabelText(/Delivery Location/), '5')
+    expect(within(convert).queryByLabelText(/Delivery Location/)).not.toBeInTheDocument()
     await user.click(within(convert).getByLabelText('Include Sand'))
     await user.click(within(convert).getByRole('button', { name: 'Create Purchase Order' }))
     expect(postMock).toHaveBeenCalledWith('/api/rfqs/1/convert-to-po', {
-      warehouse_id: 5,
       expected_delivery_date: '2099-09-30',
       payment_terms: '30 days',
       supplier_reference: 'BQ-9',

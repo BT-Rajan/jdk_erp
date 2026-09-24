@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BusinessRuleError, ConflictError, ValidationError
 from app.models.inventory import PURCHASE_ORDER_RECEIPT_LINE_REFERENCE
+from app.models.warehouse import Warehouse
 from app.models.purchase_order import (
     ALLOWED_RECEIPT_STATUS_TRANSITIONS,
     ALLOWED_STATUS_TRANSITIONS,
@@ -137,12 +138,25 @@ def generate_po_number(db: Session, organisation_id: int, today: date | None = N
     return f"{prefix}{sequence:04d}"
 
 
+def default_warehouse(db: Session, organisation_id: int) -> Warehouse:
+    """JDK has one warehouse, so a PO never asks for a delivery location:
+    goods are received into the organisation's active warehouse."""
+    warehouse = (
+        db.query(Warehouse)
+        .filter(Warehouse.organisation_id == organisation_id, Warehouse.is_active.is_(True))
+        .order_by(Warehouse.id)
+        .first()
+    )
+    if warehouse is None:
+        raise ValidationError("No active warehouse to receive into. Add one under Master Data > Warehouses first.")
+    return warehouse
+
+
 def create_purchase_order_with_lines(
     db: Session,
     *,
     organisation_id: int,
     supplier_id: int,
-    warehouse_id: int,
     order_date: date,
     expected_delivery_date: date | None,
     notes: str | None,
@@ -151,7 +165,6 @@ def create_purchase_order_with_lines(
     rfq_response_id: int | None = None,
     payment_terms: str | None = None,
     supplier_reference: str | None = None,
-    currency: str = DEFAULT_CURRENCY,
     delivery_instructions: str | None = None,
     created_by_user_id: int | None = None,
 ) -> PurchaseOrder:
@@ -159,12 +172,13 @@ def create_purchase_order_with_lines(
     -- shared by app/api/purchase_orders.py's plain "New Purchase" flow
     and app/api/rfqs.py's convert-to-PO action (docs/audit/RFQ_AUDIT.md
     #5), so the two never maintain separate PO-creation logic. Caller has
-    already validated supplier_id/warehouse_id are active and in this
+    already validated supplier_id is active and in this
     organisation, and resolved each line's RawMaterial the same way
     (docs/modules/purchase_orders.md #11) -- this function only handles
     the creation mechanics: numbering (with retry-on-IntegrityError,
     docs/modules/purchase_orders.md #21), price defaulting, and line-total
     snapshotting."""
+    warehouse_id = default_warehouse(db, organisation_id).id
     purchase_order: PurchaseOrder | None = None
     last_error: IntegrityError | None = None
     for _ in range(_MAX_CODE_ATTEMPTS):
@@ -181,7 +195,7 @@ def create_purchase_order_with_lines(
             expected_delivery_date=expected_delivery_date,
             payment_terms=payment_terms,
             supplier_reference=supplier_reference,
-            currency=currency,
+            currency=DEFAULT_CURRENCY,
             delivery_instructions=delivery_instructions,
             notes=notes,
             created_by_user_id=created_by_user_id,

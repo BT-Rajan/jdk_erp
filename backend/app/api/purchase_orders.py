@@ -64,7 +64,6 @@ from app.models.rfq import Rfq
 from app.models.supplier import Supplier
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
-from app.models.warehouse import Warehouse
 from app.schemas.file import FileOut
 from app.schemas.purchase_order import (
     CancelPaymentRequest,
@@ -181,20 +180,6 @@ def _resolve_active_supplier(db: Session, supplier_id: int, organisation_id: int
             fields={"supplier_id": "Not a valid active supplier in your organisation."},
         )
     return supplier
-
-
-def _resolve_active_warehouse(db: Session, warehouse_id: int, organisation_id: int) -> Warehouse:
-    warehouse = (
-        db.query(Warehouse)
-        .filter(Warehouse.id == warehouse_id, Warehouse.organisation_id == organisation_id, Warehouse.is_active.is_(True))
-        .first()
-    )
-    if warehouse is None:
-        raise ValidationError(
-            "warehouse_id must be an active warehouse in your organisation.",
-            fields={"warehouse_id": "Not a valid active warehouse in your organisation."},
-        )
-    return warehouse
 
 
 def _resolve_active_raw_material(db: Session, raw_material_id: int, organisation_id: int) -> RawMaterial:
@@ -525,7 +510,6 @@ def store_receipt_pdf(db: Session, purchase_order: PurchaseOrder, receipt: Purch
     unit_ids = [line.unit_of_measure_id for line in po_lines_by_id.values()]
     units_by_id = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids)).all()}
     supplier = db.query(Supplier).filter(Supplier.id == purchase_order.supplier_id).first()
-    warehouse = db.query(Warehouse).filter(Warehouse.id == receipt.warehouse_id).first()
     organisation = db.query(Organisation).filter(Organisation.id == current_user.organisation_id).first()
 
     pdf_bytes = generate_purchase_order_receipt_pdf(
@@ -538,7 +522,6 @@ def store_receipt_pdf(db: Session, purchase_order: PurchaseOrder, receipt: Purch
             receipt_date=receipt.receipt_date,
             po_number=purchase_order.po_number,
             supplier_name=supplier.name,
-            warehouse_name=warehouse.name,
             supplier_delivery_reference=receipt.supplier_delivery_reference,
             notes=receipt.notes,
             receiver_name=current_user.full_name,
@@ -623,7 +606,6 @@ def create_purchase_order(
     today; `rfq_id` is only ever set by the RFQ's PO-generation step."""
     purchase_scope.require_permission(db, current_user, purchase_scope.CREATE)
     _resolve_active_supplier(db, payload.supplier_id, current_user.organisation_id)
-    _resolve_active_warehouse(db, payload.warehouse_id, current_user.organisation_id)
     if payload.expected_delivery_date < date.today():
         raise ValidationError(
             "Expected delivery date cannot be in the past.", fields={"expected_delivery_date": "Cannot be in the past."}
@@ -633,12 +615,10 @@ def create_purchase_order(
         db,
         organisation_id=current_user.organisation_id,
         supplier_id=payload.supplier_id,
-        warehouse_id=payload.warehouse_id,
         order_date=date.today(),
         expected_delivery_date=payload.expected_delivery_date,
         payment_terms=payload.payment_terms,
         supplier_reference=payload.supplier_reference,
-        currency=payload.currency,
         delivery_instructions=payload.delivery_instructions,
         notes=payload.notes,
         created_by_user_id=current_user.id,
@@ -671,7 +651,7 @@ def update_purchase_order(
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
     """Draft-only (docs/modules/purchase_orders.md #6) --
-    supplier_id/warehouse_id/rfq_id are immutable and have no update path
+    supplier_id/rfq_id are immutable and have no update path
     here."""
     purchase_scope.require_permission(db, current_user, purchase_scope.CREATE)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
@@ -931,7 +911,6 @@ def approve_purchase_order(
         for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_([line.unit_of_measure_id for line in revision_lines])).all()
     }
     organisation = db.query(Organisation).filter(Organisation.id == current_user.organisation_id).first()
-    warehouse = db.query(Warehouse).filter(Warehouse.id == purchase_order.warehouse_id).first()
     rfq_number = db.query(Rfq.rfq_number).filter(Rfq.id == purchase_order.rfq_id).scalar() if purchase_order.rfq_id else None
 
     pdf_bytes = generate_purchase_order_pdf(
@@ -966,7 +945,6 @@ def approve_purchase_order(
             total_amount=revision.total_amount,
             issued_at=revision.issued_at,
             currency=purchase_order.currency,
-            delivery_location=warehouse.name if warehouse else None,
             delivery_instructions=purchase_order.delivery_instructions,
             rfq_reference=rfq_number,
             approved_by=current_user.full_name,

@@ -875,3 +875,12 @@ Viewing a PO is also a page (`/purchase-orders/:id`): header, items,
 lifecycle buttons, receipts, payments, reconciliation, follow-ups and
 documents. Saving the PO form, or generating a PO from an RFQ, lands
 there. Cancel, payment-cancel and receipt-reverse stay dialogs over it.
+
+JDK has one warehouse and trades only in Kuwait, so neither is ever
+asked for or shown: no Delivery Location or Currency on the PO form,
+PO view, RFQ's Generate Purchase Order, Goods Receiving, or the PO /
+goods-receipt PDFs. `POST /api/purchase-orders` and RFQ convert-to-PO no
+longer take `warehouse_id` or `currency`: the PO is received into the
+organisation's active warehouse (refused with a clear message if there
+is none) and its currency is always KWD. The columns stay for stock
+posting and existing data. No migration.
