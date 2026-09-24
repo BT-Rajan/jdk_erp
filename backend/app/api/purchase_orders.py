@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.entity_access import register_entity_access_check
-from app.core.errors import BusinessRuleError, NotFoundError, ValidationError
+from app.core.errors import AccessDeniedError, BusinessRuleError, NotFoundError, ValidationError
+from app.core.roles import ADMIN_ROLES
 from app.core.list_query import apply_sort, paginate
 from app.core.search import apply_keyword_filter
 from app.core.storage import default_storage
@@ -17,6 +18,7 @@ from app.models.audit_event import (
     PROCUREMENT_MODULE,
     PURCHASE_ORDER_APPROVED,
     PURCHASE_ORDER_CREATED,
+    PURCHASE_ORDER_FOLLOW_UP,
     PURCHASE_ORDER_LINE_ADDED,
     PURCHASE_ORDER_LINE_REMOVED,
     PURCHASE_ORDER_LINE_UPDATED,
@@ -26,6 +28,7 @@ from app.models.audit_event import (
     PURCHASE_ORDER_RECEIPT_CREATED,
     PURCHASE_ORDER_RECEIPT_POSTED,
     PURCHASE_ORDER_RECEIPT_REVERSED,
+    PURCHASE_ORDER_RECONCILED,
     PURCHASE_ORDER_SEND_FAILED,
     PURCHASE_ORDER_SENT,
     PURCHASE_ORDER_STATUS_CHANGED,
@@ -37,8 +40,17 @@ from app.models.organisation import Organisation
 from app.models.purchase_order import (
     APPROVED,
     CANCELLED,
+    CLOSED,
+    COMMUNICATION_FAILED,
+    COMMUNICATION_FOLLOW_UP,
+    COMMUNICATION_NOTE,
+    COMMUNICATION_PO_SENT,
+    COMMUNICATION_RECORDED,
+    COMMUNICATION_SENT,
     DRAFT,
     SENT,
+    PurchaseOrderCommunication,
+    PurchaseOrderReconciliation,
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseOrderPayment,
@@ -57,6 +69,10 @@ from app.schemas.file import FileOut
 from app.schemas.purchase_order import (
     CancelPaymentRequest,
     CreateReceiptRequest,
+    FollowUpRequest,
+    PurchaseOrderCommunicationOut,
+    PurchaseOrderReconciliationOut,
+    ResolveReconciliationRequest,
     PurchaseOrderCreateRequest,
     PurchaseOrderLineCreateRequest,
     PurchaseOrderLineOut,
@@ -103,6 +119,7 @@ _PURCHASE_ORDER_ENTITY = "purchase_order"
 _PURCHASE_ORDER_REVISION_ENTITY = "purchase_order_revision"
 _PURCHASE_ORDER_PAYMENT_ENTITY = "purchase_order_payment"
 _PURCHASE_ORDER_RECEIPT_ENTITY = "purchase_order_receipt"
+_PURCHASE_ORDER_COMMUNICATION_ENTITY = "purchase_order_communication"
 
 
 def _get_po_in_org(db: Session, purchase_order_id: int, organisation_id: int) -> PurchaseOrder:
@@ -198,6 +215,40 @@ def _resolve_active_raw_material(db: Session, raw_material_id: int, organisation
     return material
 
 
+def _require_creator_or_admin(user: User, purchase_order: PurchaseOrder) -> None:
+    """Discrepancies go back to the PO's creator -- only they (or an
+    admin) resolve them."""
+    if user.role not in ADMIN_ROLES and user.id != purchase_order.created_by_user_id:
+        raise AccessDeniedError("Only the purchase order's creator can resolve its discrepancies.")
+
+
+def _log_communication(
+    db: Session,
+    *,
+    purchase_order: PurchaseOrder,
+    user: User,
+    kind: str,
+    status: str,
+    recipient: str | None = None,
+    subject: str | None = None,
+    message: str | None = None,
+    error: str | None = None,
+) -> PurchaseOrderCommunication:
+    entry = PurchaseOrderCommunication(
+        purchase_order_id=purchase_order.id,
+        kind=kind,
+        recipient=recipient,
+        subject=subject,
+        message=message,
+        status=status,
+        error=error,
+        sent_by_user_id=user.id,
+    )
+    db.add(entry)
+    db.flush()
+    return entry
+
+
 def _require_draft(purchase_order: PurchaseOrder) -> None:
     if purchase_order.status != DRAFT:
         raise BusinessRuleError("Only a draft purchase order can be edited.")
@@ -283,7 +334,14 @@ def _build_payment_out(db: Session, payment: PurchaseOrderPayment) -> PurchaseOr
     return out
 
 
-def _build_receipt_out(db: Session, receipt: PurchaseOrderReceipt) -> PurchaseOrderReceiptOut:
+def days_late(receipt_date, expected_delivery_date) -> int:
+    """Shown on every receipt; never blocks it."""
+    if expected_delivery_date is None or receipt_date <= expected_delivery_date:
+        return 0
+    return (receipt_date - expected_delivery_date).days
+
+
+def _build_receipt_out(db: Session, receipt: PurchaseOrderReceipt, purchase_order: PurchaseOrder) -> PurchaseOrderReceiptOut:
     lines = (
         db.query(PurchaseOrderReceiptLine)
         .filter(PurchaseOrderReceiptLine.receipt_id == receipt.id)
@@ -303,6 +361,11 @@ def _build_receipt_out(db: Session, receipt: PurchaseOrderReceipt) -> PurchaseOr
     out = PurchaseOrderReceiptOut.model_validate(receipt)
     out.lines = [PurchaseOrderReceiptLineOut.model_validate(line) for line in lines]
     out.documents = [FileOut.model_validate(f) for f in files]
+    out.days_late = days_late(receipt.receipt_date, purchase_order.expected_delivery_date)
+    if receipt.posted_by_user_id or receipt.created_by_user_id:
+        out.received_by_name = db.query(User.full_name).filter(
+            User.id == (receipt.posted_by_user_id or receipt.created_by_user_id)
+        ).scalar()
     return out
 
 
@@ -342,7 +405,32 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
         .all()
     )
     total = purchase_order_service.total_amount(lines)
+    final = purchase_order_service.final_amount(purchase_order, lines)
     paid = purchase_order_service.paid_amount(payments)
+    reconciliations = (
+        db.query(PurchaseOrderReconciliation)
+        .filter(PurchaseOrderReconciliation.purchase_order_id == purchase_order.id)
+        .order_by(PurchaseOrderReconciliation.id)
+        .all()
+    )
+    communications = (
+        db.query(PurchaseOrderCommunication)
+        .filter(PurchaseOrderCommunication.purchase_order_id == purchase_order.id)
+        .order_by(PurchaseOrderCommunication.id)
+        .all()
+    )
+    communication_files: dict[int, list[FileRecord]] = {}
+    if communications:
+        for record in (
+            db.query(FileRecord)
+            .filter(
+                FileRecord.entity_type == _PURCHASE_ORDER_COMMUNICATION_ENTITY,
+                FileRecord.entity_id.in_([c.id for c in communications]),
+                FileRecord.deleted_at.is_(None),
+            )
+            .order_by(FileRecord.id)
+        ):
+            communication_files.setdefault(record.entity_id, []).append(record)
     stamp_ids = {
         user_id
         for user_id in (
@@ -350,6 +438,8 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
             purchase_order.approved_by_user_id,
             purchase_order.sent_by_user_id,
             purchase_order.cancelled_by_user_id,
+            *(rec.resolved_by_user_id for rec in reconciliations),
+            *(entry.sent_by_user_id for entry in communications),
         )
         if user_id
     }
@@ -389,14 +479,97 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
         sent_by_name=names.get(purchase_order.sent_by_user_id),
         cancelled_by_name=names.get(purchase_order.cancelled_by_user_id),
         total_amount=total,
+        amount_adjustment=purchase_order.amount_adjustment,
+        final_amount=final,
         paid_amount=paid,
-        outstanding_amount=total - paid,
-        payment_status=purchase_order_service.payment_status(total, paid),
+        outstanding_amount=final - paid,
+        payment_status=purchase_order_service.payment_status(final, paid),
         lines=[PurchaseOrderLineOut.model_validate(line) for line in lines],
         revisions=[_build_revision_out(db, revision) for revision in revisions],
         documents=[FileOut.model_validate(f) for f in documents],
         payments=[_build_payment_out(db, payment) for payment in payments],
-        receipts=[_build_receipt_out(db, receipt) for receipt in receipts],
+        receipts=[_build_receipt_out(db, receipt, purchase_order) for receipt in receipts],
+        reconciliations=[
+            PurchaseOrderReconciliationOut.model_validate(rec).model_copy(
+                update={"resolved_by_name": names.get(rec.resolved_by_user_id)}
+            )
+            for rec in reconciliations
+        ],
+        communications=[
+            PurchaseOrderCommunicationOut.model_validate(entry).model_copy(
+                update={
+                    "sent_by_name": names.get(entry.sent_by_user_id),
+                    "files": [FileOut.model_validate(f) for f in communication_files.get(entry.id, [])],
+                }
+            )
+            for entry in communications
+        ],
+    )
+
+
+def store_receipt_pdf(db: Session, purchase_order: PurchaseOrder, receipt: PurchaseOrderReceipt, current_user: User) -> None:
+    """Renders and stores a posted receipt's A4 PDF (no prices) -- shared
+    by this module and app/api/goods_receiving.py. upload_file commits."""
+    receipt_lines = db.query(PurchaseOrderReceiptLine).filter(PurchaseOrderReceiptLine.receipt_id == receipt.id).order_by(PurchaseOrderReceiptLine.id).all()
+    po_lines_by_id = {
+        line.id: line
+        for line in db.query(PurchaseOrderLine)
+        .filter(PurchaseOrderLine.id.in_([rl.purchase_order_line_id for rl in receipt_lines]))
+        .all()
+    }
+    materials_by_id = {
+        m.id: m
+        for m in db.query(RawMaterial).filter(RawMaterial.id.in_([rl.raw_material_id for rl in receipt_lines])).all()
+    }
+    # Receipts are counted in the PO line's purchase unit.
+    unit_ids = [line.unit_of_measure_id for line in po_lines_by_id.values()]
+    units_by_id = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids)).all()}
+    supplier = db.query(Supplier).filter(Supplier.id == purchase_order.supplier_id).first()
+    warehouse = db.query(Warehouse).filter(Warehouse.id == receipt.warehouse_id).first()
+    organisation = db.query(Organisation).filter(Organisation.id == current_user.organisation_id).first()
+
+    pdf_bytes = generate_purchase_order_receipt_pdf(
+        PurchaseOrderReceiptPdfData(
+            organisation_name=organisation.name,
+            organisation_address=organisation.address,
+            organisation_phone=organisation.contact_phone,
+            organisation_email=organisation.contact_email,
+            receipt_number=receipt.receipt_number,
+            receipt_date=receipt.receipt_date,
+            po_number=purchase_order.po_number,
+            supplier_name=supplier.name,
+            warehouse_name=warehouse.name,
+            supplier_delivery_reference=receipt.supplier_delivery_reference,
+            notes=receipt.notes,
+            receiver_name=current_user.full_name,
+            lines=[
+                PurchaseOrderReceiptPdfLine(
+                    material_name=materials_by_id[rl.raw_material_id].name if rl.raw_material_id in materials_by_id else f"#{rl.raw_material_id}",
+                    ordered_quantity=po_lines_by_id[rl.purchase_order_line_id].quantity if rl.purchase_order_line_id in po_lines_by_id else Decimal("0"),
+                    previously_received_quantity=(
+                        po_lines_by_id[rl.purchase_order_line_id].received_quantity - rl.quantity
+                        if rl.purchase_order_line_id in po_lines_by_id
+                        else Decimal("0")
+                    ),
+                    received_quantity=rl.quantity,
+                    unit_code=units_by_id[po_lines_by_id[rl.purchase_order_line_id].unit_of_measure_id].code
+                    if rl.purchase_order_line_id in po_lines_by_id
+                    and po_lines_by_id[rl.purchase_order_line_id].unit_of_measure_id in units_by_id
+                    else None,
+                )
+                for rl in receipt_lines
+            ],
+            posted_at=receipt.posted_at,
+        )
+    )
+    file_service.upload_file(
+        db,
+        organisation_id=current_user.organisation_id,
+        uploaded_by_user_id=current_user.id,
+        filename=f"{receipt.receipt_number}.pdf",
+        stream=io.BytesIO(pdf_bytes),
+        entity_type=_PURCHASE_ORDER_RECEIPT_ENTITY,
+        entity_id=receipt.id,
     )
 
 
@@ -853,6 +1026,10 @@ def send_purchase_order(
     if not payload.email:
         purchase_order_service.mark_sent(purchase_order, sent_by_user_id=current_user.id)
         db.add(purchase_order)
+        _log_communication(
+            db, purchase_order=purchase_order, user=current_user, kind=COMMUNICATION_PO_SENT, status=COMMUNICATION_RECORDED,
+            message=f"PO revision {purchase_order.revision_number} sent to supplier (not by email).",
+        )
         audit_service.log_event(
             db,
             action=PURCHASE_ORDER_SENT,
@@ -907,6 +1084,10 @@ def send_purchase_order(
             db, current_user.organisation_id, supplier.email, subject, body, pdf_bytes, pdf_file.original_filename
         )
     except BusinessRuleError as exc:
+        _log_communication(
+            db, purchase_order=purchase_order, user=current_user, kind=COMMUNICATION_PO_SENT, status=COMMUNICATION_FAILED,
+            recipient=supplier.email, subject=subject, message=body, error=exc.message,
+        )
         audit_service.log_event(
             db,
             action=PURCHASE_ORDER_SEND_FAILED,
@@ -925,6 +1106,10 @@ def send_purchase_order(
     if purchase_order.status == APPROVED:
         purchase_order_service.mark_sent(purchase_order, sent_by_user_id=current_user.id)
         db.add(purchase_order)
+    _log_communication(
+        db, purchase_order=purchase_order, user=current_user, kind=COMMUNICATION_PO_SENT, status=COMMUNICATION_SENT,
+        recipient=supplier.email, subject=subject, message=body,
+    )
     audit_service.log_event(
         db,
         action=PURCHASE_ORDER_SENT,
@@ -957,6 +1142,9 @@ def create_receipt(
     action -- receiving is still one lifecycle step of the PO, not a
     separately permissioned module."""
     purchase_scope.require_permission(db, current_user, purchase_scope.RECEIVE)
+    # Returns full commercial data -- purchasing users only. The
+    # warehouse uses app/api/goods_receiving.py, which never exposes prices.
+    purchase_scope.require_permission(db, current_user, purchase_scope.VIEW)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
 
     entries = [(line.purchase_order_line_id, line.quantity) for line in payload.lines]
@@ -968,6 +1156,7 @@ def create_receipt(
         notes=payload.notes,
         entries=entries,
         created_by_user_id=current_user.id,
+        remarks={line.purchase_order_line_id: line.remarks for line in payload.lines},
     )
     if payload.file_ids:
         file_service.attach_files(
@@ -1010,72 +1199,17 @@ def post_receipt(
     movements, the PO status recompute and the PDF file record -- if any
     part fails, nothing is committed."""
     purchase_scope.require_permission(db, current_user, purchase_scope.RECEIVE)
+    # Returns full commercial data -- purchasing users only. The
+    # warehouse uses app/api/goods_receiving.py, which never exposes prices.
+    purchase_scope.require_permission(db, current_user, purchase_scope.VIEW)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     receipt = _get_receipt_in_po(db, purchase_order.id, receipt_id)
 
     purchase_order_service.post_receipt(db, receipt=receipt, purchase_order=purchase_order, posted_by_user_id=current_user.id)
 
-    receipt_lines = db.query(PurchaseOrderReceiptLine).filter(PurchaseOrderReceiptLine.receipt_id == receipt.id).order_by(PurchaseOrderReceiptLine.id).all()
-    po_lines_by_id = {
-        line.id: line
-        for line in db.query(PurchaseOrderLine)
-        .filter(PurchaseOrderLine.id.in_([rl.purchase_order_line_id for rl in receipt_lines]))
-        .all()
-    }
-    materials_by_id = {
-        m.id: m
-        for m in db.query(RawMaterial).filter(RawMaterial.id.in_([rl.raw_material_id for rl in receipt_lines])).all()
-    }
-    # Receipts are counted in the PO line's purchase unit.
-    unit_ids = [line.unit_of_measure_id for line in po_lines_by_id.values()]
-    units_by_id = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids)).all()}
-    supplier = db.query(Supplier).filter(Supplier.id == purchase_order.supplier_id).first()
-    warehouse = db.query(Warehouse).filter(Warehouse.id == receipt.warehouse_id).first()
-    organisation = db.query(Organisation).filter(Organisation.id == current_user.organisation_id).first()
-
-    pdf_bytes = generate_purchase_order_receipt_pdf(
-        PurchaseOrderReceiptPdfData(
-            organisation_name=organisation.name,
-            organisation_address=organisation.address,
-            organisation_phone=organisation.contact_phone,
-            organisation_email=organisation.contact_email,
-            receipt_number=receipt.receipt_number,
-            receipt_date=receipt.receipt_date,
-            po_number=purchase_order.po_number,
-            supplier_name=supplier.name,
-            warehouse_name=warehouse.name,
-            supplier_delivery_reference=receipt.supplier_delivery_reference,
-            notes=receipt.notes,
-            receiver_name=current_user.full_name,
-            lines=[
-                PurchaseOrderReceiptPdfLine(
-                    material_name=materials_by_id[rl.raw_material_id].name if rl.raw_material_id in materials_by_id else f"#{rl.raw_material_id}",
-                    ordered_quantity=po_lines_by_id[rl.purchase_order_line_id].quantity if rl.purchase_order_line_id in po_lines_by_id else Decimal("0"),
-                    previously_received_quantity=(
-                        po_lines_by_id[rl.purchase_order_line_id].received_quantity - rl.quantity
-                        if rl.purchase_order_line_id in po_lines_by_id
-                        else Decimal("0")
-                    ),
-                    received_quantity=rl.quantity,
-                    unit_code=units_by_id[po_lines_by_id[rl.purchase_order_line_id].unit_of_measure_id].code
-                    if rl.purchase_order_line_id in po_lines_by_id
-                    and po_lines_by_id[rl.purchase_order_line_id].unit_of_measure_id in units_by_id
-                    else None,
-                )
-                for rl in receipt_lines
-            ],
-            posted_at=receipt.posted_at,
-        )
-    )
-    file_service.upload_file(
-        db,
-        organisation_id=current_user.organisation_id,
-        uploaded_by_user_id=current_user.id,
-        filename=f"{receipt.receipt_number}.pdf",
-        stream=io.BytesIO(pdf_bytes),
-        entity_type=_PURCHASE_ORDER_RECEIPT_ENTITY,
-        entity_id=receipt.id,
-    )
+    # upload_file commits: the receipt, stock movements, status and PDF
+    # land together.
+    store_receipt_pdf(db, purchase_order, receipt, current_user)
 
     audit_service.log_event(
         db,
@@ -1105,6 +1239,9 @@ def cancel_receipt(
     """`draft -> cancelled` (docs/modules/purchase_orders.md #38) -- a
     receipt discarded before posting; never had any inventory effect."""
     purchase_scope.require_permission(db, current_user, purchase_scope.RECEIVE)
+    # Returns full commercial data -- purchasing users only. The
+    # warehouse uses app/api/goods_receiving.py, which never exposes prices.
+    purchase_scope.require_permission(db, current_user, purchase_scope.VIEW)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     receipt = _get_receipt_in_po(db, purchase_order.id, receipt_id)
 
@@ -1141,8 +1278,13 @@ def reverse_receipt(
     quantities. The original receipt stays visible with its original
     values."""
     purchase_scope.require_permission(db, current_user, purchase_scope.RECEIVE)
+    # Returns full commercial data -- purchasing users only. The
+    # warehouse uses app/api/goods_receiving.py, which never exposes prices.
+    purchase_scope.require_permission(db, current_user, purchase_scope.VIEW)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     receipt = _get_receipt_in_po(db, purchase_order.id, receipt_id)
+    if purchase_order.status == CLOSED:
+        raise BusinessRuleError("A closed purchase order can't be changed.")
 
     purchase_order_service.reverse_receipt(
         db, receipt=receipt, purchase_order=purchase_order, reason=payload.reason, reversed_by_user_id=current_user.id
@@ -1196,7 +1338,10 @@ def record_payment(
         reference_number=payload.reference_number,
         notes=payload.notes,
         created_by_user_id=current_user.id,
+        is_final=payload.is_final,
     )
+    purchase_order_service.check_payment_discrepancy(db, purchase_order, final_payment=payload.is_final)
+    purchase_order_service.refresh_status(db, purchase_order)
     if payload.file_ids:
         file_service.attach_files(
             db,
@@ -1215,7 +1360,8 @@ def record_payment(
         entity_type=_PURCHASE_ORDER_ENTITY,
         entity_id=purchase_order.id,
         result="success",
-        details=f"payment_number: {payment.payment_number}, amount: {payment.amount}",
+        details=f"payment_number: {payment.payment_number}, amount: {payment.amount}, final: {payment.is_final}, "
+        f"po status: {purchase_order.status}",
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
@@ -1238,8 +1384,12 @@ def cancel_payment(
     purchase_payment_scope.require_permission(db, current_user, purchase_payment_scope.CANCEL)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     payment = _get_payment_in_po(db, purchase_order.id, payment_id)
+    if purchase_order.status == CLOSED:
+        raise BusinessRuleError("A closed purchase order can't be changed.")
 
     purchase_order_service.cancel_payment(db, payment=payment, reason=payload.reason, cancelled_by_user_id=current_user.id)
+    db.flush()
+    purchase_order_service.refresh_status(db, purchase_order)
 
     audit_service.log_event(
         db,
@@ -1251,6 +1401,160 @@ def cancel_payment(
         entity_id=purchase_order.id,
         result="success",
         details=f"payment_number: {payment.payment_number}, reason: {payload.reason}",
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(purchase_order)
+    return _build_po_out(db, purchase_order)
+
+
+@router.post("/{purchase_order_id}/reconciliations/{reconciliation_id}/resolve", response_model=PurchaseOrderOut)
+def resolve_reconciliation(
+    purchase_order_id: int,
+    reconciliation_id: int,
+    payload: ResolveReconciliationRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderOut:
+    """The PO creator's documented decision on a receipt or payment
+    discrepancy (docs/modules/purchase_orders.md Revision 6)."""
+    purchase_scope.require_permission(db, current_user, purchase_scope.VIEW)
+    purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
+    _require_creator_or_admin(current_user, purchase_order)
+    reconciliation = (
+        db.query(PurchaseOrderReconciliation)
+        .filter(
+            PurchaseOrderReconciliation.id == reconciliation_id,
+            PurchaseOrderReconciliation.purchase_order_id == purchase_order.id,
+        )
+        .first()
+    )
+    if reconciliation is None:
+        raise NotFoundError("Discrepancy not found.")
+
+    purchase_order_service.resolve_reconciliation(
+        db,
+        purchase_order=purchase_order,
+        reconciliation=reconciliation,
+        resolution=payload.resolution,
+        note=payload.note,
+        resolved_by_user_id=current_user.id,
+    )
+    audit_service.log_event(
+        db,
+        action=PURCHASE_ORDER_RECONCILED,
+        module=PROCUREMENT_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type=_PURCHASE_ORDER_ENTITY,
+        entity_id=purchase_order.id,
+        result="success",
+        details=f"{reconciliation.kind}: {payload.resolution} -- {payload.note}; po status: {purchase_order.status}",
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(purchase_order)
+    return _build_po_out(db, purchase_order)
+
+
+_FOLLOW_UP_STATUSES = ("approved", "sent", "partially_received", "reconciliation_required", "received", "payment_reconciliation")
+
+
+@router.post("/{purchase_order_id}/follow-ups", response_model=PurchaseOrderOut, status_code=status.HTTP_201_CREATED)
+def follow_up(
+    purchase_order_id: int,
+    payload: FollowUpRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderOut:
+    """Supplier follow-up (docs/modules/purchase_orders.md Revision 6):
+    email the supplier, or record their reply. Kept on the PO's own
+    history -- no separate communication module. A failed email is kept
+    on the history with its error and reported."""
+    purchase_scope.require_permission(db, current_user, purchase_scope.SEND)
+    purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
+    if purchase_order.status not in _FOLLOW_UP_STATUSES:
+        raise BusinessRuleError("Follow-ups are only possible on an approved, open purchase order.")
+
+    if not payload.send_email:
+        entry = _log_communication(
+            db, purchase_order=purchase_order, user=current_user, kind=COMMUNICATION_NOTE, status=COMMUNICATION_RECORDED,
+            subject=payload.subject, message=payload.message,
+        )
+        if payload.file_ids:
+            file_service.attach_files(
+                db, file_ids=payload.file_ids, entity_type=_PURCHASE_ORDER_COMMUNICATION_ENTITY,
+                entity_id=entry.id, organisation_id=current_user.organisation_id,
+            )
+    else:
+        supplier = db.query(Supplier).filter(Supplier.id == purchase_order.supplier_id).one()
+        if not supplier.email:
+            raise ValidationError("This supplier has no email address on file.", fields={"supplier_id": "Missing email address."})
+        subject = payload.subject or f"Follow-up: Purchase Order {purchase_order.po_number}"
+
+        # One attachment per email (app/services/email_service.py): the PO
+        # PDF if asked for, otherwise the first uploaded file.
+        attachment: FileRecord | None = None
+        if payload.attach_po_pdf:
+            revision = (
+                db.query(PurchaseOrderRevision)
+                .filter(
+                    PurchaseOrderRevision.purchase_order_id == purchase_order.id,
+                    PurchaseOrderRevision.revision_number == purchase_order.revision_number,
+                )
+                .first()
+            )
+            if revision is not None:
+                attachment = (
+                    db.query(FileRecord)
+                    .filter(
+                        FileRecord.entity_type == _PURCHASE_ORDER_REVISION_ENTITY,
+                        FileRecord.entity_id == revision.id,
+                        FileRecord.deleted_at.is_(None),
+                    )
+                    .first()
+                )
+        entry = _log_communication(
+            db, purchase_order=purchase_order, user=current_user, kind=COMMUNICATION_FOLLOW_UP, status=COMMUNICATION_SENT,
+            recipient=supplier.email, subject=subject, message=payload.message,
+        )
+        if payload.file_ids:
+            attached = file_service.attach_files(
+                db, file_ids=payload.file_ids, entity_type=_PURCHASE_ORDER_COMMUNICATION_ENTITY,
+                entity_id=entry.id, organisation_id=current_user.organisation_id,
+            )
+            if attachment is None and attached:
+                attachment = attached[0]
+
+        try:
+            email_service.send_email(
+                db,
+                current_user.organisation_id,
+                supplier.email,
+                subject,
+                payload.message,
+                b"".join(default_storage.download(attachment.storage_key)) if attachment else None,
+                attachment.original_filename if attachment else None,
+            )
+        except BusinessRuleError as exc:
+            entry.status = COMMUNICATION_FAILED
+            entry.error = exc.message
+            db.add(entry)
+            db.commit()
+            raise
+
+    audit_service.log_event(
+        db,
+        action=PURCHASE_ORDER_FOLLOW_UP,
+        module=PROCUREMENT_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type=_PURCHASE_ORDER_ENTITY,
+        entity_id=purchase_order.id,
+        result="success",
+        details=f"{'email to ' + entry.recipient if payload.send_email else 'supplier reply recorded'}",
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
@@ -1296,10 +1600,25 @@ def _check_purchase_order_receipt_file_access(db: Session, user: User, receipt_i
     receipt = db.query(PurchaseOrderReceipt).filter(PurchaseOrderReceipt.id == receipt_id).first()
     if receipt is None or receipt.organisation_id != user.organisation_id:
         return False
-    return purchase_scope.can_perform(db, user, purchase_scope.VIEW)
+    # Receipt documents carry no prices, so the warehouse (receive) can
+    # open them too.
+    return purchase_scope.can_perform(db, user, purchase_scope.VIEW) or purchase_scope.can_perform(
+        db, user, purchase_scope.RECEIVE
+    )
+
+
+def _check_purchase_order_communication_file_access(db: Session, user: User, communication_id: int) -> bool:
+    organisation_id = (
+        db.query(PurchaseOrder.organisation_id)
+        .join(PurchaseOrderCommunication, PurchaseOrderCommunication.purchase_order_id == PurchaseOrder.id)
+        .filter(PurchaseOrderCommunication.id == communication_id)
+        .scalar()
+    )
+    return organisation_id == user.organisation_id and purchase_scope.can_perform(db, user, purchase_scope.VIEW)
 
 
 register_entity_access_check(_PURCHASE_ORDER_ENTITY, _check_purchase_order_file_access)
 register_entity_access_check(_PURCHASE_ORDER_REVISION_ENTITY, _check_purchase_order_revision_file_access)
 register_entity_access_check(_PURCHASE_ORDER_PAYMENT_ENTITY, _check_purchase_order_payment_file_access)
 register_entity_access_check(_PURCHASE_ORDER_RECEIPT_ENTITY, _check_purchase_order_receipt_file_access)
+register_entity_access_check(_PURCHASE_ORDER_COMMUNICATION_ENTITY, _check_purchase_order_communication_file_access)

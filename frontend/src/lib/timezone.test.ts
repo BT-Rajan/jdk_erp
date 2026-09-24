@@ -6,12 +6,12 @@ describe('formatKuwaitTime', () => {
     expect(JDK_TIMEZONE).toBe('Asia/Kuwait')
   })
 
-  it('converts a UTC timestamp to Kuwait local time (UTC+3), DD/MM/YYYY HH:mm', () => {
-    expect(formatKuwaitTime('2026-09-22T09:00:00Z')).toBe('22/09/2026 12:00')
+  it('converts a UTC timestamp to Kuwait local time (UTC+3), DD-MM-YYYY HH:mm', () => {
+    expect(formatKuwaitTime('2026-09-22T09:00:00Z')).toBe('22-09-2026 12:00')
   })
 
   it('rolls over to the next day when the offset crosses midnight', () => {
-    expect(formatKuwaitTime('2026-09-22T22:00:00Z')).toBe('23/09/2026 01:00')
+    expect(formatKuwaitTime('2026-09-22T22:00:00Z')).toBe('23-09-2026 01:00')
   })
 
   it('returns the empty-value placeholder for missing or invalid values', () => {

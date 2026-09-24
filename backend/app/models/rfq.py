@@ -57,8 +57,7 @@ class Rfq(Base, TimestampMixin, OrganisationScopedMixin):
     `RfqSupplierInvitation` rows (one or several per RFQ, #4), and the PO
     supplier comes from the selected response's invitation (#8).
 
-    `team_id` reuses the existing `teams` table as the requesting
-    department (docs/modules/teams.md). `requested_by_user_id` is stamped
+    `requested_by_user_id` is stamped
     from the session user at creation and never edited. `priority` is
     display/filter only.
 
@@ -81,7 +80,6 @@ class Rfq(Base, TimestampMixin, OrganisationScopedMixin):
     )
     rfq_date: Mapped[date] = mapped_column(Date, nullable=False)
     required_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True, index=True)
     requested_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

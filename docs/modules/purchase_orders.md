@@ -804,3 +804,55 @@ statuses (`issued → approved`, `supplier_confirmed → sent`,
 `fully_received → received`), fills approval/sent stamps from existing
 history, currency from the organisation, and each existing line's unit
 from its item (factor 1).
+
+## Revision 6 — follow-up, warehouse receiving, reconciliation, automatic closing
+
+```text
+approved --> sent (awaiting delivery) --receipt--> received (awaiting payment) --paid == PO amount--> closed
+                  |                  \--short----> reconciliation_required --creator--> partially_received / received
+                  '--advance payment ok           payment != PO amount --> payment_reconciliation --creator--> received / closed
+```
+
+**Supplier follow-up** (`POST .../follow-ups`, `send` permission): email
+the supplier (optionally attaching the PO PDF and files) or record their
+reply. Each entry keeps date/time, recipient, subject, message, sent by,
+email status (sent / failed + error) and attachments. Sending the PO is
+logged in the same history. Shown as a timeline on the PO.
+
+**Warehouse receiving** (`/api/goods-receiving`, `purchase:receive` only):
+list of sent POs, a PO's items (ordered / received / remaining + UOM),
+receipt history, and **Submit Receipt** (received quantity + remarks per
+item, receipt date — not in the future, delivery note number, attachments,
+remarks). It posts stock immediately. This API never returns unit price,
+line value, totals, payments or payment terms, and the warehouse needs no
+`purchase:view`; the commercial PO endpoints (including the old receipt
+endpoints) now require `purchase:view`. The warehouse can't change the PO.
+
+**Automatic reconciliation**: material and supplier always match (a
+receipt can only reference the PO's own lines). Any line still short of
+what is expected opens a **receipt** discrepancy → `reconciliation_required`,
+returned to the PO creator. A late delivery is shown (`days_late`) and
+never blocks.
+
+**Creator resolves** (`POST .../reconciliations/{id}/resolve`; only the
+creator or an admin; a note is always required):
+- receipt: `keep_pending` (remaining still expected — incl. replacement
+  requested) or `cancel_remaining` (accept what arrived; the remainder is
+  cancelled, reducing the PO amount). Rejected material: reverse the
+  receipt, then resolve.
+- payment: `accept_paid_amount` (the PO amount becomes what was paid,
+  recorded as `amount_adjustment`) or `correct_payment` (Finance cancels
+  and re-records).
+
+**Payment**: Finance records payments any time after approval (advance
+payments included) and can mark one **final**. Paid > PO amount, or a
+final payment that doesn't match exactly → **payment** discrepancy →
+`payment_reconciliation`, returned to the creator.
+
+**Closing is automatic and only when**: everything expected has been
+received, no discrepancy is open, and total paid == PO amount (ordered
+less cancelled quantities, plus any accepted adjustment). There is no
+manual close. A closed PO can't take payments, payment cancellations or
+receipt reversals.
+
+Migration `0035_purchase_order_reconciliation_and_follow_up.py`.

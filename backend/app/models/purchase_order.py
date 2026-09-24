@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -12,24 +12,55 @@ PENDING_APPROVAL = "pending_approval"
 APPROVED = "approved"
 SENT = "sent"
 PARTIALLY_RECEIVED = "partially_received"
+RECONCILIATION_REQUIRED = "reconciliation_required"
 RECEIVED = "received"
+PAYMENT_RECONCILIATION = "payment_reconciliation"
+CLOSED = "closed"
 CANCELLED = "cancelled"
-PURCHASE_ORDER_STATUSES = (DRAFT, PENDING_APPROVAL, APPROVED, SENT, PARTIALLY_RECEIVED, RECEIVED, CANCELLED)
+PURCHASE_ORDER_STATUSES = (
+    DRAFT,
+    PENDING_APPROVAL,
+    APPROVED,
+    SENT,
+    PARTIALLY_RECEIVED,
+    RECONCILIATION_REQUIRED,
+    RECEIVED,
+    PAYMENT_RECONCILIATION,
+    CLOSED,
+    CANCELLED,
+)
+# Statuses after approval that app/services/purchase_order_service.
+# refresh_status derives from receipts, payments and open reconciliations
+# -- never direct targets of a status change.
+FULFILMENT_STATUSES = (
+    APPROVED,
+    SENT,
+    PARTIALLY_RECEIVED,
+    RECONCILIATION_REQUIRED,
+    RECEIVED,
+    PAYMENT_RECONCILIATION,
+    CLOSED,
+)
 
-# docs/modules/purchase_orders.md #23.
+# docs/modules/purchase_orders.md Revision 6.
 # draft -> pending_approval (submit) -> approved (approve: snapshots the
-# revision + PDF) -> sent (emailed or marked sent) -> partially_received /
-# received (side effects of posting receipts, never direct targets).
-# pending_approval -> draft is "send back"; approved/sent -> draft is
-# "Create Revision" (only before anything is received) and needs approval
-# again. Cancel from any open status.
+# revision + PDF) -> sent (emailed or marked sent). From there the status
+# is derived (refresh_status): partially_received, reconciliation_required
+# (a receipt short of the order, until the creator resolves it), received
+# (awaiting payment), payment_reconciliation (paid != final amount, until
+# the creator resolves it) and closed (fully received, nothing open, paid
+# == final amount). pending_approval -> draft is "send back";
+# approved/sent -> draft is "Create Revision" and needs approval again.
 ALLOWED_STATUS_TRANSITIONS = {
     DRAFT: {PENDING_APPROVAL, CANCELLED},
     PENDING_APPROVAL: {APPROVED, DRAFT, CANCELLED},
     APPROVED: {SENT, DRAFT, CANCELLED},
     SENT: {DRAFT, CANCELLED},
     PARTIALLY_RECEIVED: {CANCELLED},
+    RECONCILIATION_REQUIRED: set(),
     RECEIVED: set(),
+    PAYMENT_RECONCILIATION: set(),
+    CLOSED: set(),
     CANCELLED: set(),
 }
 
@@ -102,8 +133,11 @@ class PurchaseOrder(Base, TimestampMixin, OrganisationScopedMixin):
         ),
         nullable=True,
     )
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default=DRAFT, server_default=DRAFT)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default=DRAFT, server_default=DRAFT)
     revision_number: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    # Set only by resolving a payment reconciliation with "accept paid
+    # amount": final amount = received-value total + this adjustment.
+    amount_adjustment: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0, server_default="0")
     order_date: Mapped[date] = mapped_column(Date, nullable=False)
     expected_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     supplier_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -170,6 +204,9 @@ class PurchaseOrderLine(Base, TimestampMixin):
     required_by_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0, server_default="0")
+    # Remaining quantity the creator cancelled when resolving a short
+    # receipt ("accept received quantity"); no longer expected or payable.
+    cancelled_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0, server_default="0")
 
 
 class PurchaseOrderRevision(Base):
@@ -267,6 +304,10 @@ class PurchaseOrderPayment(Base, TimestampMixin, OrganisationScopedMixin):
     payment_method: Mapped[str | None] = mapped_column(String(60), nullable=True)
     reference_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Finance marks the payment that settles the PO; if the total paid
+    # then differs from the final amount, the PO goes to payment
+    # reconciliation instead of closing.
+    is_final: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     status: Mapped[str] = mapped_column(String(10), nullable=False, default=PAYMENT_RECORDED, server_default=PAYMENT_RECORDED)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -367,3 +408,69 @@ class PurchaseOrderReceiptLine(Base):
         ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+RECONCILIATION_RECEIPT = "receipt"
+RECONCILIATION_PAYMENT = "payment"
+RECONCILIATION_OPEN = "open"
+RECONCILIATION_RESOLVED = "resolved"
+
+# Resolutions the PO creator can choose (docs/modules/purchase_orders.md
+# Revision 6).
+RESOLVE_KEEP_PENDING = "keep_pending"  # remaining stays expected (incl. replacement requested)
+RESOLVE_CANCEL_REMAINING = "cancel_remaining"  # accept what was received; the rest is cancelled
+RESOLVE_ACCEPT_PAID_AMOUNT = "accept_paid_amount"  # final amount becomes what was paid
+RESOLVE_CORRECT_PAYMENT = "correct_payment"  # Finance corrects the payment(s)
+RECEIPT_RESOLUTIONS = (RESOLVE_KEEP_PENDING, RESOLVE_CANCEL_REMAINING)
+PAYMENT_RESOLUTIONS = (RESOLVE_ACCEPT_PAID_AMOUNT, RESOLVE_CORRECT_PAYMENT)
+
+
+class PurchaseOrderReconciliation(Base, TimestampMixin):
+    """A discrepancy returned to the PO creator: a receipt short of the
+    order (`receipt`) or a paid total different from the final amount
+    (`payment`). While one is open the PO can't close. Resolved only by
+    the creator (or an admin), always with a documented note."""
+
+    __tablename__ = "purchase_order_reconciliations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_order_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default=RECONCILIATION_OPEN, server_default=RECONCILIATION_OPEN)
+    discrepancy: Mapped[str] = mapped_column(Text, nullable=False)
+    resolution: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+
+COMMUNICATION_PO_SENT = "po_sent"
+COMMUNICATION_FOLLOW_UP = "follow_up"
+COMMUNICATION_NOTE = "note"
+COMMUNICATION_SENT = "sent"
+COMMUNICATION_FAILED = "failed"
+COMMUNICATION_RECORDED = "recorded"
+
+
+class PurchaseOrderCommunication(Base, TimestampMixin):
+    """One entry in a PO's supplier follow-up history: the PO being sent,
+    a follow-up email, or a recorded supplier reply ("confirmed delivery
+    for 30-09"). Attachments are generic files
+    (`entity_type="purchase_order_communication"`)."""
+
+    __tablename__ = "purchase_order_communications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    purchase_order_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_orders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    recipient: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

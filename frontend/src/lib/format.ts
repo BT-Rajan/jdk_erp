@@ -38,15 +38,23 @@ function pad(n: number): string {
   return String(n).padStart(2, '0')
 }
 
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
+
 /** Deliberately not Intl.DateTimeFormat/toLocaleDateString -- those are
  * browser-locale-dependent, so the same record would render differently
  * depending on the viewer's OS settings. One fixed, explicit format
- * everywhere instead: DD/MM/YYYY (docs/modules/common_validation.md #2). */
+ * everywhere instead: DD-MM-YYYY (docs/modules/common_validation.md #2).
+ * A plain `YYYY-MM-DD` date is formatted from its parts, never through
+ * `new Date()`, so no timezone can shift it by a day. */
 export function formatDate(value: string | Date | null | undefined): string {
   if (!value) return EMPTY
+  if (typeof value === 'string') {
+    const match = ISO_DATE_RE.exec(value)
+    if (match) return `${match[3]}-${match[2]}-${match[1]}`
+  }
   const d = typeof value === 'string' ? new Date(value) : value
   if (Number.isNaN(d.getTime())) return EMPTY
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`
 }
 
 export function formatDateTime(value: string | Date | null | undefined): string {

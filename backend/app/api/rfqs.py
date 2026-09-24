@@ -48,7 +48,6 @@ from app.models.rfq import (
     RfqSupplierInvitation,
 )
 from app.models.supplier import Supplier
-from app.models.team import Team
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
 from app.models.warehouse import Warehouse
@@ -126,20 +125,6 @@ def _resolve_active_supplier(db: Session, supplier_id: int, organisation_id: int
             fields={"supplier_id": "Not a valid active supplier in your organisation."},
         )
     return supplier
-
-
-def _resolve_active_team(db: Session, team_id: int, organisation_id: int) -> Team:
-    team = (
-        db.query(Team)
-        .filter(Team.id == team_id, Team.organisation_id == organisation_id, Team.is_active.is_(True))
-        .first()
-    )
-    if team is None:
-        raise ValidationError(
-            "team_id must be an active team in your organisation.",
-            fields={"team_id": "Not a valid active team in your organisation."},
-        )
-    return team
 
 
 def _resolve_active_warehouse(db: Session, warehouse_id: int, organisation_id: int) -> Warehouse:
@@ -285,7 +270,6 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
             priority=rfq.priority,
             rfq_date=rfq.rfq_date,
             required_delivery_date=rfq.required_delivery_date,
-            team_id=rfq.team_id,
             requested_by_user_id=rfq.requested_by_user_id,
             requested_by_name=requester_names.get(rfq.requested_by_user_id),
             notes=rfq.notes,
@@ -330,7 +314,6 @@ def list_rfqs(
     sort_direction: Literal["asc", "desc"] = Query("asc"),
     status_filter: str | None = Query(None, alias="status"),
     priority: str | None = Query(None),
-    team_id: int | None = Query(None),
     supplier_id: int | None = Query(None),
     q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
@@ -347,8 +330,6 @@ def list_rfqs(
         query = query.filter(Rfq.status == status_filter)
     if priority is not None:
         query = query.filter(Rfq.priority == priority)
-    if team_id is not None:
-        query = query.filter(Rfq.team_id == team_id)
     if supplier_id is not None:
         # "RFQs this supplier was invited to" -- the v2 meaning of the v1
         # header-level supplier filter (docs/modules/rfq.md #4).
@@ -364,6 +345,14 @@ def list_rfqs(
     return PaginatedResponse(data=_build_rfq_outs(db, rfqs), pagination=pagination)
 
 
+@router.get("/next-number")
+def next_rfq_number(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    """The number the next new RFQ will get, shown in the New RFQ form.
+    Not reserved -- the number is assigned when the RFQ is saved."""
+    rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
+    return {"rfq_number": rfq_service.generate_rfq_number(db, current_user.organisation_id)}
+
+
 @router.get("/{rfq_id}", response_model=RfqOut)
 def get_rfq(rfq_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> RfqOut:
     """Also the comparison view (docs/modules/rfq.md #6): every invitation
@@ -373,12 +362,11 @@ def get_rfq(rfq_id: int, current_user: User = Depends(get_current_user), db: Ses
     return _build_rfq_out(db, rfq)
 
 
-def _validate_form(db: Session, payload: RfqSaveRequest, organisation_id: int) -> tuple[Team, list[Supplier], dict]:
+def _validate_form(db: Session, payload: RfqSaveRequest, organisation_id: int) -> tuple[list[Supplier], dict]:
     """Every rule of the RFQ form (docs/modules/rfq.md #2-#4), checked
-    before anything is written: active department, active registered
+    before anything is written: active registered
     suppliers, active materials, and a unit that converts to each
     material's own unit. Returns the resolved rows."""
-    team = _resolve_active_team(db, payload.team_id, organisation_id)
     today = date.today()
     if payload.required_delivery_date < today:
         raise ValidationError(
@@ -432,7 +420,7 @@ def _validate_form(db: Session, payload: RfqSaveRequest, organisation_id: int) -
             raise ValidationError(
                 f"Item {index}: Required By date cannot be in the past.", fields={"lines": f"Item {index}: date in the past."}
             )
-    return team, suppliers, {"materials": materials, "units": units}
+    return suppliers, {"materials": materials, "units": units}
 
 
 def _write_form(db: Session, rfq: Rfq, payload: RfqSaveRequest) -> None:
@@ -441,9 +429,7 @@ def _write_form(db: Session, rfq: Rfq, payload: RfqSaveRequest) -> None:
     reconciled by supplier so a kept supplier keeps its invitation and
     PDF history."""
     rfq.required_delivery_date = payload.required_delivery_date
-    rfq.team_id = payload.team_id
     rfq.priority = payload.priority
-    rfq.notes = payload.notes
     db.add(rfq)
 
     db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id).delete(synchronize_session=False)
@@ -476,7 +462,7 @@ def _write_form(db: Session, rfq: Rfq, payload: RfqSaveRequest) -> None:
     db.flush()
 
 
-def _render_pdfs(db: Session, rfq: Rfq, team: Team, resolved: dict) -> list[tuple[RfqSupplierInvitation, bytes]]:
+def _render_pdfs(db: Session, rfq: Rfq, resolved: dict) -> list[tuple[RfqSupplierInvitation, bytes]]:
     """One letterhead PDF per invited supplier for the current revision
     (docs/modules/rfq.md #11). Rendered in memory, before anything is
     committed."""
@@ -534,7 +520,6 @@ def _render_pdfs(db: Session, rfq: Rfq, team: Team, resolved: dict) -> list[tupl
                         revision_number=rfq.revision_number,
                         rfq_date=rfq.rfq_date,
                         required_delivery_date=rfq.required_delivery_date,
-                        department=team.name,
                         requested_by=requested_by,
                         priority=rfq.priority,
                         notes=rfq.notes,
@@ -556,7 +541,7 @@ def _render_pdfs(db: Session, rfq: Rfq, team: Team, resolved: dict) -> list[tupl
     return rendered
 
 
-def _save(db: Session, request: Request, user: User, rfq: Rfq, payload: RfqSaveRequest, team: Team, resolved: dict, created: bool) -> RfqOut:
+def _save(db: Session, request: Request, user: User, rfq: Rfq, payload: RfqSaveRequest, resolved: dict, created: bool) -> RfqOut:
     """Shared tail of create/edit: write the form, and on submit move to
     the next revision (`draft -> issued`, or a new revision of an issued
     RFQ) and store one PDF per supplier. `upload_file` commits, so the
@@ -572,7 +557,7 @@ def _save(db: Session, request: Request, user: User, rfq: Rfq, payload: RfqSaveR
         rfq.revision_number += 1
         db.add(rfq)
         db.flush()
-        rendered = _render_pdfs(db, rfq, team, resolved)
+        rendered = _render_pdfs(db, rfq, resolved)
 
     action = RFQ_CREATED if created else RFQ_UPDATED
     details = f"rfq_number: {rfq.rfq_number}, items: {len(payload.lines)}, suppliers: {len(payload.supplier_ids)}"
@@ -608,7 +593,7 @@ def create_rfq(
     rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
     if payload.submit:
         rfq_scope.require_permission(db, current_user, rfq_scope.ISSUE)
-    team, suppliers, resolved = _validate_form(db, payload, current_user.organisation_id)
+    suppliers, resolved = _validate_form(db, payload, current_user.organisation_id)
     resolved["suppliers"] = suppliers
 
     rfq: Rfq | None = None
@@ -633,7 +618,7 @@ def create_rfq(
     if last_error is not None or rfq is None:
         raise ConflictError("Could not generate a unique RFQ number. Please try again.") from last_error
 
-    return _save(db, request, current_user, rfq, payload, team, resolved, created=True)
+    return _save(db, request, current_user, rfq, payload, resolved, created=True)
 
 
 @router.put("/{rfq_id}", response_model=RfqOut)
@@ -667,9 +652,9 @@ def update_rfq(
     if has_quote:
         raise BusinessRuleError("This RFQ can no longer be changed -- a supplier quote has already been captured.")
 
-    team, suppliers, resolved = _validate_form(db, payload, current_user.organisation_id)
+    suppliers, resolved = _validate_form(db, payload, current_user.organisation_id)
     resolved["suppliers"] = suppliers
-    return _save(db, request, current_user, rfq, payload, team, resolved, created=False)
+    return _save(db, request, current_user, rfq, payload, resolved, created=False)
 
 
 @router.post("/{rfq_id}/invitations/{invitation_id}/send", response_model=RfqOut)
@@ -923,7 +908,7 @@ def raise_new_rfq(
 ) -> RfqOut:
     """The agreed quantity differs from the request, so this RFQ can't be
     approved (docs/modules/rfq.md #7): it is cancelled, naming its
-    replacement, and a new draft RFQ is raised -- same department,
+    replacement, and a new draft RFQ is raised -- same
     priority, suppliers and items, at the agreed quantities -- for the
     user to check and submit. One transaction. Returns the new draft."""
     rfq_scope.require_permission(db, current_user, rfq_scope.CREATE)
@@ -949,7 +934,6 @@ def raise_new_rfq(
             status=DRAFT,
             rfq_date=date.today(),
             required_delivery_date=rfq.required_delivery_date,
-            team_id=rfq.team_id,
             priority=rfq.priority,
             notes=rfq.notes,
             requested_by_user_id=current_user.id,

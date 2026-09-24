@@ -46,7 +46,6 @@ class RfqPdfData:
     revision_number: int
     rfq_date: date
     required_delivery_date: date | None
-    department: str | None
     requested_by: str | None
     priority: str
     notes: str | None
@@ -107,8 +106,7 @@ def generate_rfq_pdf(data: RfqPdfData) -> bytes:
         [
             ["RFQ Date", data.rfq_date.strftime("%d-%m-%Y"), "Required By",
              data.required_delivery_date.strftime("%d-%m-%Y") if data.required_delivery_date else "-"],
-            ["Department", data.department or "-", "Requested By", data.requested_by or "-"],
-            ["Priority", data.priority.capitalize(), "", ""],
+            ["Requested By", data.requested_by or "-", "Priority", data.priority.capitalize()],
         ],
         colWidths=[30 * mm, 60 * mm, 30 * mm, 54 * mm],
     )

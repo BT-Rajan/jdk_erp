@@ -25,9 +25,16 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from xml.sax.saxutils import escape
 
+from app.core.timezone import to_jdk_time
+
 _TABLE_HEADER_BG = colors.HexColor("#1a1a28")
 _TABLE_HEADER_FG = colors.white
 _TABLE_GRID = colors.HexColor("#c9c9c9")
+
+
+def _d(value: date | None) -> str:
+    """DD-MM-YYYY, the one date format (docs/modules/common_validation.md)."""
+    return value.strftime("%d-%m-%Y") if value else "—"
 
 
 @dataclass
@@ -89,7 +96,7 @@ def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
 
     header_table = Table(
         [
-            ["PO Date", str(data.order_date), "Expected Delivery", str(data.expected_delivery_date or "—")],
+            ["PO Date", _d(data.order_date), "Expected Delivery", _d(data.expected_delivery_date)],
             [
                 "Supplier Reference",
                 data.supplier_reference or "—",
@@ -162,7 +169,7 @@ def generate_purchase_order_pdf(data: PurchaseOrderPdfData) -> bytes:
         story.append(Paragraph(escape(data.notes), styles["Normal"]))
 
     story.append(Spacer(1, 10 * mm))
-    story.append(Paragraph(f"Issued {data.issued_at.strftime('%d %b %Y %H:%M')}", styles["Normal"]))
+    story.append(Paragraph(f"Approved {to_jdk_time(data.issued_at).strftime('%d-%m-%Y %H:%M')}", styles["Normal"]))
 
     doc.build(story)
     return buffer.getvalue()

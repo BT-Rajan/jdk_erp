@@ -83,6 +83,17 @@ def _reverse_receipt(client, headers, po_id, receipt_id, reason="Wrong quantity 
     )
 
 
+def _keep_pending(client, headers, po_body):
+    """The PO creator resolves a short-receipt discrepancy by keeping the
+    remaining quantity expected."""
+    rec = next(r for r in po_body["reconciliations"] if r["status"] == "open")
+    return client.post(
+        f"/api/purchase-orders/{po_body['id']}/reconciliations/{rec['id']}/resolve",
+        json={"resolution": "keep_pending", "note": "Balance to follow"},
+        headers=headers,
+    )
+
+
 def _confirmed_po_with_line(client, headers, acme_supplier, warehouse_1, cement_raw_material, quantity="1000", unit_price="1"):
     po = _create_po(client, headers, acme_supplier.id, warehouse_1.id).json()
     line = _add_line(client, headers, po["id"], cement_raw_material.id, quantity, unit_price).json()["lines"][0]
@@ -135,7 +146,7 @@ def test_post_receipt_updates_inventory_and_po(client, admin_headers, acme_suppl
     assert response.status_code == 200
     body = response.json()
     assert body["receipts"][0]["status"] == "posted"
-    assert body["status"] == "partially_received"
+    assert body["status"] == "reconciliation_required"  # short of the order -> back to the creator
     assert body["lines"][0]["received_quantity"] == "600.0000"
 
     inventory = (
@@ -160,7 +171,7 @@ def test_post_receipt_updates_inventory_and_po(client, admin_headers, acme_suppl
 def test_second_receipt_completes_the_po(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session):
     po, line = _confirmed_po_with_line(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material)
     first_receipt = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "600"}]).json()["receipts"][0]
-    _post_receipt(client, admin_headers, po["id"], first_receipt["id"])
+    _keep_pending(client, admin_headers, _post_receipt(client, admin_headers, po["id"], first_receipt["id"]).json())
 
     second_receipt = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "400"}]).json()["receipts"][-1]
     response = _post_receipt(client, admin_headers, po["id"], second_receipt["id"])
@@ -181,8 +192,11 @@ def test_po_remains_open_for_remaining_quantity_after_partial_receipt(
     po, line = _confirmed_po_with_line(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material)
     first_receipt = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "600"}]).json()["receipts"][0]
     body = _post_receipt(client, admin_headers, po["id"], first_receipt["id"]).json()
-    assert body["status"] == "partially_received"
+    assert body["status"] == "reconciliation_required"
+    # Not receivable until the creator decides.
+    assert _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "400"}]).status_code == 400
 
+    assert _keep_pending(client, admin_headers, body).json()["status"] == "partially_received"
     # Still receivable -- a second receipt against the remaining 400 succeeds.
     response = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "400"}])
     assert response.status_code == 201
@@ -280,7 +294,9 @@ def test_reverse_posted_receipt_keeps_it_visible_and_reverts_inventory(
     response = _reverse_receipt(client, admin_headers, po["id"], receipt["id"])
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "sent"  # back to before any receipt, not partially_received
+    # Nothing received any more, but the short-receipt discrepancy stays
+    # with the creator until resolved.
+    assert body["status"] == "reconciliation_required"
     assert body["lines"][0]["received_quantity"] == "0.0000"
 
     reversed_receipt = body["receipts"][0]
@@ -332,7 +348,8 @@ def test_reversal_allows_a_fresh_correct_receipt(client, admin_headers, acme_sup
     po, line = _confirmed_po_with_line(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material)
     receipt = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "600"}]).json()["receipts"][0]
     _post_receipt(client, admin_headers, po["id"], receipt["id"])
-    _reverse_receipt(client, admin_headers, po["id"], receipt["id"])
+    reversed_body = _reverse_receipt(client, admin_headers, po["id"], receipt["id"]).json()
+    assert _keep_pending(client, admin_headers, reversed_body).json()["status"] == "sent"
 
     corrected = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "550"}])
     assert corrected.status_code == 201

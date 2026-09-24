@@ -34,6 +34,7 @@ class PurchaseOrderLineOut(BaseModel):
     required_by_date: date | None
     remarks: str | None
     received_quantity: Decimal
+    cancelled_quantity: Decimal
 
 
 class PurchaseOrderRevisionLineOut(BaseModel):
@@ -80,6 +81,7 @@ class PurchaseOrderPaymentOut(BaseModel):
     payment_method: str | None
     reference_number: str | None
     notes: str | None
+    is_final: bool
     status: str
     cancelled_at: datetime | None
     cancelled_by_user_id: int | None
@@ -96,6 +98,7 @@ class PurchaseOrderReceiptLineOut(BaseModel):
     purchase_order_line_id: int
     raw_material_id: int
     quantity: Decimal
+    remarks: str | None = None
 
 
 class PurchaseOrderReceiptOut(BaseModel):
@@ -118,8 +121,43 @@ class PurchaseOrderReceiptOut(BaseModel):
     reversal_reason: str | None
     created_by_user_id: int | None
     created_at: datetime
+    received_by_name: str | None = None
+    # Receipt date after the PO's expected delivery date -- shown, never
+    # blocking.
+    days_late: int = 0
     lines: list[PurchaseOrderReceiptLineOut] = []
     documents: list[FileOut] = []
+
+
+class PurchaseOrderReconciliationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    kind: str
+    status: str
+    discrepancy: str
+    resolution: str | None
+    resolution_note: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+    resolved_by_user_id: int | None
+    resolved_by_name: str | None = None
+
+
+class PurchaseOrderCommunicationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    kind: str
+    recipient: str | None
+    subject: str | None
+    message: str | None
+    status: str
+    error: str | None
+    created_at: datetime
+    sent_by_user_id: int | None
+    sent_by_name: str | None = None
+    files: list[FileOut] = []
 
 
 class PurchaseOrderOut(BaseModel):
@@ -156,6 +194,8 @@ class PurchaseOrderOut(BaseModel):
     sent_by_name: str | None = None
     cancelled_by_name: str | None = None
     total_amount: Decimal
+    amount_adjustment: Decimal
+    final_amount: Decimal
     paid_amount: Decimal
     outstanding_amount: Decimal
     payment_status: str
@@ -164,6 +204,8 @@ class PurchaseOrderOut(BaseModel):
     documents: list[FileOut]
     payments: list[PurchaseOrderPaymentOut]
     receipts: list[PurchaseOrderReceiptOut]
+    reconciliations: list[PurchaseOrderReconciliationOut] = []
+    communications: list[PurchaseOrderCommunicationOut] = []
 
 
 class PurchaseOrderCreateRequest(BaseModel):
@@ -320,6 +362,12 @@ class SendPurchaseOrderRequest(BaseModel):
 class CreateReceiptLineRequest(BaseModel):
     purchase_order_line_id: int
     quantity: Decimal
+    remarks: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("remarks")
+    @classmethod
+    def _strip_remarks(cls, value: str | None) -> str | None:
+        return _strip_or_none(value)
 
     @field_validator("quantity")
     @classmethod
@@ -359,11 +407,15 @@ class ReverseReceiptRequest(BaseModel):
 
 
 class RecordPaymentRequest(BaseModel):
+    """`is_final`: this payment settles the PO -- if the total paid then
+    differs from the final amount, the PO goes to payment reconciliation."""
+
     payment_date: date
-    amount: Decimal
+    amount: Decimal = Field(max_digits=14, decimal_places=4)
     payment_method: str | None = None
     reference_number: str | None = None
     notes: str | None = None
+    is_final: bool = False
     file_ids: list[int] = []
 
     @field_validator("amount")
@@ -383,3 +435,96 @@ class CancelPaymentRequest(BaseModel):
         if not value or not value.strip():
             raise ValueError("A reason is required to cancel a payment.")
         return value.strip()
+
+
+class ResolveReconciliationRequest(BaseModel):
+    """Receipt discrepancy: `keep_pending` or `cancel_remaining`. Payment
+    discrepancy: `accept_paid_amount` or `correct_payment`. A documented
+    note is always required."""
+
+    resolution: str
+    note: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("note")
+    @classmethod
+    def _check_note(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Document the resolution.")
+        return value
+
+
+class FollowUpRequest(BaseModel):
+    """`send_email=true` emails the supplier (optionally attaching the
+    current PO PDF and uploaded files); `false` records a supplier reply
+    or phone call on the PO's history."""
+
+    send_email: bool = True
+    subject: str | None = Field(default=None, max_length=255)
+    message: str = Field(min_length=1, max_length=8000)
+    attach_po_pdf: bool = False
+    file_ids: list[int] = Field(default_factory=list, max_length=5)
+
+    @field_validator("subject")
+    @classmethod
+    def _strip_subject(cls, value: str | None) -> str | None:
+        return _strip_or_none(value)
+
+    @field_validator("message")
+    @classmethod
+    def _check_message(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A message is required.")
+        return value
+
+
+# --- Goods receiving (warehouse) -- quantities only, never prices ------------
+
+
+class ReceivingLineOut(BaseModel):
+    id: int
+    raw_material_id: int
+    material_name: str
+    unit_code: str
+    ordered_quantity: Decimal
+    received_quantity: Decimal
+    remaining_quantity: Decimal
+
+
+class ReceivingReceiptLineOut(BaseModel):
+    material_name: str
+    unit_code: str
+    quantity: Decimal
+    remarks: str | None
+
+
+class ReceivingReceiptOut(BaseModel):
+    id: int
+    receipt_number: str
+    receipt_date: date
+    status: str
+    posted_at: datetime | None
+    received_by_name: str | None
+    supplier_delivery_reference: str | None
+    notes: str | None
+    days_late: int
+    lines: list[ReceivingReceiptLineOut]
+    documents: list[FileOut]
+
+
+class ReceivingOut(BaseModel):
+    """What the warehouse needs to receive a PO -- deliberately no unit
+    price, line value, total, payment or commercial terms. Enforced by
+    this being the only shape the goods-receiving API returns."""
+
+    id: int
+    po_number: str
+    supplier_name: str
+    warehouse_name: str
+    expected_delivery_date: date | None
+    delivery_instructions: str | None
+    status: str
+    can_receive: bool
+    lines: list[ReceivingLineOut]
+    receipts: list[ReceivingReceiptOut]

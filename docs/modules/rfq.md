@@ -22,12 +22,14 @@ commits to buying anything by itself. Unchanged from v1.
 One form (the New RFQ modal) creates, edits and submits the whole RFQ:
 `POST /api/rfqs` / `PUT /api/rfqs/{id}` with the same body.
 
-- Auto: `rfq_number` (#10), `rfq_date` (today), `requested_by_user_id`
-  (session user) — never client-supplied, never edited.
-- Required: `required_delivery_date` (not in the past), `team_id`
-  (Department — the existing `teams` table, active, same organisation).
-- `priority` (`normal` | `urgent`, display/filter only), `notes`
-  (optional).
+- Auto: `rfq_number` (#10 — the form shows the next number from
+  `GET /api/rfqs/next-number`; it is assigned on save), `rfq_date`
+  (today), `requested_by_user_id` (session user) — never client-supplied,
+  never edited.
+- Required: `required_delivery_date` (not in the past).
+- `priority` (`normal` | `urgent`, display/filter only).
+- No department: an RFQ doesn't reference or depend on one (migration
+  `0036` dropped `rfqs.team_id`). The form has no notes field.
 - `submit`: `false` saves a draft; `true` issues the next revision (#9).
 
 Also carries `status`, `revision_number`, decision fields,
@@ -113,7 +115,7 @@ from `response_received`.
 - **Agreed quantity differs** → no approval.
   `POST /api/rfqs/{id}/raise-new` `{lines: [{rfq_line_id, quantity}]}`
   cancels this RFQ ("replaced by RFQ N") and creates a new **draft** —
-  same department, priority, suppliers and items, agreed quantities —
+  same priority, suppliers and items, agreed quantities —
   opened in the RFQ form to check and submit. One transaction.
 - **Once approved** the RFQ can't be revised; it can only go to a PO or
   be cancelled.
@@ -212,7 +214,7 @@ no `OWN`/`TEAM` scope.
 `rfqs`/`rfq_responses` are organisation-scoped. `rfq_lines`,
 `rfq_supplier_invitations` and `rfq_response_lines` are children of an
 already-scoped `Rfq`/`RfqResponse` (no `organisation_id` of their own).
-`supplier_id`/`team_id`/`raw_material_id`/`warehouse_id` are validated
+`supplier_id`/`raw_material_id`/`warehouse_id` are validated
 active-and-same-organisation on every write. An invitation id is always
 resolved within the RFQ in the path. A cross-organisation id anywhere in
 this module 404s, never 403s.
@@ -225,10 +227,10 @@ Unchanged from v1: the existing generic `files` system,
 ## 18. List and comparison UX
 
 List page (`DataTable`/`FilterBar`/`ActionMenu`/`Badge`): RFQ number,
-department (if set), date, priority badge, "Suppliers" (invited count,
+date, priority badge, "Suppliers" (invited count,
 and once any have quoted, e.g. "2 of 3 quoted"), status, PO status.
 Filters: RFQ number search, priority; the API also filters by `status`,
-`team_id`, and `supplier_id` (RFQs that supplier was invited to).
+and `supplier_id` (RFQs that supplier was invited to).
 
 Inside the RFQ record: grouped by invited supplier — each invitation
 shows its own status, its own capture-response action, and its own

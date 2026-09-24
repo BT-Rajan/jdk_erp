@@ -9,7 +9,7 @@ function pad(n: number): string {
 
 /** Converts a UTC ISO timestamp (as returned by every API in this
  * project) to its JDK/Kuwait local-time parts, formatted
- * DD/MM/YYYY HH:mm -- the one display format
+ * DD-MM-YYYY HH:mm -- the one display format
  * (docs/modules/common_validation.md #3), independent of the viewer's
  * own OS/browser timezone. */
 export function formatKuwaitTime(value: string | Date | null | undefined): string {
@@ -28,5 +28,5 @@ export function formatKuwaitTime(value: string | Date | null | undefined): strin
   }).formatToParts(d)
 
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? ''
-  return `${get('day')}/${get('month')}/${get('year')} ${pad(Number(get('hour')) % 24)}:${get('minute')}`
+  return `${get('day')}-${get('month')}-${get('year')} ${pad(Number(get('hour')) % 24)}:${get('minute')}`
 }

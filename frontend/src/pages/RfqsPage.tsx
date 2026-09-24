@@ -21,7 +21,8 @@ import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
-import { formatNumber } from '@/lib/format'
+import { formatDate, formatNumber } from '@/lib/format'
+import { formatKuwaitTime } from '@/lib/timezone'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
 
@@ -85,7 +86,6 @@ interface Rfq {
   priority: 'normal' | 'urgent'
   rfq_date: string
   required_delivery_date: string | null
-  team_id: number | null
   requested_by_user_id: number | null
   requested_by_name: string | null
   notes: string | null
@@ -201,9 +201,7 @@ interface ItemDraft {
 
 interface RfqFormState {
   required_delivery_date: string
-  team_id: string
   priority: 'normal' | 'urgent'
-  notes: string
   items: ItemDraft[]
   supplier_ids: number[]
 }
@@ -216,13 +214,11 @@ function emptyItem(): ItemDraft {
 
 function formFromRfq(rfq: Rfq | null): RfqFormState {
   if (!rfq) {
-    return { required_delivery_date: '', team_id: '', priority: 'normal', notes: '', items: [emptyItem()], supplier_ids: [] }
+    return { required_delivery_date: '', priority: 'normal', items: [emptyItem()], supplier_ids: [] }
   }
   return {
     required_delivery_date: rfq.required_delivery_date ?? '',
-    team_id: rfq.team_id ? String(rfq.team_id) : '',
     priority: rfq.priority,
-    notes: rfq.notes ?? '',
     items: rfq.lines.map((line) => ({
       ...emptyItem(),
       raw_material_id: String(line.raw_material_id),
@@ -240,7 +236,6 @@ function formFromRfq(rfq: Rfq | null): RfqFormState {
 function validateForm(form: RfqFormState): string | null {
   if (!form.required_delivery_date) return 'Required By date is required.'
   if (form.required_delivery_date < todayIso()) return 'Required By date cannot be in the past.'
-  if (!form.team_id) return 'Department is required.'
   if (form.items.length === 0) return 'Add at least one item.'
   for (const [index, item] of form.items.entries()) {
     const n = index + 1
@@ -260,7 +255,6 @@ function RfqFormModal({
   materials,
   units,
   suppliers,
-  teams,
   onClose,
   onSaved,
 }: {
@@ -270,7 +264,6 @@ function RfqFormModal({
   materials: MaterialOption[]
   units: LookupOption[]
   suppliers: LookupOption[]
-  teams: LookupOption[]
   onClose: () => void
   onSaved: (rfq: Rfq) => void
 }) {
@@ -278,12 +271,20 @@ function RfqFormModal({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'draft' | 'submit' | null>(null)
   const [supplierPick, setSupplierPick] = useState<string | null>(null)
+  const [nextNumber, setNextNumber] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
       setForm(formFromRfq(rfq))
       setError(null)
       setSupplierPick(null)
+      setNextNumber(null)
+      if (!rfq) {
+        apiClient
+          .get<{ rfq_number: string }>('/api/rfqs/next-number')
+          .then(({ data }) => setNextNumber(data.rfq_number))
+          .catch(() => setNextNumber(null))
+      }
     }
   }, [open, rfq])
 
@@ -321,9 +322,7 @@ function RfqFormModal({
     const body = {
       submit,
       required_delivery_date: form.required_delivery_date,
-      team_id: Number(form.team_id),
       priority: form.priority,
-      notes: form.notes.trim() || null,
       supplier_ids: form.supplier_ids,
       lines: form.items.map((item) => ({
         raw_material_id: Number(item.raw_material_id),
@@ -370,12 +369,12 @@ function RfqFormModal({
         )}
 
         <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
-          <div><span className="text-gold-100/50">RFQ Number: </span>{rfq?.rfq_number ?? 'Auto-generated'}</div>
-          <div><span className="text-gold-100/50">RFQ Date: </span>{rfq?.rfq_date ?? todayIso()}</div>
+          <div><span className="text-gold-100/50">RFQ Number: </span>{rfq?.rfq_number ?? nextNumber ?? '—'}</div>
+          <div><span className="text-gold-100/50">RFQ Date: </span>{formatDate(rfq?.rfq_date ?? todayIso())}</div>
           <div><span className="text-gold-100/50">Requested By: </span>{rfq?.requested_by_name ?? requesterName}</div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           <DateField
             label="Required By"
             required
@@ -383,12 +382,6 @@ function RfqFormModal({
             value={form.required_delivery_date}
             onChange={(e) => setForm((prev) => ({ ...prev, required_delivery_date: e.target.value }))}
           />
-          <SelectField label="Department" required value={form.team_id} onChange={(e) => setForm((prev) => ({ ...prev, team_id: e.target.value }))}>
-            <option value="">Select a department...</option>
-            {teams.filter((t) => t.is_active).map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </SelectField>
           <SelectField
             label="Priority"
             value={form.priority}
@@ -523,7 +516,6 @@ function RfqFormModal({
           )}
         </div>
 
-        <TextareaField label="Notes" value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} />
       </div>
     </Modal>
   )
@@ -668,7 +660,6 @@ export function RfqsPage() {
   const [warehouses, setWarehouses] = useState<LookupOption[]>([])
   const [materials, setMaterials] = useState<MaterialOption[]>([])
   const [units, setUnits] = useState<LookupOption[]>([])
-  const [teams, setTeams] = useState<LookupOption[]>([])
   const [pageError, setPageError] = useState<string | undefined>(undefined)
 
   const [searchInput, setSearchInput] = useState('')
@@ -727,7 +718,6 @@ export function RfqsPage() {
   const suppliersById = useMemo(() => new Map(suppliers.map((s) => [s.id, s])), [suppliers])
   const materialsById = useMemo(() => new Map(materials.map((m) => [m.id, m])), [materials])
   const unitsById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units])
-  const teamsById = useMemo(() => new Map(teams.map((t) => [t.id, t])), [teams])
 
   const supplierName = useCallback((id: number) => suppliersById.get(id)?.name ?? `#${id}`, [suppliersById])
   const materialName = useCallback((id: number) => materialsById.get(id)?.name ?? `#${id}`, [materialsById])
@@ -739,7 +729,7 @@ export function RfqsPage() {
         apiClient.get<PaginatedResponse<LookupOption>>('/api/suppliers', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/warehouses', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<MaterialOption>>('/api/raw-materials', { params: { page_size: 200 } }),
-        apiClient.get<PaginatedResponse<LookupOption>>('/api/units', { params: { page_size: 200 } }),
+        apiClient.get<PaginatedResponse<LookupOption>>('/api/units-of-measure', { params: { page_size: 200 } }),
       ])
       setSuppliers(suppliersResponse.data.data)
       setWarehouses(warehousesResponse.data.data)
@@ -747,12 +737,6 @@ export function RfqsPage() {
       setUnits(unitsResponse.data.data)
     } catch (err) {
       setPageError(err instanceof ApiError ? err.message : 'Failed to load suppliers, warehouses, materials and units.')
-    }
-    try {
-      const { data } = await apiClient.get<PaginatedResponse<LookupOption>>('/api/teams', { params: { include_inactive: true, page_size: 200 } })
-      setTeams(data.data)
-    } catch {
-      setTeams([])
     }
   }, [])
 
@@ -1080,9 +1064,8 @@ export function RfqsPage() {
 
   const columns: DataTableColumn<Rfq>[] = [
     { key: 'rfq_number', label: 'RFQ Number', render: (rfq) => (rfq.revision_number > 1 ? `${rfq.rfq_number} Rev ${rfq.revision_number}` : rfq.rfq_number) },
-    { key: 'department', label: 'Department', hideBelow: 'md', render: (rfq) => (rfq.team_id ? teamsById.get(rfq.team_id)?.name ?? `#${rfq.team_id}` : '—') },
-    { key: 'rfq_date', label: 'Date', hideBelow: 'sm', render: (rfq) => rfq.rfq_date },
-    { key: 'required', label: 'Required By', hideBelow: 'md', render: (rfq) => rfq.required_delivery_date ?? '—' },
+    { key: 'rfq_date', label: 'Date', hideBelow: 'sm', render: (rfq) => formatDate(rfq.rfq_date) },
+    { key: 'required', label: 'Required By', hideBelow: 'md', render: (rfq) => formatDate(rfq.required_delivery_date) },
     {
       key: 'priority',
       label: 'Priority',
@@ -1164,7 +1147,6 @@ export function RfqsPage() {
           materials={materials}
           units={units}
           suppliers={suppliers}
-          teams={teams}
           onClose={() => setFormOpen(false)}
           onSaved={onFormSaved}
         />
@@ -1196,12 +1178,8 @@ export function RfqsPage() {
             <Alert variant="success">{detailNotice}</Alert>
 
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-              <div><span className="text-gold-100/50">RFQ Date: </span>{detailTarget.rfq_date}</div>
-              <div><span className="text-gold-100/50">Required By: </span>{detailTarget.required_delivery_date ?? '—'}</div>
-              <div>
-                <span className="text-gold-100/50">Department: </span>
-                {detailTarget.team_id ? teamsById.get(detailTarget.team_id)?.name ?? `#${detailTarget.team_id}` : '—'}
-              </div>
+              <div><span className="text-gold-100/50">RFQ Date: </span>{formatDate(detailTarget.rfq_date)}</div>
+              <div><span className="text-gold-100/50">Required By: </span>{formatDate(detailTarget.required_delivery_date)}</div>
               <div><span className="text-gold-100/50">Requested By: </span>{detailTarget.requested_by_name ?? '—'}</div>
               <div>
                 <span className="text-gold-100/50">Priority: </span>
@@ -1214,7 +1192,7 @@ export function RfqsPage() {
                 <div className="col-span-2">
                   <span className="text-gold-100/50">Decision: </span>
                   {selectedResponse ? `Approved ${supplierName(selectedResponse.invitation.supplier_id)}` : 'Rejected'} on{' '}
-                  {new Date(detailTarget.decided_at).toLocaleString()}
+                  {formatKuwaitTime(detailTarget.decided_at)}
                   {detailTarget.decision_note ? ` — ${detailTarget.decision_note}` : ''}
                 </div>
               )}
@@ -1258,7 +1236,7 @@ export function RfqsPage() {
                       <td className="py-2 pr-3">{materialName(line.raw_material_id)}</td>
                       <td className="py-2 pr-3">{formatNumber(line.quantity)}</td>
                       <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
-                      <td className="py-2 pr-3">{line.required_by_date ?? '—'}</td>
+                      <td className="py-2 pr-3">{formatDate(line.required_by_date)}</td>
                       <td className="py-2 pr-3">{line.remarks ?? '—'}</td>
                     </tr>
                   ))}
@@ -1278,7 +1256,7 @@ export function RfqsPage() {
                           <Badge tone={INVITATION_TONES[invitation.status]}>{INVITATION_LABELS[invitation.status]}</Badge>
                         )}
                         {invitation.last_emailed_at && (
-                          <span className="text-xs text-gold-100/50">Emailed {new Date(invitation.last_emailed_at).toLocaleString()}</span>
+                          <span className="text-xs text-gold-100/50">Emailed {formatKuwaitTime(invitation.last_emailed_at)}</span>
                         )}
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -1306,9 +1284,9 @@ export function RfqsPage() {
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                           <span>
-                            Received {new Date(response.response_received_at).toLocaleString()}
+                            Received {formatKuwaitTime(response.response_received_at)}
                             {response.supplier_quotation_number && ` · Ref ${response.supplier_quotation_number}`}
-                            {response.valid_until && ` · Valid until ${response.valid_until}`}
+                            {response.valid_until && ` · Valid until ${formatDate(response.valid_until)}`}
                           </span>
                           {detailTarget.selected_response_id === response.id && <Badge tone="gold">Approved</Badge>}
                         </div>
@@ -1474,7 +1452,7 @@ export function RfqsPage() {
                       {invitation.responses.map((response, index) => (
                         <option key={response.id} value={response.id}>
                           {index === invitation.responses.length - 1 ? 'Latest' : `Revision ${index + 1}`} —{' '}
-                          {new Date(response.response_received_at).toLocaleString()}
+                          {formatKuwaitTime(response.response_received_at)}
                           {response.supplier_quotation_number ? ` (Ref ${response.supplier_quotation_number})` : ''}
                         </option>
                       ))}
