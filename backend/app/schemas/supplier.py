@@ -2,7 +2,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
-from app.core.validation import normalize_email
+from app.core.validation import check_max_length, normalize_email
 
 _DIGITS_RE = re.compile(r"\D")
 
@@ -45,7 +45,15 @@ class SupplierCreateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
+
+    @field_validator("contact_person")
+    @classmethod
+    def _check_contact_person(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return check_max_length(value, 120, "Contact person") if value else None
 
     @field_validator("phone")
     @classmethod
@@ -53,12 +61,14 @@ class SupplierCreateRequest(BaseModel):
         if value is None:
             return value
         normalized = _normalize_phone(value)
-        return normalized or None
+        return check_max_length(normalized, 30, "Phone") if normalized else None
 
     @field_validator("email")
     @classmethod
     def _normalize_supplier_email(cls, value: str | None) -> str | None:
-        return normalize_email(value) if value is not None else value
+        if value is None:
+            return value
+        return check_max_length(normalize_email(value), 120, "Email")
 
 
 class SupplierUpdateRequest(BaseModel):
@@ -79,7 +89,15 @@ class SupplierUpdateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
+
+    @field_validator("contact_person")
+    @classmethod
+    def _check_contact_person(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return check_max_length(value, 120, "Contact person") if value else None
 
     @field_validator("phone")
     @classmethod
@@ -87,12 +105,14 @@ class SupplierUpdateRequest(BaseModel):
         if value is None:
             return value
         normalized = _normalize_phone(value)
-        return normalized or None
+        return check_max_length(normalized, 30, "Phone") if normalized else None
 
     @field_validator("email")
     @classmethod
     def _normalize_supplier_email(cls, value: str | None) -> str | None:
-        return normalize_email(value) if value is not None else value
+        if value is None:
+            return value
+        return check_max_length(normalize_email(value), 120, "Email")
 
 
 class SupplierStatusChangeRequest(BaseModel):
