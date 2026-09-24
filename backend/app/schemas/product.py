@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.validation import check_max_length
 
 
 class ProductOut(BaseModel):
@@ -31,7 +33,7 @@ class ProductCreateRequest(BaseModel):
     category_id: int
     unit_of_measure_id: int
     description: str | None = None
-    selling_price: Decimal
+    selling_price: Decimal = Field(max_digits=14, decimal_places=2)
     manufacturing_lead_time_days: int | None = None
     customer_lead_time_days: int | None = None
 
@@ -41,7 +43,7 @@ class ProductCreateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("selling_price")
     @classmethod
@@ -69,7 +71,7 @@ class ProductUpdateRequest(BaseModel):
     category_id: int | None = None
     unit_of_measure_id: int | None = None
     description: str | None = None
-    selling_price: Decimal | None = None
+    selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
     manufacturing_lead_time_days: int | None = None
     customer_lead_time_days: int | None = None
 
@@ -81,7 +83,7 @@ class ProductUpdateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("selling_price")
     @classmethod
