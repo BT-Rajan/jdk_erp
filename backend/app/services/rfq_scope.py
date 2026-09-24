@@ -1,4 +1,4 @@
-"""RFQ authorization (docs/modules/rfq.md #13) -- the second real caller
+"""RFQ authorization (docs/modules/rfq.md #15) -- the second real caller
 of app/services/authorization_service.py's module_key/action/scope
 engine, mirroring app/services/purchase_scope.py's shape exactly: plain
 granted/not-granted checks, no OWN/TEAM scope (no evidenced ownership

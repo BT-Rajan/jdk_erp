@@ -713,7 +713,7 @@ def confirm_supplier(
     """`issued -> supplier_confirmed` (docs/modules/purchase_orders.md
     #25) -- a distinct event from issuing/sending. Evidence attachment
     reuses the same file_service.attach_files flow RFQ response capture
-    already established (docs/modules/rfq.md #5/#15)."""
+    already established (docs/modules/rfq.md #5/#17)."""
     purchase_scope.require_permission(db, current_user, purchase_scope.CONFIRM_SUPPLIER)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
 
