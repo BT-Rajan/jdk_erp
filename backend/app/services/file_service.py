@@ -194,7 +194,7 @@ def attach_files(
     documented as supporting (see its own docstring: "an
     uploaded-but-not-yet-linked file... has no entity yet"). Used by
     app/api/rfqs.py's capture-response action, its first real caller
-    (docs/modules/rfq.md #15). Only files already in the caller's own
+    (docs/modules/rfq.md #17). Only files already in the caller's own
     organisation and not yet linked to a different entity are accepted
     -- never silently re-parents a file already attached elsewhere."""
     records = db.query(FileRecord).filter(FileRecord.id.in_(file_ids), FileRecord.organisation_id == organisation_id).all()

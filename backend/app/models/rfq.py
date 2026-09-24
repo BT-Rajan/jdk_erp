@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -16,7 +16,7 @@ CANCELLED = "cancelled"
 CONVERTED = "converted"
 RFQ_STATUSES = (DRAFT, ISSUED, RESPONSE_RECEIVED, SELECTED, REJECTED, CANCELLED, CONVERTED)
 
-# docs/modules/rfq.md #3. response_received is never a direct transition
+# docs/modules/rfq.md #9. response_received is never a direct transition
 # target -- it's the side effect app/services/rfq_service.capture_response
 # applies, the same "side effect of an action, never a direct
 # status-change target" discipline app/models/purchase_order.py already
@@ -33,44 +33,63 @@ ALLOWED_STATUS_TRANSITIONS = {
     CONVERTED: set(),
 }
 
+# docs/modules/rfq.md #2 -- a plain filter/sort/badge hint, never a
+# workflow: nothing server-side behaves differently for `urgent`.
+PRIORITY_NORMAL = "normal"
+PRIORITY_URGENT = "urgent"
+RFQ_PRIORITIES = (PRIORITY_NORMAL, PRIORITY_URGENT)
+
+# docs/modules/rfq.md #4. `quoted` is only ever the side effect of a
+# captured response; `declined` is a manual flag with no further
+# behaviour.
+INVITATION_SENT = "sent"
+INVITATION_QUOTED = "quoted"
+INVITATION_DECLINED = "declined"
+INVITATION_STATUSES = (INVITATION_SENT, INVITATION_QUOTED, INVITATION_DECLINED)
+
 
 class Rfq(Base, TimestampMixin, OrganisationScopedMixin):
-    """The company's request to one supplier for pricing/availability on
-    specified raw materials, before any Purchase Order commitment exists
-    (docs/modules/rfq.md) -- audited against jdk_clean first
-    (docs/audit/RFQ_AUDIT.md), which has no RFQ concept at all.
+    """The company's request for pricing/availability on specified raw
+    materials, before any Purchase Order commitment exists
+    (docs/modules/rfq.md, v2 -- docs/audit/RFQ_AUDIT_V2.md).
 
-    `supplier_id` is immutable after creation, the same discipline
-    `PurchaseOrder.supplier_id` already established -- one RFQ is always
-    for exactly one supplier (docs/modules/rfq.md #10); no vendor-
-    comparison/bidding model is built.
+    No `supplier_id` on the header: who was asked lives on
+    `RfqSupplierInvitation` rows (one or several per RFQ, #4), and the PO
+    supplier comes from the selected response's invitation (#8).
 
-    Decision fields (`decided_by_user_id`/`decided_at`/`decision_note`/
-    `selected_response_id`) live flat on the header rather than a
-    separate entity -- a decision is one explicit, auditable action, not
-    an approval chain (docs/modules/rfq.md #6). `purchase_order_id` is
-    set only once `convert_to_purchase_order` succeeds
-    (docs/modules/rfq.md #8) -- never editable directly."""
+    `team_id` reuses the existing `teams` table as the requesting
+    department (docs/modules/teams.md). `requested_by_user_id` is stamped
+    from the session user at creation and never edited. `priority` is
+    display/filter only.
+
+    Decision fields live flat on the header -- a decision is one
+    explicit, auditable action, not an approval chain (#7).
+    `purchase_order_id` is set only once conversion succeeds (#8)."""
 
     __tablename__ = "rfqs"
     __table_args__ = (UniqueConstraint("organisation_id", "rfq_number", name="uq_rfqs_organisation_id_rfq_number"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     rfq_number: Mapped[str] = mapped_column(String(10), nullable=False)
-    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=DRAFT, server_default=DRAFT)
+    priority: Mapped[str] = mapped_column(
+        String(10), nullable=False, default=PRIORITY_NORMAL, server_default=PRIORITY_NORMAL
+    )
     rfq_date: Mapped[date] = mapped_column(Date, nullable=False)
     required_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.id", ondelete="SET NULL"), nullable=True, index=True)
+    requested_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # use_alter=True: rfqs.selected_response_id and rfq_responses.rfq_id
-    # form a circular FK pair -- this defers the constraint to an ALTER
-    # TABLE after both tables exist, the standard SQLAlchemy way to break
-    # a two-table dependency cycle (mirrored in the migration, which adds
-    # this same constraint only after rfq_responses is created).
+    # use_alter=True: rfqs.selected_response_id -> rfq_responses ->
+    # rfq_supplier_invitations -> rfqs is a FK cycle -- this defers the
+    # constraint to an ALTER TABLE after all tables exist (mirrored in
+    # migration 0028, which adds it only after rfq_responses exists).
     selected_response_id: Mapped[int | None] = mapped_column(
         ForeignKey(
             "rfq_responses.id", ondelete="SET NULL", use_alter=True, name="fk_rfqs_selected_response_id_rfq_responses"
@@ -85,12 +104,11 @@ class Rfq(Base, TimestampMixin, OrganisationScopedMixin):
 
 class RfqLine(Base, TimestampMixin):
     """One requested Raw Material, in the material's own
-    `unit_of_measure_id` -- no purchase UoM, the same decision
-    docs/modules/purchase_orders.md #5 already made, applying here for
-    the identical reason (docs/modules/rfq.md #2). No price field -- an
-    RFQ line is a request, never a commitment. No `organisation_id` of
-    its own -- a child of an already organisation-scoped `Rfq`, the same
-    shape `purchase_order_lines` already uses."""
+    `unit_of_measure_id` -- no purchase UoM (docs/modules/rfq.md #3). No
+    price field -- an RFQ line is a request, never a commitment.
+    `remarks` is a free-text grade/size/quality note on the request
+    itself. No `organisation_id` of its own -- a child of an already
+    organisation-scoped `Rfq`."""
 
     __tablename__ = "rfq_lines"
 
@@ -100,21 +118,75 @@ class RfqLine(Base, TimestampMixin):
         ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class RfqSupplierInvitation(Base, TimestampMixin):
+    """One invited supplier on one RFQ (docs/modules/rfq.md #4) -- a plain
+    join row, not a bidding round or procurement event. `supplier_id` is
+    immutable after creation; a supplier can be invited at most once per
+    RFQ. No `organisation_id` of its own -- a child of an already
+    organisation-scoped `Rfq`, same shape as `rfq_lines`."""
+
+    __tablename__ = "rfq_supplier_invitations"
+    __table_args__ = (
+        UniqueConstraint("rfq_id", "supplier_id", name="uq_rfq_supplier_invitations_rfq_id_supplier_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rfq_id: Mapped[int] = mapped_column(ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(10), nullable=False, default=INVITATION_SENT, server_default=INVITATION_SENT
+    )
+    invited_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class RfqResponse(Base, TimestampMixin, OrganisationScopedMixin):
-    """Evidence that the supplier responded, not a re-typed structured
-    quotation (docs/modules/rfq.md #5) -- the attached file(s) (linked
-    via the existing generic `files` table, `entity_type="rfq_response"`)
-    *are* the record of what was offered. Multiple rows per Rfq are
-    supported (a revised quote later is a new row, never an edit to this
-    one -- docs/modules/rfq.md #9's historical-integrity rule), always
-    for the same supplier the Rfq itself already names."""
+    """What one invited supplier actually offered, captured as structured,
+    comparable data (docs/modules/rfq.md #5), with optional attached
+    files (`entity_type="rfq_response"`) as supporting evidence. Always
+    belongs to exactly one invitation, never directly to an Rfq. Never
+    edited after creation -- a revised quote is a new row against the
+    same invitation (#12). Keeps `organisation_id` so the file access
+    checker can resolve isolation without a join."""
 
     __tablename__ = "rfq_responses"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    rfq_id: Mapped[int] = mapped_column(ForeignKey("rfqs.id", ondelete="CASCADE"), nullable=False, index=True)
+    invitation_id: Mapped[int] = mapped_column(
+        ForeignKey("rfq_supplier_invitations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     response_received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    supplier_quotation_number: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    quotation_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    payment_terms: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_terms: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    freight_terms: Mapped[str | None] = mapped_column(String(255), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+
+class RfqResponseLine(Base, TimestampMixin):
+    """One quoted price for one `RfqLine` within one response
+    (docs/modules/rfq.md #5). A response need not quote every line, but
+    each line it does quote must belong to the same RFQ (enforced in
+    app/services/rfq_service.capture_response) and appears at most once.
+    No `organisation_id` -- a child of an already-scoped `RfqResponse`."""
+
+    __tablename__ = "rfq_response_lines"
+    __table_args__ = (
+        UniqueConstraint("response_id", "rfq_line_id", name="uq_rfq_response_lines_response_id_rfq_line_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    response_id: Mapped[int] = mapped_column(
+        ForeignKey("rfq_responses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rfq_line_id: Mapped[int] = mapped_column(ForeignKey("rfq_lines.id", ondelete="CASCADE"), nullable=False, index=True)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    delivery_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)

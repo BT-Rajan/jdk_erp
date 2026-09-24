@@ -1,38 +1,159 @@
-# Procurement: RFQ (Request for Quotation)
+# Procurement: RFQ (Request for Quotation) — v2
 
 Precedes Purchase Orders in `docs/ROADMAP.md` Phase 4 — Procurement &
-Inventory: `RFQ -> Supplier Response -> Decision -> Purchase Order ->
-Receipt -> Inventory`. Audited against jdk_clean first
-(`../audit/RFQ_AUDIT.md`), which has no RFQ concept at all — this module
-is built fresh from its own spec and jdk_erp's own existing conventions.
+Inventory: `RFQ -> Supplier Response(s) -> Decision -> Purchase Order ->
+Receipt -> Inventory`. Revises the v1 spec — see
+`../audit/RFQ_AUDIT_V2.md` for exactly what changed and why (v1's own
+audit: `../audit/RFQ_AUDIT.md`). Sections below are renumbered; where a
+v1 decision is unchanged, it says so and moves on rather than re-arguing
+it.
 
 ## 1. Purpose
 
-Ask one supplier for pricing/availability on specified raw materials,
-capture what they actually offer (as evidence, not re-typed data), let
-an authorized user explicitly decide, and — if selected — create the
-Purchase Order from that decision with no re-entry. RFQ is a request; it
-never affects inventory, and it never commits to buying anything by
-itself.
+Ask one or more suppliers for pricing/availability on specified raw
+materials, capture what each actually offers as real comparable data,
+let an authorized user explicitly decide, and — if selected — create the
+Purchase Order from that decision with no re-entry of anything already
+on record. RFQ is a request; it never affects inventory, and it never
+commits to buying anything by itself. Unchanged from v1.
 
-## 2. RFQ header and lines
+## 2. RFQ header
 
-Header: `rfq_number` (system-generated, immutable — #7), `supplier_id`
-(FK, immutable after creation, one RFQ = one supplier — #10),
-`rfq_date`, `required_delivery_date` (optional), `notes` (optional),
-`status`, decision fields (`decided_by_user_id`, `decided_at`,
-`decision_note`, `selected_response_id`), `purchase_order_id` (set only
-once converted), `organisation_id`, `created_at`/`updated_at`. Lines:
+`rfq_number` (system-generated, immutable — #10), `rfq_date`,
+`required_delivery_date` (optional), `team_id` (optional FK to `teams` —
+this codebase's existing "department" concept, per
+`docs/modules/teams.md`; reused rather than inventing a second one,
+validated active-and-same-organisation), `requested_by_user_id`
+(auto-stamped from the session user at creation, never client-supplied,
+never edited), `priority` (`normal` | `urgent`, default `normal` — a
+plain field, not a workflow: it changes nothing server-side, it's a
+filter/sort hint and a badge), `notes` (optional), `status`, decision
+fields (`decided_by_user_id`, `decided_at`, `decision_note`,
+`selected_response_id`), `purchase_order_id` (set only once converted),
+`organisation_id`, `created_at`/`updated_at`.
+
+No `supplier_id` on the header anymore — see #4. No price field at
+header or line level — an RFQ line is still a request, never a
+commitment (unchanged from v1); pricing only ever appears via a
+supplier's captured response (#5) or the PO created from a decision
+(#8).
+
+## 3. RFQ lines
+
 `raw_material_id` (FK, immutable, active-and-same-organisation, never
 free text), `quantity` (> 0, expressed in the material's own
-`unit_of_measure_id` — the identical "no purchase UoM" decision
-`docs/modules/purchase_orders.md` #5 already made, applying here for the
-same reason: RFQ is requesting the same material the eventual PO/receipt
-will use). No price field on an RFQ line — an RFQ is a request, not a
-commitment; pricing only ever appears via the supplier's captured
-response (#5) or the PO created from a decision (#8).
+`unit_of_measure_id` — the "no purchase UoM" decision
+`docs/modules/purchase_orders.md` #5 already made, unchanged here),
+optional `remarks` (free text — grade/size/quality note, e.g. "fine
+washed"). `remarks` is the only new field on a line versus v1: a real,
+low-risk, non-price piece of the request itself.
 
-## 3. Lifecycle
+## 4. Supplier invitations
+
+`RfqSupplierInvitation`: `rfq_id`, `supplier_id` (FK, immutable after
+creation, active-and-same-organisation), `status` (`sent` | `quoted` |
+`declined`), `invited_at`. `UniqueConstraint(rfq_id, supplier_id)` — a
+supplier can't be invited twice to the same RFQ (409). One RFQ can have
+one invitation or several; the lifecycle and every other rule in this
+document is identical either way.
+
+- `POST /api/rfqs/{id}/invitations` `{supplier_id}` /
+  `DELETE /api/rfqs/{id}/invitations/{invitation_id}` — draft only
+  (invitations are part of the draft).
+- `quoted` is only ever a side effect of a response being captured
+  against the invitation (also from `declined` — a supplier who said no
+  and later quoted anyway is a real quote).
+- `POST /api/rfqs/{id}/invitations/{invitation_id}/decline` — a manual
+  "this supplier said no / went unanswered" flag with no further
+  behaviour: it doesn't change the RFQ's status, other invitations, or
+  any captured response. Only a `sent` invitation on an `issued`/
+  `response_received` RFQ can be declined.
+
+This does not reintroduce vendor scoring, bidding rounds, or a
+procurement-event entity — it's one join row per invited supplier, and
+the decision in #7 is still a human picking one response, never an
+algorithm.
+
+## 5. Supplier response capture
+
+`POST /api/rfqs/{id}/invitations/{invitation_id}/responses` creates an
+`RfqResponse`: `invitation_id` (not `rfq_id` directly — a response always
+belongs to one supplier's invitation), `response_received_at`,
+`supplier_quotation_number` (optional — the supplier's own reference),
+`quotation_date` (optional), `valid_until` (optional, not before
+`quotation_date`), `payment_terms`/`delivery_terms`/`freight_terms`
+(optional free text — "30 days", "included", etc.), `note` (optional),
+`created_by_user_id`.
+
+Each response has `RfqResponseLine` rows, one per `RfqLine` it quotes:
+`rfq_line_id` (FK, must belong to this RFQ), `unit_price` (required,
+> 0), `delivery_days` (optional integer ≥ 0), `remarks` (optional). A
+response does not have to quote every line — a supplier can decline part
+of the request — but it must quote at least one (a supplier who quotes
+nothing is recorded by declining the invitation, #4), each line at most
+once, and every `RfqResponseLine` must reference a real line on this RFQ
+(422 otherwise — never silently dropped).
+
+Attached files still work exactly as in v1: uploaded via the existing
+generic file system (`entity_type="rfq_response"`,
+`entity_id=response.id`), now optional supporting evidence (the
+supplier's actual PDF/screenshot), no longer the sole record.
+
+Multiple `RfqResponse` rows are still supported per invitation — a
+supplier revising their quote is a new response, never an edit to the
+first one (#12) — but always for the same invitation's supplier.
+
+Capturing a response flips its invitation's `status` to `quoted` and the
+RFQ's own `status` to `response_received` if it isn't already past that
+point. Only valid while the RFQ is `issued` or `response_received`.
+
+## 6. Comparison
+
+Not a new entity or endpoint — a read-only shape assembled from existing
+data: `GET /api/rfqs/{id}` returns each invitation with its responses and
+each response's lines, and the frontend renders one table — RFQ line
+down the rows, one column per supplier that has quoted (their latest
+response), `unit_price` (and `delivery_days` if present) in each cell.
+No total/ranking/highlight is computed — the table is informational, the
+decision in #7 is still entirely the human's.
+
+## 7. Decision
+
+`PATCH /api/rfqs/{id}/decision`: `{decision: "selected" | "rejected",
+selected_response_id?, note?}`. Unchanged from v1 except that
+`selected_response_id` can reference a response belonging to any invited
+supplier on this RFQ (never another RFQ's — 422). Only valid from
+`response_received`. Records `decided_by_user_id`/`decided_at`/
+`decision_note`, sets `status` to `selected` or `rejected`. Still no
+separate "decision" entity or approval chain.
+
+## 8. RFQ -> Purchase Order
+
+`POST /api/rfqs/{id}/convert-to-po`: `{warehouse_id, lines?:
+[{rfq_line_id, unit_price?}]}`. Only valid from `selected`. Supplier
+comes from the selected response's invitation (`invitation.supplier_id`,
+re-checked active). Raw materials and quantities still carry forward
+automatically from the RFQ's own lines, never re-entered.
+
+`unit_price` per line defaults from the selected response's matching
+`RfqResponseLine.unit_price`:
+
+- `lines` omitted — every RFQ line converts at its quoted price.
+- `lines` given — exactly those lines convert (a subset is allowed, as
+  in v1), each at its `unit_price` override, or the quoted price when
+  the override is omitted.
+- A line with neither a quote nor an override is rejected (422) naming
+  the line — a price is never guessed. The frontend pre-fills the form
+  from the quote, so this only asks for what the supplier didn't quote.
+
+`warehouse_id` is still the only field with no upstream source at all.
+
+Implemented by `purchase_order_service.create_purchase_order_with_lines`
+— unchanged shared function from v1 — followed by stamping
+`Rfq.purchase_order_id` and flipping `Rfq.status` to `converted`, one
+transaction (#14). Transition-guard-as-idempotency-guard unchanged.
+
+## 9. Lifecycle
 
 ```text
 draft
@@ -50,232 +171,112 @@ selected / rejected
 converted
 ```
 
-plus `cancelled`, reachable from `draft`, `issued`, `response_received`,
-or `selected` (never from `rejected`/`converted` — both are already
-terminal). `draft -> issued` requires at least one line (the same
-"cannot confirm/activate empty" gate `docs/modules/purchase_orders.md`
-#7 and `docs/modules/boms.md` #10 already established) and marks the
-real fact that the request actually went out to the supplier, whatever
-channel carried it (phone, WhatsApp, email) — the system never sends
-anything itself (#4). `issued -> response_received` happens automatically
-the first time a response is captured (#5), the same "side effect of an
-action, never a direct status-change target" discipline
-`docs/modules/purchase_orders.md` #4 already established for
-`partially_received`/`fully_received`. `response_received -> selected`
-or `-> rejected` only happens via the explicit decision action (#6) —
-capturing a response never itself decides anything. `selected ->
-converted` only happens via the convert action (#8). Cancelling requires
-a non-blank reason, same as Purchase Order (`docs/modules/purchase_orders.md`
-#4).
+Unchanged from v1, plus `cancelled` reachable from `draft`, `issued`,
+`response_received`, or `selected`. `draft -> issued` requires at least
+one line **and** at least one invitation. Issuing still generates and
+sends nothing (#11). `issued -> response_received` happens automatically
+off the first captured response, across any invitation. Cancelling still
+requires a non-blank reason.
 
-## 4. Issuing — no email, no PDF
+## 10. Numbering
 
-`issued` is a plain status transition. This module does not generate a
-document or send anything through the application — the request itself
-travels through whatever normal channel the business already uses
-(phone call, WhatsApp, email written by hand). Nothing here is a
-document-generation or communication feature; see #20 for the boundary
-this deliberately does not cross.
+`YY3NNNN`, per-organisation, resets yearly. Unchanged from v1
+(`app/services/rfq_service.generate_rfq_number`).
 
-## 5. Supplier response capture
+## 11. Issuing — no email, no PDF
 
-A response is evidence, not a structured re-entry of the supplier's
-quote. `POST /api/rfqs/{id}/responses` creates an `RfqResponse`
-(`response_received_at`, optional short `note`, `created_by_user_id`)
-and links one or more already-uploaded files to it via the existing
-generic file system (`entity_type="rfq_response"`,
-`entity_id=response.id` — `app/models/file.py`, `../audit/RFQ_AUDIT.md`
-#6). No structured price/quantity/delivery fields are captured here —
-the attached document (screenshot, PDF, photo) *is* the record of what
-the supplier offered. Multiple `RfqResponse` rows are supported per RFQ
-(a supplier sending a revised quote later is a new response, never an
-edit to the first one — #9's historical-integrity rule), but always for
-the *same* supplier (#10) — never a second supplier's response on the
-same RFQ.
+Unchanged from v1. "Issue" is a plain status transition, not a
+document-generation or communication feature — each invited supplier is
+still contacted through whatever channel the business already uses. See
+`../audit/RFQ_AUDIT_V2.md` #3.
 
-## 6. Decision
+## 12. Historical integrity
 
-`PATCH /api/rfqs/{id}/decision`: `{decision: "selected" | "rejected",
-selected_response_id?, note?}`. Only valid from `response_received` — a
-decision without a captured response is meaningless and is rejected
-server-side. `selected_response_id` is required when `decision ==
-"selected"` (identifying which captured response the decision is based
-on) and must reference a response that actually belongs to this RFQ.
-Records `decided_by_user_id`/`decided_at`/`decision_note` and sets
-`status` to `selected` or `rejected` — no separate "decision" entity or
-approval chain; this is one explicit, auditable action a permitted user
-takes (`../audit/RFQ_AUDIT.md` #7), never an automatic "best price"
-selection (#10).
+Unchanged from v1: an `RfqLine`'s `quantity` is never rewritten by a
+captured response. A captured `RfqResponse`, its lines, and its attached
+files are never edited or replaced after creation — a revised quote is a
+new `RfqResponse` row against the same invitation.
 
-## 7. Numbering
+## 13. Inventory boundary
 
-`YY3NNNN` — 2-digit year, a fixed `3` (RFQ document-type digit), a
-4-digit sequence that **resets every calendar year**, per organisation.
-`app/services/rfq_service.generate_rfq_number` counts existing RFQs for
-the caller's organisation whose `rfq_number` starts with this year's
-`YY3` prefix, adds one, formats, and retries against the unique
-constraint under `IntegrityError` — the identical discipline every other
-server-side code generator in this codebase already uses
-(`_generate_supplier_code`, `_generate_po_number`, ...), just scoped to
-the current year because this one document type's numbering rule
-requires it (`../audit/RFQ_AUDIT.md` #2). Server-generated only, never
-client-supplied, stable after creation.
+Unchanged from v1: nothing in this module, including the comparison view
+and invitation management, ever touches
+`stock_movements`/`raw_material_inventory`.
 
-## 8. RFQ -> Purchase Order
+## 14. Transaction safety
 
-`POST /api/rfqs/{id}/convert-to-po`: `{warehouse_id, lines: [{rfq_line_id,
-unit_price}]}`. Only valid from `selected`. Supplier, raw materials, and
-quantities are carried forward automatically from the RFQ and its lines
-— never re-entered; `warehouse_id` (an RFQ has no warehouse dimension —
-`docs/modules/purchase_orders.md` #2 requires one on every PO) and each
-line's `unit_price` (never captured as structured data anywhere upstream
-— #2/#5) are the only new input, exactly matching the task's own "this
-is the only additional entry required" rule. Implemented by
-`purchase_order_service.create_purchase_order_with_lines` — the same
-function the plain "New Purchase" flow itself now uses (extracted for
-this reuse, `../audit/RFQ_AUDIT.md` #5) — followed by stamping
-`Rfq.purchase_order_id` and flipping `Rfq.status` to `converted`, all in
-one transaction (#12). Only `selected` RFQs can convert, and a
-successful conversion immediately moves the RFQ to `converted`, which is
-no longer a valid source for a second conversion — the same
-"transition-guard doubles as the idempotency guard" discipline
-`docs/modules/purchase_orders.md` #8 already established, so a repeated
-submission cannot create a second Purchase Order.
+Unchanged from v1: decision and convert actions are each one
+transaction. Response capture (response + its lines + invitation/RFQ
+status + attachment linking) is one transaction too.
 
-## 9. Historical integrity
+## 15. Permissions
 
-An `RfqLine`'s `quantity` is never rewritten by a captured response, no
-matter what the supplier actually offers — the original request stays
-exactly as requested (task's own "requested: 100 bags" example). A
-captured `RfqResponse` and its attached files are never edited or
-replaced after creation — a revised quote is a new `RfqResponse` row,
-preserving the full history of what was received and when (mirrors
-`docs/modules/purchase_orders.md` #6's "never silently rewrite historical
-receipts" rule, applied to responses).
+Reuses `authorization_service`: `module_key="rfq"`, actions `view`,
+`create` (create/edit-draft/line management/manage invitations —
+invitations are part of the draft, not a separate permission), `issue`,
+`capture_response` (also covers declining an invitation — both record a
+supplier's answer), `decide`, `convert`. Admin/super_admin always bypass;
+no `OWN`/`TEAM` scope.
 
-## 10. One supplier per RFQ, no vendor comparison
+## 16. Organisation isolation and database integrity
 
-An RFQ's `supplier_id` is immutable after creation, same discipline as
-`PurchaseOrder.supplier_id`. No vendor scoring, automatic "best supplier"
-selection, bidding rounds, or procurement-event/multi-supplier comparison
-UI exists — the business user makes every decision (#6), never an
-algorithm (`../audit/RFQ_AUDIT.md` #8).
+`rfqs`/`rfq_responses` are organisation-scoped. `rfq_lines`,
+`rfq_supplier_invitations` and `rfq_response_lines` are children of an
+already-scoped `Rfq`/`RfqResponse` (no `organisation_id` of their own).
+`supplier_id`/`team_id`/`raw_material_id`/`warehouse_id` are validated
+active-and-same-organisation on every write. An invitation id is always
+resolved within the RFQ in the path. A cross-organisation id anywhere in
+this module 404s, never 403s.
 
-## 11. Inventory boundary
+## 17. Attachments
 
-Creating, issuing, capturing a response against, or deciding on an RFQ
-never touches inventory — neither does creating the Purchase Order it
-converts into. Only a PO's own receive action
-(`docs/modules/purchase_orders.md` #8/#9) is stock-affecting. This
-module writes nothing to `stock_movements`/`raw_material_inventory` at
-any point.
+Unchanged from v1: the existing generic `files` system,
+`entity_type="rfq_response"`, same access-checker registration.
 
-## 12. Transaction safety
+## 18. List and comparison UX
 
-The decision action (status + decision fields) and the convert action
-(PO creation + line copy + `Rfq.purchase_order_id` stamp + `Rfq.status`
-flip) are each one database transaction — partial state (a PO created
-without the RFQ being marked `converted`, or vice versa) is never
-possible. Repeated submission of convert cannot create a duplicate PO
-(#8's transition-guard-as-idempotency-guard).
+List page (`DataTable`/`FilterBar`/`ActionMenu`/`Badge`): RFQ number,
+department (if set), date, priority badge, "Suppliers" (invited count,
+and once any have quoted, e.g. "2 of 3 quoted"), status, PO status.
+Filters: RFQ number search, priority; the API also filters by `status`,
+`team_id`, and `supplier_id` (RFQs that supplier was invited to).
 
-## 13. Permissions
+Inside the RFQ record: grouped by invited supplier — each invitation
+shows its own status, its own capture-response action, and its own
+response history. Once two or more invitations have a response, the
+comparison table (#6) is shown above the per-supplier detail. Every
+status exposes its one obvious next action: `draft` -> Add Materials /
+Invite Suppliers -> Issue; `issued` -> Capture Response (per invitation);
+`response_received` -> compare, then Make Decision; `selected` -> Create
+Purchase Order (pre-filled, not blank); `rejected`/`cancelled` ->
+read-only; `converted` -> View Purchase Order.
 
-Reuses `authorization_service` (`docs/modules/permissions.md`), the
-second real module to use it after Purchase Orders.
-`module_key="rfq"`, actions: `view`, `create` (covers create/edit-draft/
-line management, mirroring Purchase's own "create" action shape),
-`issue`, `capture_response`, `decide`, `convert`. Admin/super_admin
-always bypass; everyone else needs an explicit grant — no `OWN`/`TEAM`
-scope, same reasoning as Purchase Orders
-(`../audit/RFQ_AUDIT.md` #7).
+Still one Modal per RFQ carrying the whole lifecycle.
 
-## 14. Organisation isolation and database integrity
+## 19. Performance
 
-`rfqs`/`rfq_responses` are organisation-scoped (`OrganisationScopedMixin`);
-`rfq_lines` are a child of an already-scoped `Rfq`, same shape as
-`purchase_order_lines`. `supplier_id`/`raw_material_id`/`warehouse_id`
-(at conversion) are all validated active-and-same-organisation on every
-write. `UniqueConstraint(organisation_id, rfq_number)`. A cross-
-organisation `rfq_id`/`response_id`/attached file all 404, never 403 —
-existence is never confirmed to a caller outside the organisation.
+Unchanged from v1: no search engine, caching layer, or background
+processing. The list and detail endpoints assemble the nested shape in a
+fixed number of queries per page, never one per row.
 
-## 15. Attachments
+## 20. Testing
 
-Reuses the existing generic `files` system exactly as built
-(`app/models/file.py`, `app/services/file_service.py`,
-`POST`/`GET`/`DELETE /api/files`) — no new upload/storage/download code.
-An access checker is registered for `entity_type="rfq_response"`
-(`app/core/entity_access.py`) that resolves the response's owning RFQ
-and applies the same organisation-scope + `view` permission check the
-RFQ API itself uses, so a file inherits the access rules of the RFQ it
-belongs to (`docs/modules/file_storage.md` #5). The `FileUploadField`
-common component (already built, previously unused outside the style
-guide) is this module's first real consumer.
+`backend/tests/test_rfqs.py`: numbering format/yearly reset; header
+stamping (requester never client-supplied, team isolation, priority);
+line remarks; issue guards (no lines / no invitations); duplicate,
+inactive and cross-organisation invitations; invitations draft-only; the
+full multi-supplier flow (capture -> comparison shape -> select one
+supplier -> convert pre-filled -> PO has that supplier and quoted prices,
+inventory untouched); convert override; unquoted line requires a manual
+price (and nothing is created until it has one); double convert; a
+response line referencing another RFQ's line is rejected; two
+invitations capture and revise independently; declining is a flag only;
+selecting another RFQ's response is rejected; rejected has no convert
+path; cancel requires a reason; list filters; cross-organisation RFQ,
+comparison, capture and decline all 404; permission default-deny.
 
-## 16. List and find UX
+## Migration
 
-One list page (`DataTable`/`FilterBar`/`ActionMenu`/`Badge`): RFQ
-number (searchable), supplier, date, status, response status, PO status
-(derived — "Converted" links to the PO once one exists). Reuses every
-common list primitive Purchase Orders already established — no RFQ-
-specific table code.
-
-## 17. Navigation and no dead ends
-
-A new "Procurement" sidebar group (shared with Purchase Orders, created
-alongside them) containing "RFQs" — `Home -> Procurement -> RFQs`, 2
-navigations. One Modal per RFQ (same reused
-list-plus-child-relationship-Modal pattern `docs/modules/purchase_orders.md`
-#17 already established from `BomsPage.tsx`) carries the entire
-lifecycle — header, lines, responses (with inline attachment
-preview/download), decision, and (once selected) the convert-to-PO
-form — never a separate route per stage. Every status exposes its one
-obvious next action: `draft` -> Issue; `issued` -> Capture Response;
-`response_received` -> Make Decision; `selected` -> Create Purchase
-Order; `rejected`/`cancelled` -> read-only, no misleading action;
-`converted` -> View Purchase Order (a direct link, since
-`purchase_order_id` is already known).
-
-## 18. Performance
-
-No search engine, caching layer, or background processing — matches
-`docs/modules/purchase_orders.md` #19 exactly, same expected scale.
-
-## 19. Testing
-
-Focused on real business behaviour, not CRUD: RFQ number format/yearly
-reset/concurrency-safety; the full lifecycle end-to-end (draft -> issue
--> capture response -> decide selected -> convert -> PO exists with the
-right supplier/lines, and inventory is untouched throughout); a rejected
-RFQ has no convert path; a cancelled RFQ at any valid cancellation point;
-double-submitting convert never creates a second PO; cross-organisation
-isolation on the RFQ and its attachments; the RFQ's original requested
-quantity is never altered by a captured response.
-
-## 20. Most important architectural rule — document/PDF/email boundary
-
-This module does not generate documents and does not send anything.
-"Issue" is a status fact, not a system action; "capture response" is
-evidence storage, not data re-entry; the RFQ itself travels to the
-supplier however the business already does that. No A4 template, PDF
-generation, or native-email integration is built or extended here — none
-is required by this module's own actual scope, and adding one now would
-be exactly the speculative document/communication infrastructure this
-codebase's engineering principles rule out building ahead of a proven
-need. If a future module genuinely needs to generate and email an
-official document (an Invoice, a Delivery Note), that is its own
-audited, scoped piece of work — not something this module should invent
-a shared framework for pre-emptively.
-
-## Implementation approach
-
-Per `../ENGINEERING_PRINCIPLES.md` §16: see `../audit/RFQ_AUDIT.md`.
-Reuses jdk_erp's own `files`/`entity_access` attachment system (its
-first real consumer), the `ALLOWED_*_TRANSITIONS` status-machine
-convention `docs/modules/purchase_orders.md` established, the
-`authorization_service` permission engine (its second real consumer),
-`FileUploadField` (its first real consumer outside the style guide), and
-a `purchase_order_service.create_purchase_order_with_lines` function
-extracted so both the plain "New Purchase" flow and this module's
-convert action share one PO-creation implementation.
+`backend/migrations/versions/0032_rfq_v2_invitations_and_structured_responses.py`
+carries v1 data forward (each v1 `supplier_id` becomes one invitation,
+each response is re-pointed to it) — see `../audit/RFQ_AUDIT_V2.md` #4.
