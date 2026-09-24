@@ -16,6 +16,7 @@ import { MachinesPage } from '@/pages/MachinesPage'
 import { ProductionLinesPage } from '@/pages/ProductionLinesPage'
 import { PurchaseOrdersPage } from '@/pages/PurchaseOrdersPage'
 import { RawMaterialsPage } from '@/pages/RawMaterialsPage'
+import { RfqFormPage } from '@/pages/RfqFormPage'
 import { RfqsPage } from '@/pages/RfqsPage'
 import { WarehousesPage } from '@/pages/WarehousesPage'
 import { StyleGuidePage } from '@/pages/StyleGuidePage'
@@ -52,6 +53,8 @@ export function App() {
           <Route path="/warehouses" element={<WarehousesPage />} />
           <Route path="/boms" element={<BomsPage />} />
           <Route path="/rfqs" element={<RfqsPage />} />
+          <Route path="/rfqs/new" element={<RfqFormPage />} />
+          <Route path="/rfqs/:rfqId/edit" element={<RfqFormPage />} />
           <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
           <Route path="/receiving" element={<GoodsReceivingPage />} />
           <Route path="/users" element={<UsersPage />} />

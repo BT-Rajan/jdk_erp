@@ -32,7 +32,6 @@ class RfqPdfLine:
     material_name: str
     quantity: Decimal
     unit_code: str
-    required_by_date: date | None
     remarks: str | None
 
 
@@ -137,7 +136,7 @@ def generate_rfq_pdf(data: RfqPdfData) -> bytes:
     cell = styles["BodyText"]
     cell.fontSize = 9
     cell.leading = 11
-    rows = [["#", "Product / Material", "Quantity", "UOM", "Required By", "Specification / Remarks"]]
+    rows = [["#", "Product / Material", "Quantity", "UOM", "Specification / Remarks"]]
     for index, line in enumerate(data.lines, start=1):
         rows.append(
             [
@@ -145,11 +144,10 @@ def generate_rfq_pdf(data: RfqPdfData) -> bytes:
                 Paragraph(escape(line.material_name), cell),
                 _fmt_quantity(line.quantity),
                 line.unit_code,
-                line.required_by_date.strftime("%d-%m-%Y") if line.required_by_date else "-",
                 Paragraph(escape(line.remarks or ""), cell),
             ]
         )
-    items = Table(rows, colWidths=[8 * mm, 52 * mm, 24 * mm, 16 * mm, 24 * mm, 50 * mm], repeatRows=1)
+    items = Table(rows, colWidths=[8 * mm, 62 * mm, 26 * mm, 18 * mm, 60 * mm], repeatRows=1)
     items.setStyle(
         TableStyle(
             [

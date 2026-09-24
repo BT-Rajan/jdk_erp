@@ -1,7 +1,8 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { RfqFormPage } from './RfqFormPage'
 import { RfqsPage } from './RfqsPage'
 
 const { useAuthMock, getMock, postMock, putMock, patchMock } = vi.hoisted(() => ({
@@ -110,12 +111,20 @@ function mockGets(rfqs: ReturnType<typeof makeRfq>[]) {
   })
 }
 
-function renderPage() {
+function renderAt(path: string) {
   return render(
-    <MemoryRouter>
-      <RfqsPage />
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/rfqs" element={<RfqsPage />} />
+        <Route path="/rfqs/new" element={<RfqFormPage />} />
+        <Route path="/rfqs/:rfqId/edit" element={<div>Editing RFQ form</div>} />
+      </Routes>
     </MemoryRouter>,
   )
+}
+
+function renderPage() {
+  return renderAt('/rfqs')
 }
 
 async function openRfq(user: ReturnType<typeof userEvent.setup>) {
@@ -147,8 +156,13 @@ describe('RfqsPage', () => {
     renderPage()
 
     await user.click(await screen.findByRole('button', { name: 'New RFQ' }))
-    const modal = await screen.findByRole('dialog', { name: 'New RFQ' })
+    // The form is its own page, not a dialog.
+    expect(await screen.findByRole('heading', { name: 'New RFQ' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'New RFQ' })).not.toBeInTheDocument()
+    const modal = document.body
     expect(await within(modal).findByText('2630009')).toBeInTheDocument()
+    expect(within(modal).queryByLabelText('Item 1 required by')).not.toBeInTheDocument()
+    expect(within(modal).getAllByLabelText(/Required By/)).toHaveLength(1)
     expect(within(modal).queryByLabelText(/Department/)).not.toBeInTheDocument()
     expect(within(modal).queryByLabelText(/Notes/)).not.toBeInTheDocument()
 
@@ -171,16 +185,16 @@ describe('RfqsPage', () => {
       required_delivery_date: '2099-09-30',
       priority: 'normal',
       supplier_ids: [2],
-      lines: [{ raw_material_id: 10, quantity: '2', unit_of_measure_id: 21, required_by_date: null, remarks: null }],
+      lines: [{ raw_material_id: 10, quantity: '2', unit_of_measure_id: 21, remarks: null }],
     })
   })
 
   it('blocks submit when quantity is zero', async () => {
     mockGets([])
     const user = userEvent.setup()
-    renderPage()
-    await user.click(await screen.findByRole('button', { name: 'New RFQ' }))
-    const modal = await screen.findByRole('dialog', { name: 'New RFQ' })
+    renderAt('/rfqs/new')
+    await screen.findByRole('heading', { name: 'New RFQ' })
+    const modal = document.body
     await user.type(within(modal).getByLabelText(/Required By/), '2099-09-30')
     await user.selectOptions(within(modal).getByLabelText('Item 1 product / material'), '10')
     await user.type(within(modal).getByLabelText('Item 1 quantity'), '0')
@@ -223,7 +237,7 @@ describe('RfqsPage', () => {
     expect(within(decision).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
     await user.click(within(decision).getByRole('button', { name: 'Raise New RFQ' }))
     expect(postMock).toHaveBeenCalledWith('/api/rfqs/1/raise-new', { lines: [{ rfq_line_id: 100, quantity: '80' }] })
-    expect(await screen.findByRole('dialog', { name: 'Edit RFQ 2630002' })).toBeInTheDocument()
+    expect(await screen.findByText('Editing RFQ form')).toBeInTheDocument()
   })
 
   it('generates the purchase order pre-filled from the approved quotation', async () => {

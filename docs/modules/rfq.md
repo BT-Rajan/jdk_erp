@@ -19,7 +19,7 @@ commits to buying anything by itself. Unchanged from v1.
 
 ## 2. RFQ header
 
-One form (the New RFQ modal) creates, edits and submits the whole RFQ:
+One form page (`/rfqs/new`, `/rfqs/{id}/edit`) creates, edits and submits the whole RFQ:
 `POST /api/rfqs` / `PUT /api/rfqs/{id}` with the same body.
 
 - Auto: `rfq_number` (#10 — the form shows the next number from
@@ -46,7 +46,6 @@ At least one item. Per item:
   defaulting to the item's own unit. Only accepted when it converts to
   the item's own unit (`app/services/uom_conversion.py`), so the PO step
   can always express it in the item's unit (#8).
-- `required_by_date` — optional, if different from the header.
 - `remarks` — optional specification.
 
 ## 4. Suppliers
