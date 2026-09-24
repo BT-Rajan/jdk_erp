@@ -35,6 +35,18 @@ def validate_key(value: str) -> str:
     return value
 
 
+def check_max_length(value: str, max_length: int, field_label: str) -> str:
+    """Enforces a field's DB column width at the API boundary, checked
+    after whatever normalization (strip, case-fold, digit-extraction)
+    the caller already applied -- so an over-limit value is rejected
+    with a clear 422 instead of being silently truncated (SQLite, or
+    MySQL outside strict mode) or raising a raw IntegrityError/DataError
+    at the database layer (docs/modules/common_validation.md)."""
+    if len(value) > max_length:
+        raise ValueError(f"{field_label} must be at most {max_length} characters.")
+    return value
+
+
 def normalize_email(email: str) -> str:
     """One normalization for every place an email is stored or compared
     -- lowercase, trimmed -- so 'Ada@Example.com' and 'ada@example.com'
