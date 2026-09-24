@@ -15,7 +15,7 @@ reimplemented per business module (Sales, Finance, etc.).
 
 ## 2. Date Validation
 
-Standard user-facing format: `DD/MM/YYYY`.
+Standard user-facing format: `DD-MM-YYYY`.
 
 Common rules: valid calendar date; no ambiguous date formats; consistent
 date picker/input; internal storage remains machine-readable.
@@ -40,7 +40,7 @@ mechanism.
 
 ## 3. Date & Time
 
-Display: `DD/MM/YYYY HH:mm`. Use the established JDK/Kuwait timezone
+Display: `DD-MM-YYYY HH:mm`. Use the established JDK/Kuwait timezone
 consistently. Do not allow individual modules to implement their own
 timezone conversion.
 

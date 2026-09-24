@@ -92,7 +92,6 @@ class RfqOut(BaseModel):
     priority: str
     rfq_date: date
     required_delivery_date: date | None
-    team_id: int | None
     requested_by_user_id: int | None
     requested_by_name: str | None = None
     notes: str | None
@@ -136,9 +135,7 @@ class RfqSaveRequest(BaseModel):
     submit: bool = False
 
     required_delivery_date: date
-    team_id: int
     priority: str = PRIORITY_NORMAL
-    notes: str | None = Field(default=None, max_length=4000)
     lines: list[RfqLineCreateRequest] = Field(max_length=200)
     supplier_ids: list[int] = Field(max_length=50)
 
@@ -146,11 +143,6 @@ class RfqSaveRequest(BaseModel):
     @classmethod
     def _validate_priority(cls, value: str) -> str:
         return _check_priority(value)
-
-    @field_validator("notes")
-    @classmethod
-    def _strip_notes(cls, value: str | None) -> str | None:
-        return _strip_or_none(value)
 
     @field_validator("lines")
     @classmethod

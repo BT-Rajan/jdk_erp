@@ -14,10 +14,12 @@ from app.models.product import Product
 from app.models.production_line import ProductionLine
 from app.models.purchase_order import (
     PurchaseOrder,
+    PurchaseOrderCommunication,
     PurchaseOrderLine,
     PurchaseOrderPayment,
     PurchaseOrderReceipt,
     PurchaseOrderReceiptLine,
+    PurchaseOrderReconciliation,
     PurchaseOrderRevision,
     PurchaseOrderRevisionLine,
 )
@@ -63,6 +65,8 @@ __all__ = [
     "PurchaseOrder",
     "PurchaseOrderLine",
     "PurchaseOrderRevision",
+    "PurchaseOrderReconciliation",
+    "PurchaseOrderCommunication",
     "PurchaseOrderRevisionLine",
     "PurchaseOrderPayment",
     "PurchaseOrderReceipt",

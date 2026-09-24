@@ -17,7 +17,6 @@ from app.models.purchase_order import PurchaseOrder, PurchaseOrderLine
 from app.models.raw_material import RawMaterial
 from app.models.rfq import Rfq, RfqResponse, RfqResponseLine
 from app.models.supplier import Supplier
-from app.models.team import Team
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
 from app.services import email_service, rfq_service
@@ -43,10 +42,9 @@ def _png_bytes():
     return buffer.getvalue()
 
 
-def _form(team_id, supplier_ids, lines, submit=True, **extra):
+def _form(supplier_ids, lines, submit=True, **extra):
     return {
         "required_delivery_date": FUTURE,
-        "team_id": team_id,
         "priority": "normal",
         "supplier_ids": supplier_ids,
         "lines": lines,
@@ -100,15 +98,6 @@ def _invitation_for(rfq_body, supplier_id):
 @pytest.fixture()
 def admin_headers(client, admin_user):
     return _login_headers(client, "admin_person")
-
-
-@pytest.fixture()
-def production_team(db_session, organisation):
-    team = Team(organisation_id=organisation.id, name="Production", code="PROD", is_active=True)
-    db_session.add(team)
-    db_session.commit()
-    db_session.refresh(team)
-    return team
 
 
 @pytest.fixture()
@@ -172,13 +161,13 @@ def other_admin_headers(client, db_session, other_org_user):
 
 
 @pytest.fixture()
-def issued_rfq(client, admin_headers, production_team, acme_supplier, beta_supplier, cement_raw_material, sand_raw_material):
+def issued_rfq(client, admin_headers, acme_supplier, beta_supplier, cement_raw_material, sand_raw_material):
     """Submitted RFQ: cement 100 + sand 20 (remarks), to Acme and Beta.
     Returns (rfq_body, cement_line_id, sand_line_id)."""
     response = _create(
         client, admin_headers,
         _form(
-            production_team.id, [acme_supplier.id, beta_supplier.id],
+            [acme_supplier.id, beta_supplier.id],
             [_line(cement_raw_material, quantity="100"), _line(sand_raw_material, quantity="20", remarks="fine washed")],
         ),
     )
@@ -200,13 +189,20 @@ def _quote_and_accept(client, headers, rfq, supplier_id, prices):
 # --- numbering ----------------------------------------------------------------
 
 
-def test_rfq_number_format_and_yearly_sequence(client, admin_headers, production_team, acme_supplier, cement_raw_material):
-    body = _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)], submit=False)
+def test_rfq_number_format_and_yearly_sequence(client, admin_headers, acme_supplier, cement_raw_material):
+    body = _form([acme_supplier.id], [_line(cement_raw_material)], submit=False)
     first = _create(client, admin_headers, body).json()
     second = _create(client, admin_headers, body).json()
     year_suffix = str(date.today().year % 100).zfill(2)
     assert first["rfq_number"] == f"{year_suffix}30001"
     assert second["rfq_number"] == f"{year_suffix}30002"
+
+
+def test_next_number_preview(client, admin_headers, acme_supplier, cement_raw_material):
+    first = client.get("/api/rfqs/next-number", headers=admin_headers).json()["rfq_number"]
+    created = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material)], submit=False)).json()
+    assert created["rfq_number"] == first
+    assert client.get("/api/rfqs/next-number", headers=admin_headers).json()["rfq_number"] != first
 
 
 def test_rfq_number_resets_per_year(db_session, organisation):
@@ -224,11 +220,11 @@ def test_list_requires_authentication(client):
 
 
 def test_save_draft_stamps_auto_fields_and_generates_no_pdf(
-    client, admin_headers, admin_user, production_team, acme_supplier, cement_raw_material
+    client, admin_headers, admin_user, acme_supplier, cement_raw_material
 ):
     response = _create(
         client, admin_headers,
-        _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material, remarks="Type 1")], submit=False,
+        _form([acme_supplier.id], [_line(cement_raw_material, remarks="Type 1")], submit=False,
               requested_by_user_id=999999, rfq_date="2020-01-01"),
     )
     assert response.status_code == 201
@@ -237,7 +233,6 @@ def test_save_draft_stamps_auto_fields_and_generates_no_pdf(
     assert body["revision_number"] == 0
     assert body["rfq_date"] == date.today().isoformat()
     assert body["requested_by_user_id"] == admin_user.id
-    assert body["team_id"] == production_team.id
     assert body["lines"][0]["unit_of_measure_id"] == cement_raw_material.unit_of_measure_id
     assert body["lines"][0]["remarks"] == "Type 1"
     assert body["invitations"][0]["pdf_file"] is None
@@ -264,45 +259,43 @@ def test_submit_issues_revision_1_with_one_pdf_per_supplier(client, admin_header
         lambda body: body["lines"][0].pop("unit_of_measure_id"),
         lambda body: body.update(supplier_ids=[]),
         lambda body: body.update(supplier_ids=body["supplier_ids"] * 2),
-        lambda body: body.pop("team_id"),
         lambda body: body.pop("required_delivery_date"),
         lambda body: body.update(required_delivery_date=(date.today() - timedelta(days=1)).isoformat()),
         lambda body: body.update(priority="critical"),
     ],
 )
-def test_form_rules_are_enforced(client, admin_headers, production_team, acme_supplier, cement_raw_material, mutate):
-    body = _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)])
+def test_form_rules_are_enforced(client, admin_headers, acme_supplier, cement_raw_material, mutate):
+    body = _form([acme_supplier.id], [_line(cement_raw_material)])
     mutate(body)
     assert _create(client, admin_headers, body).status_code == 422
 
 
-def test_suppliers_team_and_materials_must_be_active_and_own_organisation(
-    client, admin_headers, db_session, organisation, other_organisation, production_team, cement_raw_material
+def test_suppliers_and_materials_must_be_active_and_own_organisation(
+    client, admin_headers, db_session, organisation, other_organisation, cement_raw_material
 ):
     dormant = Supplier(organisation_id=organisation.id, code="SUP0009", name="Dormant", is_active=False)
     foreign = Supplier(organisation_id=other_organisation.id, code="SUP0001", name="Elsewhere", is_active=True)
-    foreign_team = Team(organisation_id=other_organisation.id, name="Buying", code="BUY", is_active=True)
-    db_session.add_all([dormant, foreign, foreign_team])
+    db_session.add_all([dormant, foreign])
     db_session.commit()
     line = [_line(cement_raw_material)]
-    assert _create(client, admin_headers, _form(production_team.id, [dormant.id], line)).status_code == 422
-    assert _create(client, admin_headers, _form(production_team.id, [foreign.id], line)).status_code == 422
+    assert _create(client, admin_headers, _form([dormant.id], line)).status_code == 422
+    assert _create(client, admin_headers, _form([foreign.id], line)).status_code == 422
 
     active = Supplier(organisation_id=organisation.id, code="SUP0010", name="Active", is_active=True)
     db_session.add(active)
     db_session.commit()
-    assert _create(client, admin_headers, _form(foreign_team.id, [active.id], line)).status_code == 422
-    assert _create(client, admin_headers, _form(production_team.id, [active.id], [{**line[0], "raw_material_id": 999999}])).status_code == 422
+    assert _create(client, admin_headers, _form([active.id], line)).status_code == 201
+    assert _create(client, admin_headers, _form([active.id], [{**line[0], "raw_material_id": 999999}])).status_code == 422
 
 
 def test_unit_must_convert_to_the_material_unit(
-    client, admin_headers, production_team, acme_supplier, cement_raw_material, gravel_raw_material, tonne_unit
+    client, admin_headers, acme_supplier, cement_raw_material, gravel_raw_material, tonne_unit
 ):
     # Cement is in plain KG (no dimension) -- tonnes cannot be converted.
-    bad = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material, tonne_unit.id)]))
+    bad = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material, tonne_unit.id)]))
     assert bad.status_code == 422
     # Gravel is in mass KG -- tonnes convert.
-    ok = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(gravel_raw_material, tonne_unit.id, "2")]))
+    ok = _create(client, admin_headers, _form([acme_supplier.id], [_line(gravel_raw_material, tonne_unit.id, "2")]))
     assert ok.status_code == 201
 
 
@@ -310,12 +303,12 @@ def test_unit_must_convert_to_the_material_unit(
 
 
 def test_draft_can_be_edited_then_submitted(
-    client, admin_headers, production_team, acme_supplier, beta_supplier, cement_raw_material, sand_raw_material
+    client, admin_headers, acme_supplier, beta_supplier, cement_raw_material, sand_raw_material
 ):
-    draft = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)], submit=False)).json()
+    draft = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material)], submit=False)).json()
     edited = client.put(
         f"/api/rfqs/{draft['id']}",
-        json=_form(production_team.id, [beta_supplier.id], [_line(sand_raw_material, quantity="5")], submit=False),
+        json=_form([beta_supplier.id], [_line(sand_raw_material, quantity="5")], submit=False),
         headers=admin_headers,
     ).json()
     assert edited["status"] == "draft"
@@ -324,7 +317,7 @@ def test_draft_can_be_edited_then_submitted(
 
     submitted = client.put(
         f"/api/rfqs/{draft['id']}",
-        json=_form(production_team.id, [beta_supplier.id], [_line(sand_raw_material, quantity="5")]),
+        json=_form([beta_supplier.id], [_line(sand_raw_material, quantity="5")]),
         headers=admin_headers,
     ).json()
     assert submitted["status"] == "issued"
@@ -333,13 +326,13 @@ def test_draft_can_be_edited_then_submitted(
 
 
 def test_issued_rfq_revises_to_next_revision_until_first_quote(
-    client, admin_headers, db_session, issued_rfq, production_team, acme_supplier, cement_raw_material
+    client, admin_headers, db_session, issued_rfq, acme_supplier, cement_raw_material
 ):
     rfq, cement_id, _ = issued_rfq
     acme_first_pdf = _invitation_for(rfq, acme_supplier.id)["pdf_file"]["id"]
 
     # Saving an issued RFQ without submitting a new revision is refused.
-    body = _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material, quantity="150")], submit=False)
+    body = _form([acme_supplier.id], [_line(cement_raw_material, quantity="150")], submit=False)
     assert client.put(f"/api/rfqs/{rfq['id']}", json=body, headers=admin_headers).status_code == 400
 
     revised = client.put(f"/api/rfqs/{rfq['id']}", json={**body, "submit": True}, headers=admin_headers)
@@ -361,7 +354,7 @@ def test_issued_rfq_revises_to_next_revision_until_first_quote(
 
 
 def test_admin_letterhead_template_is_used_for_new_pdfs(
-    client, admin_headers, production_team, acme_supplier, cement_raw_material
+    client, admin_headers, acme_supplier, cement_raw_material
 ):
     letterhead_id = _upload(client, admin_headers, "letterhead.png", _png_bytes(), "image/png")
     saved = client.put(
@@ -374,7 +367,7 @@ def test_admin_letterhead_template_is_used_for_new_pdfs(
     assert saved.json()["letterhead_file"]["id"] == letterhead_id
     assert client.get("/api/document-templates/rfq", headers=admin_headers).json()["intro_text"] == "Dear Sir,\nPlease quote."
 
-    rfq = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)])).json()
+    rfq = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material)])).json()
     pdf_id = rfq["invitations"][0]["pdf_file"]["id"]
     assert client.get(f"/api/files/{pdf_id}", headers=admin_headers).content.startswith(b"%PDF")
 
@@ -413,8 +406,8 @@ def test_email_requires_supplier_email_and_a_configured_mailbox(client, admin_he
     assert client.post(f"/api/rfqs/{rfq['id']}/invitations/{no_mailbox['id']}/send", headers=admin_headers).status_code == 400
 
 
-def test_draft_cannot_be_emailed(client, admin_headers, production_team, beta_supplier, cement_raw_material):
-    draft = _create(client, admin_headers, _form(production_team.id, [beta_supplier.id], [_line(cement_raw_material)], submit=False)).json()
+def test_draft_cannot_be_emailed(client, admin_headers, beta_supplier, cement_raw_material):
+    draft = _create(client, admin_headers, _form([beta_supplier.id], [_line(cement_raw_material)], submit=False)).json()
     invitation_id = draft["invitations"][0]["id"]
     assert client.post(f"/api/rfqs/{draft['id']}/invitations/{invitation_id}/send", headers=admin_headers).status_code == 400
 
@@ -422,15 +415,15 @@ def test_draft_cannot_be_emailed(client, admin_headers, production_team, beta_su
 # --- quote capture -------------------------------------------------------------------------
 
 
-def test_cannot_capture_a_quote_on_a_draft(client, admin_headers, production_team, acme_supplier, cement_raw_material):
-    draft = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)], submit=False)).json()
+def test_cannot_capture_a_quote_on_a_draft(client, admin_headers, acme_supplier, cement_raw_material):
+    draft = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material)], submit=False)).json()
     response = _capture(client, admin_headers, draft["id"], draft["invitations"][0]["id"], [{"rfq_line_id": draft["lines"][0]["id"], "unit_price": "1"}])
     assert response.status_code == 400
 
 
-def test_quote_line_from_another_rfq_is_rejected(client, admin_headers, issued_rfq, acme_supplier, production_team, cement_raw_material, db_session):
+def test_quote_line_from_another_rfq_is_rejected(client, admin_headers, issued_rfq, acme_supplier, cement_raw_material, db_session):
     rfq, _, _ = issued_rfq
-    other = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)])).json()
+    other = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material)])).json()
     invitation = _invitation_for(rfq, acme_supplier.id)
     response = _capture(client, admin_headers, rfq["id"], invitation["id"], [{"rfq_line_id": other["lines"][0]["id"], "unit_price": "1"}])
     assert response.status_code == 422
@@ -499,10 +492,10 @@ def test_reject_stops_the_flow(client, admin_headers, issued_rfq, acme_supplier,
     assert cancel.status_code == 400
 
 
-def test_selecting_another_rfqs_quote_is_rejected(client, admin_headers, issued_rfq, acme_supplier, production_team, cement_raw_material):
+def test_selecting_another_rfqs_quote_is_rejected(client, admin_headers, issued_rfq, acme_supplier, cement_raw_material):
     rfq, cement_id, _ = issued_rfq
     _capture(client, admin_headers, rfq["id"], _invitation_for(rfq, acme_supplier.id)["id"], [{"rfq_line_id": cement_id, "unit_price": "1"}])
-    other = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)])).json()
+    other = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material)])).json()
     other_body = _capture(client, admin_headers, other["id"], other["invitations"][0]["id"], [{"rfq_line_id": other["lines"][0]["id"], "unit_price": "1"}]).json()
     foreign_response = other_body["invitations"][0]["responses"][0]["id"]
     assert _accept(client, admin_headers, rfq["id"], foreign_response, [_upload(client, admin_headers)]).status_code == 422
@@ -517,7 +510,7 @@ def test_approval_requires_confirmed_quantities(client, admin_headers, issued_rf
 
 
 def test_different_agreed_quantity_raises_a_new_rfq(
-    client, admin_headers, issued_rfq, acme_supplier, beta_supplier, production_team
+    client, admin_headers, issued_rfq, acme_supplier, beta_supplier
 ):
     rfq, cement_id, sand_id = issued_rfq
     _capture(client, admin_headers, rfq["id"], _invitation_for(rfq, acme_supplier.id)["id"], [{"rfq_line_id": cement_id, "unit_price": "1"}])
@@ -530,7 +523,6 @@ def test_different_agreed_quantity_raises_a_new_rfq(
     new = raised.json()
     assert new["status"] == "draft"
     assert new["rfq_number"] != rfq["rfq_number"]
-    assert new["team_id"] == production_team.id
     assert sorted(l["quantity"] for l in new["lines"]) == ["20.0000", "80.0000"]
     assert sorted(i["supplier_id"] for i in new["invitations"]) == sorted([acme_supplier.id, beta_supplier.id])
 
@@ -539,10 +531,10 @@ def test_different_agreed_quantity_raises_a_new_rfq(
     assert new["rfq_number"] in old["cancel_reason"]
 
 
-def test_approved_rfq_cannot_be_revised_only_cancelled(client, admin_headers, issued_rfq, acme_supplier, production_team, cement_raw_material):
+def test_approved_rfq_cannot_be_revised_only_cancelled(client, admin_headers, issued_rfq, acme_supplier, cement_raw_material):
     rfq, cement_id, sand_id = issued_rfq
     _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {cement_id: "1", sand_id: "1"})
-    body = _form(production_team.id, [acme_supplier.id], [_line(cement_raw_material)])
+    body = _form([acme_supplier.id], [_line(cement_raw_material)])
     assert client.put(f"/api/rfqs/{rfq['id']}", json=body, headers=admin_headers).status_code == 400
     cancelled = client.patch(f"/api/rfqs/{rfq['id']}/status", json={"status": "cancelled", "cancel_reason": "Supplier withdrew"}, headers=admin_headers)
     assert cancelled.json()["status"] == "cancelled"
@@ -586,9 +578,9 @@ def test_full_flow_to_purchase_order(
 
 
 def test_po_keeps_the_agreed_unit_and_price(
-    client, admin_headers, production_team, acme_supplier, gravel_raw_material, tonne_unit, warehouse_1, db_session
+    client, admin_headers, acme_supplier, gravel_raw_material, tonne_unit, warehouse_1, db_session
 ):
-    rfq = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(gravel_raw_material, tonne_unit.id, "2")])).json()
+    rfq = _create(client, admin_headers, _form([acme_supplier.id], [_line(gravel_raw_material, tonne_unit.id, "2")])).json()
     _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {rfq["lines"][0]["id"]: "85"})
     converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
     assert converted.status_code == 200, converted.text
@@ -633,10 +625,10 @@ def test_cancel_requires_reason_and_status_endpoint_only_cancels(client, admin_h
     assert cancelled.json()["status"] == "cancelled"
 
 
-def test_list_filters_by_invited_supplier_and_priority(client, admin_headers, production_team, acme_supplier, beta_supplier, cement_raw_material):
+def test_list_filters_by_invited_supplier_and_priority(client, admin_headers, acme_supplier, beta_supplier, cement_raw_material):
     line = [_line(cement_raw_material)]
-    urgent = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], line, submit=False, priority="urgent")).json()
-    normal = _create(client, admin_headers, _form(production_team.id, [beta_supplier.id], line, submit=False)).json()
+    urgent = _create(client, admin_headers, _form([acme_supplier.id], line, submit=False, priority="urgent")).json()
+    normal = _create(client, admin_headers, _form([beta_supplier.id], line, submit=False)).json()
     by_supplier = client.get("/api/rfqs", params={"supplier_id": acme_supplier.id}, headers=admin_headers).json()
     assert [r["id"] for r in by_supplier["data"]] == [urgent["id"]]
     by_priority = client.get("/api/rfqs", params={"priority": "normal"}, headers=admin_headers).json()

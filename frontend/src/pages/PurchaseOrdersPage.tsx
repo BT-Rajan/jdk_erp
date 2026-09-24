@@ -14,6 +14,7 @@ import { FormDialog } from '@/components/ui/FormDialog'
 import { Modal } from '@/components/ui/Modal'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
+import { CheckboxField } from '@/components/forms/CheckboxField'
 import { DateField } from '@/components/forms/DateField'
 import { FileUploadField } from '@/components/forms/FileUploadField'
 import { SelectField } from '@/components/forms/SelectField'
@@ -22,6 +23,8 @@ import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
+import { formatKuwaitTime } from '@/lib/timezone'
+import { formatDate } from '@/lib/format'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
 
@@ -37,6 +40,7 @@ interface PurchaseOrderLine {
   required_by_date: string | null
   remarks: string | null
   received_quantity: string
+  cancelled_quantity: string
 }
 
 interface PurchaseOrderRevisionLine {
@@ -55,6 +59,7 @@ interface PurchaseOrderReceiptLine {
   purchase_order_line_id: number
   raw_material_id: number
   quantity: string
+  remarks: string | null
 }
 
 type PurchaseOrderReceiptStatus = 'draft' | 'posted' | 'cancelled' | 'reversed'
@@ -72,6 +77,8 @@ interface PurchaseOrderReceipt {
   reversed_at: string | null
   reversal_reason: string | null
   created_at: string
+  received_by_name: string | null
+  days_late: number
   lines: PurchaseOrderReceiptLine[]
   documents: PurchaseFile[]
 }
@@ -106,6 +113,7 @@ interface PurchaseOrderPayment {
   payment_method: string | null
   reference_number: string | null
   notes: string | null
+  is_final: boolean
   status: 'recorded' | 'cancelled'
   cancelled_at: string | null
   cancellation_reason: string | null
@@ -114,7 +122,42 @@ interface PurchaseOrderPayment {
   files: PurchaseFile[]
 }
 
-type PurchaseOrderStatus = 'draft' | 'pending_approval' | 'approved' | 'sent' | 'partially_received' | 'received' | 'cancelled'
+type PurchaseOrderStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approved'
+  | 'sent'
+  | 'partially_received'
+  | 'reconciliation_required'
+  | 'received'
+  | 'payment_reconciliation'
+  | 'closed'
+  | 'cancelled'
+
+interface PurchaseOrderReconciliation {
+  id: number
+  kind: 'receipt' | 'payment'
+  status: 'open' | 'resolved'
+  discrepancy: string
+  resolution: string | null
+  resolution_note: string | null
+  created_at: string
+  resolved_at: string | null
+  resolved_by_name: string | null
+}
+
+interface PurchaseOrderCommunication {
+  id: number
+  kind: 'po_sent' | 'follow_up' | 'note'
+  recipient: string | null
+  subject: string | null
+  message: string | null
+  status: 'sent' | 'failed' | 'recorded'
+  error: string | null
+  created_at: string
+  sent_by_name: string | null
+  files: PurchaseFile[]
+}
 type PaymentStatus = 'unpaid' | 'partially_paid' | 'paid'
 
 interface PurchaseOrder {
@@ -145,6 +188,8 @@ interface PurchaseOrder {
   cancelled_at: string | null
   cancelled_by_name: string | null
   total_amount: string
+  amount_adjustment: string
+  final_amount: string
   paid_amount: string
   outstanding_amount: string
   payment_status: PaymentStatus
@@ -153,6 +198,8 @@ interface PurchaseOrder {
   documents: PurchaseFile[]
   payments: PurchaseOrderPayment[]
   receipts: PurchaseOrderReceipt[]
+  reconciliations: PurchaseOrderReconciliation[]
+  communications: PurchaseOrderCommunication[]
 }
 
 interface LookupOption {
@@ -177,9 +224,12 @@ const STATUS_LABELS: Record<PurchaseOrderStatus, string> = {
   draft: 'Draft',
   pending_approval: 'Pending Approval',
   approved: 'Approved',
-  sent: 'Sent',
+  sent: 'Sent — Awaiting Delivery',
   partially_received: 'Partially Received',
-  received: 'Received',
+  reconciliation_required: 'Reconciliation Required',
+  received: 'Received — Awaiting Payment',
+  payment_reconciliation: 'Payment Reconciliation',
+  closed: 'Closed',
   cancelled: 'Cancelled',
 }
 
@@ -189,8 +239,35 @@ const STATUS_TONES: Record<PurchaseOrderStatus, BadgeTone> = {
   approved: 'gold',
   sent: 'gold',
   partially_received: 'warning',
-  received: 'success',
+  reconciliation_required: 'danger',
+  received: 'info',
+  payment_reconciliation: 'danger',
+  closed: 'success',
   cancelled: 'danger',
+}
+
+const RESOLUTIONS: Record<PurchaseOrderReconciliation['kind'], { value: string; label: string }[]> = {
+  receipt: [
+    { value: 'keep_pending', label: 'Keep remaining quantity pending (incl. replacement requested)' },
+    { value: 'cancel_remaining', label: 'Accept received quantity — cancel the remainder' },
+  ],
+  payment: [
+    { value: 'accept_paid_amount', label: 'Accept the paid amount as the final amount' },
+    { value: 'correct_payment', label: 'Finance to correct the payment' },
+  ],
+}
+
+const RESOLUTION_LABELS: Record<string, string> = {
+  keep_pending: 'Remaining kept pending',
+  cancel_remaining: 'Remainder cancelled',
+  accept_paid_amount: 'Paid amount accepted',
+  correct_payment: 'Payment to be corrected',
+}
+
+const COMMUNICATION_LABELS: Record<PurchaseOrderCommunication['kind'], string> = {
+  po_sent: 'PO sent to supplier',
+  follow_up: 'Follow-up email',
+  note: 'Supplier reply / note',
 }
 
 const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = { unpaid: 'Unpaid', partially_paid: 'Partially Paid', paid: 'Paid' }
@@ -204,7 +281,7 @@ function todayIso(): string {
 
 function stamp(at: string | null, by: string | null): string | null {
   if (!at) return null
-  return `${new Date(at).toLocaleString()}${by ? ` by ${by}` : ''}`
+  return `${formatKuwaitTime(at)}${by ? ` by ${by}` : ''}`
 }
 
 const RECEIPT_STATUS_LABELS: Record<PurchaseOrderReceiptStatus, string> = {
@@ -291,6 +368,7 @@ const paymentSchema = z.object({
   payment_method: z.string(),
   reference_number: z.string(),
   notes: z.string(),
+  is_final: z.boolean(),
 })
 
 type PaymentFormValues = z.infer<typeof paymentSchema>
@@ -301,6 +379,7 @@ const emptyPaymentDefaults: PaymentFormValues = {
   payment_method: '',
   reference_number: '',
   notes: '',
+  is_final: false,
 }
 
 const cancelPaymentSchema = z.object({
@@ -308,20 +387,6 @@ const cancelPaymentSchema = z.object({
 })
 
 type CancelPaymentFormValues = z.infer<typeof cancelPaymentSchema>
-
-const createReceiptSchema = z.object({
-  receipt_date: z.string().min(1, 'Receipt date is required'),
-  supplier_delivery_reference: z.string(),
-  notes: z.string(),
-})
-
-type CreateReceiptFormValues = z.infer<typeof createReceiptSchema>
-
-const emptyCreateReceiptDefaults: CreateReceiptFormValues = {
-  receipt_date: new Date().toISOString().slice(0, 10),
-  supplier_delivery_reference: '',
-  notes: '',
-}
 
 const reverseReceiptSchema = z.object({
   reason: z.string().min(1, 'A reason is required to reverse a goods receipt.'),
@@ -353,7 +418,7 @@ async function fetchPurchaseOrders({
 }
 
 function lineRemaining(line: PurchaseOrderLine): number {
-  return Number(line.quantity) - Number(line.received_quantity)
+  return Number(line.quantity) - Number(line.cancelled_quantity) - Number(line.received_quantity)
 }
 
 function formatBytes(size: number): string {
@@ -406,10 +471,13 @@ export function PurchaseOrdersPage() {
   const [cancelPaymentTarget, setCancelPaymentTarget] = useState<PurchaseOrderPayment | null>(null)
   const [cancelPaymentError, setCancelPaymentError] = useState<string | null>(null)
 
-  const [receiveQuantities, setReceiveQuantities] = useState<Record<number, string>>({})
-  const [createReceiptFiles, setCreateReceiptFiles] = useState<File[]>([])
-  const [createReceiptBusy, setCreateReceiptBusy] = useState(false)
-  const [createReceiptError, setCreateReceiptError] = useState<string | null>(null)
+  const [resolveNotes, setResolveNotes] = useState<Record<number, string>>({})
+  const [resolveChoice, setResolveChoice] = useState<Record<number, string>>({})
+  const [followUpMessage, setFollowUpMessage] = useState('')
+  const [followUpSubject, setFollowUpSubject] = useState('')
+  const [followUpAttachPdf, setFollowUpAttachPdf] = useState(false)
+  const [followUpFiles, setFollowUpFiles] = useState<File[]>([])
+  const [followUpError, setFollowUpError] = useState<string | null>(null)
 
   const [expandedReceipt, setExpandedReceipt] = useState<number | null>(null)
   const [postReceiptBusy, setPostReceiptBusy] = useState(false)
@@ -436,10 +504,6 @@ export function PurchaseOrdersPage() {
   const cancelPaymentForm = useForm<CancelPaymentFormValues>({
     resolver: zodResolver(cancelPaymentSchema),
     defaultValues: { reason: '' },
-  })
-  const createReceiptForm = useForm<CreateReceiptFormValues>({
-    resolver: zodResolver(createReceiptSchema),
-    defaultValues: emptyCreateReceiptDefaults,
   })
   const reverseReceiptForm = useForm<ReverseReceiptFormValues>({
     resolver: zodResolver(reverseReceiptSchema),
@@ -473,7 +537,7 @@ export function PurchaseOrdersPage() {
         apiClient.get<PaginatedResponse<LookupOption>>('/api/suppliers', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/warehouses', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/raw-materials', { params: { page_size: 200 } }),
-        apiClient.get<PaginatedResponse<LookupOption>>('/api/units', { params: { page_size: 200 } }),
+        apiClient.get<PaginatedResponse<LookupOption>>('/api/units-of-measure', { params: { page_size: 200 } }),
       ])
       setSuppliers(suppliersResponse.data.data)
       setWarehouses(warehousesResponse.data.data)
@@ -557,10 +621,13 @@ export function PurchaseOrdersPage() {
     setDetailError(null)
     setLineFormOpen(false)
     setPaymentFormOpen(false)
-    setReceiveQuantities({})
-    setCreateReceiptFiles([])
-    setCreateReceiptError(null)
-    createReceiptForm.reset(emptyCreateReceiptDefaults)
+    setResolveNotes({})
+    setResolveChoice({})
+    setFollowUpMessage('')
+    setFollowUpSubject('')
+    setFollowUpAttachPdf(false)
+    setFollowUpFiles([])
+    setFollowUpError(null)
     setExpandedRevision(null)
     setExpandedReceipt(null)
     setPostReceiptError(null)
@@ -688,6 +755,7 @@ export function PurchaseOrdersPage() {
           payment_method: values.payment_method || null,
           reference_number: values.reference_number || null,
           notes: values.notes || null,
+          is_final: values.is_final,
           file_ids: fileIds,
         })
         setPaymentFormOpen(false)
@@ -722,50 +790,54 @@ export function PurchaseOrdersPage() {
     [cancelPaymentTarget, detailTarget, refreshDetail],
   )
 
-  const onCreateReceiptSubmit = useCallback(
-    async (values: CreateReceiptFormValues) => {
-      if (!detailTarget) return
-      const lines = Object.entries(receiveQuantities)
-        .filter(([, qty]) => qty && Number(qty) > 0)
-        .map(([lineId, qty]) => ({ purchase_order_line_id: Number(lineId), quantity: qty }))
-      if (lines.length === 0) {
-        setCreateReceiptError('Enter a quantity for at least one line.')
-        return
-      }
-      setCreateReceiptBusy(true)
-      setCreateReceiptError(null)
-      try {
-        const fileIds: number[] = []
-        for (const file of createReceiptFiles) {
-          const form = new FormData()
-          form.append('upload', file)
-          const { data } = await apiClient.post<{ id: number }>('/api/files', form)
-          fileIds.push(data.id)
-        }
-        await apiClient.post(`/api/purchase-orders/${detailTarget.id}/receipts`, {
-          receipt_date: values.receipt_date,
-          supplier_delivery_reference: values.supplier_delivery_reference || null,
-          notes: values.notes || null,
-          lines,
-          file_ids: fileIds,
-        })
-        setReceiveQuantities({})
-        setCreateReceiptFiles([])
-        createReceiptForm.reset(emptyCreateReceiptDefaults)
-        await refreshDetail(detailTarget.id)
-      } catch (err) {
-        setCreateReceiptError(err instanceof ApiError ? err.message : 'Failed to create goods receipt.')
-      } finally {
-        setCreateReceiptBusy(false)
-      }
-    },
-    [createReceiptFiles, createReceiptForm, detailTarget, receiveQuantities, refreshDetail],
-  )
+  /** The PO creator's documented decision on a discrepancy. */
+  async function resolveReconciliation(reconciliation: PurchaseOrderReconciliation) {
+    const resolution = resolveChoice[reconciliation.id] ?? RESOLUTIONS[reconciliation.kind][0].value
+    const note = (resolveNotes[reconciliation.id] ?? '').trim()
+    if (!note) {
+      setDetailError('Document the resolution in the note.')
+      return
+    }
+    await runAction(
+      `resolve-${reconciliation.id}`,
+      () => apiClient.post(poUrl(`/reconciliations/${reconciliation.id}/resolve`), { resolution, note }),
+      'Failed to resolve the discrepancy.',
+    )
+  }
 
-  function defaultReceiveQuantity(line: PurchaseOrderLine): string {
-    if (receiveQuantities[line.id] !== undefined) return receiveQuantities[line.id]
-    const remaining = lineRemaining(line)
-    return remaining > 0 ? String(remaining) : ''
+  async function submitFollowUp(sendEmail: boolean) {
+    if (!detailTarget) return
+    if (!followUpMessage.trim()) {
+      setFollowUpError('Enter a message.')
+      return
+    }
+    setActionBusy(sendEmail ? 'follow-up' : 'reply')
+    setFollowUpError(null)
+    try {
+      const fileIds: number[] = []
+      for (const file of followUpFiles) {
+        const form = new FormData()
+        form.append('upload', file)
+        const { data } = await apiClient.post<{ id: number }>('/api/files', form)
+        fileIds.push(data.id)
+      }
+      await apiClient.post(poUrl('/follow-ups'), {
+        send_email: sendEmail,
+        subject: followUpSubject.trim() || null,
+        message: followUpMessage.trim(),
+        attach_po_pdf: sendEmail && followUpAttachPdf,
+        file_ids: fileIds,
+      })
+      setFollowUpMessage('')
+      setFollowUpSubject('')
+      setFollowUpAttachPdf(false)
+      setFollowUpFiles([])
+    } catch (err) {
+      setFollowUpError(err instanceof ApiError ? err.message : 'Failed to save the follow-up.')
+    } finally {
+      await refreshDetail(detailTarget.id)
+      setActionBusy(null)
+    }
   }
 
   async function postReceipt(receipt: PurchaseOrderReceipt) {
@@ -837,12 +909,14 @@ export function PurchaseOrdersPage() {
   const canReceive = detailTarget?.status === 'sent' || detailTarget?.status === 'partially_received'
   const canCancelStatus = !!detailTarget && CANCELLABLE.includes(detailTarget.status)
   const hasPayments = !!detailTarget && !['draft', 'pending_approval'].includes(detailTarget.status)
+  const isOpen = !!detailTarget && !['draft', 'pending_approval', 'closed', 'cancelled'].includes(detailTarget.status)
+  const openToReceiving = (id: number) => navigate('/receiving', { state: { openPurchaseOrderId: id } })
 
   const columns: DataTableColumn<PurchaseOrder>[] = [
     { key: 'po_number', label: 'PO Number', render: (po) => po.po_number },
     { key: 'supplier', label: 'Supplier', render: (po) => suppliersById.get(po.supplier_id)?.name ?? `#${po.supplier_id}` },
-    { key: 'order_date', label: 'Order Date', hideBelow: 'sm', render: (po) => po.order_date },
-    { key: 'expected', label: 'Expected Delivery', hideBelow: 'md', render: (po) => po.expected_delivery_date ?? '—' },
+    { key: 'order_date', label: 'Order Date', hideBelow: 'sm', render: (po) => formatDate(po.order_date) },
+    { key: 'expected', label: 'Expected Delivery', hideBelow: 'md', render: (po) => formatDate(po.expected_delivery_date) },
     { key: 'total', label: 'Total', hideBelow: 'md', render: (po) => `${po.total_amount} ${po.currency}` },
     { key: 'status', label: 'Status', render: (po) => <Badge tone={STATUS_TONES[po.status]}>{STATUS_LABELS[po.status]}</Badge> },
     {
@@ -866,9 +940,11 @@ export function PurchaseOrdersPage() {
           if (po.status === 'pending_approval') options.push({ key: 'approve', label: 'Approve...', onSelect: () => openDetail(po) })
           if (po.status === 'approved') options.push({ key: 'send', label: 'Send...', onSelect: () => openDetail(po) })
           if (po.status === 'sent' || po.status === 'partially_received')
-            options.push({ key: 'receive', label: 'Receive...', onSelect: () => openDetail(po) })
-          if (!['draft', 'pending_approval', 'cancelled'].includes(po.status))
-            options.push({ key: 'payment', label: 'Payments...', onSelect: () => openDetail(po) })
+            options.push({ key: 'receive', label: 'Receive Goods...', onSelect: () => openToReceiving(po.id) })
+          if (po.status === 'reconciliation_required' || po.status === 'payment_reconciliation')
+            options.push({ key: 'reconcile', label: 'Resolve Discrepancy...', onSelect: () => openDetail(po) })
+          if (!['draft', 'pending_approval', 'cancelled', 'closed'].includes(po.status))
+            options.push({ key: 'payment', label: 'Payments / Follow-up...', onSelect: () => openDetail(po) })
           if (CANCELLABLE.includes(po.status)) options.push({ key: 'cancel', label: 'Cancel', danger: true, onSelect: () => openCancel(po) })
         }
         return <ActionMenu label={`Actions for ${po.po_number}`} options={options} />
@@ -880,7 +956,7 @@ export function PurchaseOrdersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Purchase Orders"
-        subtitle="Draft → Approval → Sent → Payment → Goods Receipt → Inventory."
+        subtitle="Approval → Sent → Follow-up → Goods Receipt → Reconciliation → Payment → Closed."
         actions={canManage ? <Button onClick={openCreate}>New Purchase</Button> : undefined}
       />
 
@@ -995,8 +1071,8 @@ export function PurchaseOrdersPage() {
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
               <div><span className="text-gold-100/50">Supplier: </span>{suppliersById.get(detailTarget.supplier_id)?.name ?? `#${detailTarget.supplier_id}`}</div>
               <div><span className="text-gold-100/50">Delivery Location: </span>{warehousesById.get(detailTarget.warehouse_id)?.name ?? `#${detailTarget.warehouse_id}`}</div>
-              <div><span className="text-gold-100/50">PO Date: </span>{detailTarget.order_date}</div>
-              <div><span className="text-gold-100/50">Expected Delivery: </span>{detailTarget.expected_delivery_date ?? '—'}</div>
+              <div><span className="text-gold-100/50">PO Date: </span>{formatDate(detailTarget.order_date)}</div>
+              <div><span className="text-gold-100/50">Expected Delivery: </span>{formatDate(detailTarget.expected_delivery_date)}</div>
               <div><span className="text-gold-100/50">Payment Terms: </span>{detailTarget.payment_terms ?? '—'}</div>
               <div><span className="text-gold-100/50">Currency: </span>{detailTarget.currency}</div>
               <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
@@ -1032,7 +1108,6 @@ export function PurchaseOrdersPage() {
                         <th className="py-2 pr-3">Line Total</th>
                         <th className="py-2 pr-3">Received</th>
                         <th className="py-2 pr-3">Remaining</th>
-                        {canReceive && <th className="py-2 pr-3">Receive Now</th>}
                         {canManage && detailTarget.status === 'draft' && <th className="py-2"></th>}
                       </tr>
                     </thead>
@@ -1044,30 +1119,19 @@ export function PurchaseOrdersPage() {
                             <td className="py-2 pr-3">
                               {materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}
                               {line.remarks && <span className="block text-xs text-gold-100/50">{line.remarks}</span>}
-                              {line.required_by_date && <span className="block text-xs text-gold-100/50">Required by {line.required_by_date}</span>}
+                              {line.required_by_date && <span className="block text-xs text-gold-100/50">Required by {formatDate(line.required_by_date)}</span>}
                             </td>
                             <td className="py-2 pr-3">{line.quantity}</td>
                             <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
                             <td className="py-2 pr-3">{line.unit_price}</td>
                             <td className="py-2 pr-3">{line.line_total}</td>
                             <td className="py-2 pr-3">{line.received_quantity}</td>
-                            <td className="py-2 pr-3">{remaining}</td>
-                            {canReceive && (
-                              <td className="py-2 pr-3">
-                                {remaining > 0 ? (
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max={remaining}
-                                    className="w-24 rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
-                                    value={defaultReceiveQuantity(line)}
-                                    onChange={(e) => setReceiveQuantities((prev) => ({ ...prev, [line.id]: e.target.value }))}
-                                  />
-                                ) : (
-                                  <span className="text-gold-100/40">—</span>
-                                )}
-                              </td>
-                            )}
+                            <td className="py-2 pr-3">
+                              {remaining}
+                              {Number(line.cancelled_quantity) > 0 && (
+                                <span className="block text-xs text-gold-100/50">{line.cancelled_quantity} cancelled</span>
+                              )}
+                            </td>
                             {canManage && detailTarget.status === 'draft' && (
                               <td className="py-2 text-right">
                                 <ActionMenu
@@ -1117,37 +1181,10 @@ export function PurchaseOrdersPage() {
                 </form>
               )}
 
-              {canManage && canReceive && (
-                <form onSubmit={createReceiptForm.handleSubmit(onCreateReceiptSubmit)} className="mt-4 flex flex-col gap-4 rounded-md border border-ink-700 p-4">
-                  <h4 className="text-xs uppercase tracking-wide text-gold-100/50">New Goods Receipt</h4>
-                  <Alert variant="danger">{createReceiptError}</Alert>
-                  <p className="text-sm text-gold-100/70">
-                    Enter what actually arrived in the "Receive Now" column above, then create the receipt as a
-                    draft here -- it has no effect on stock until it's posted below.
-                  </p>
-                  <DateField
-                    label="Receipt Date"
-                    required
-                    {...createReceiptForm.register('receipt_date')}
-                    error={createReceiptForm.formState.errors.receipt_date?.message}
-                  />
-                  <TextField
-                    label="Supplier Delivery Reference"
-                    hint="Optional -- the supplier's own delivery note / DN number, if available."
-                    {...createReceiptForm.register('supplier_delivery_reference')}
-                  />
-                  <FileUploadField
-                    label="Evidence (delivery note, packing slip, photo, etc.)"
-                    multiple
-                    accept=".pdf,.png,.jpg,.jpeg"
-                    value={createReceiptFiles}
-                    onChange={setCreateReceiptFiles}
-                  />
-                  <TextareaField label="Notes" {...createReceiptForm.register('notes')} />
-                  <div>
-                    <Button type="submit" isLoading={createReceiptBusy}>Create Receipt</Button>
-                  </div>
-                </form>
+              {canReceive && (
+                <Button type="button" variant="secondary" className="mt-2" onClick={() => openToReceiving(detailTarget.id)}>
+                  Open in Goods Receiving
+                </Button>
               )}
             </div>
 
@@ -1172,7 +1209,11 @@ export function PurchaseOrdersPage() {
                       <>
                         <tr key={receipt.id} className="border-t border-ink-700 align-top">
                           <td className="py-2 pr-3">{receipt.receipt_number}</td>
-                          <td className="py-2 pr-3">{receipt.receipt_date}</td>
+                          <td className="py-2 pr-3">
+                            {formatDate(receipt.receipt_date)}
+                            {receipt.days_late > 0 && <span className="block text-xs text-warning-500">{receipt.days_late} day(s) late</span>}
+                            {receipt.received_by_name && <span className="block text-xs text-gold-100/50">by {receipt.received_by_name}</span>}
+                          </td>
                           <td className="py-2 pr-3">{receipt.supplier_delivery_reference ?? '—'}</td>
                           <td className="py-2 pr-3">
                             <Badge tone={RECEIPT_STATUS_TONES[receipt.status]}>{RECEIPT_STATUS_LABELS[receipt.status]}</Badge>
@@ -1231,6 +1272,7 @@ export function PurchaseOrdersPage() {
                                       <td className="py-1 pr-3">
                                         {line.quantity}{' '}
                                         {unitCode(detailTarget.lines.find((l) => l.id === line.purchase_order_line_id)?.unit_of_measure_id ?? null)}
+                                        {line.remarks && <span className="block text-gold-100/50">{line.remarks}</span>}
                                       </td>
                                     </tr>
                                   ))}
@@ -1255,7 +1297,10 @@ export function PurchaseOrdersPage() {
                     <Badge tone={PAYMENT_STATUS_TONES[detailTarget.payment_status]}>{PAYMENT_STATUS_LABELS[detailTarget.payment_status]}</Badge>
                   </h3>
                   <div className="text-sm">
-                    <span className="text-gold-100/50">Total </span>{detailTarget.total_amount} {detailTarget.currency}
+                    <span className="text-gold-100/50">PO Amount </span>{detailTarget.final_amount} {detailTarget.currency}
+                    {detailTarget.final_amount !== detailTarget.total_amount && (
+                      <span className="text-gold-100/40"> (ordered {detailTarget.total_amount})</span>
+                    )}
                     <span className="mx-2 text-gold-100/30">|</span>
                     <span className="text-gold-100/50">Paid </span>{detailTarget.paid_amount}
                     <span className="mx-2 text-gold-100/30">|</span>
@@ -1280,8 +1325,11 @@ export function PurchaseOrdersPage() {
                     <tbody>
                       {detailTarget.payments.map((payment) => (
                         <tr key={payment.id} className="border-t border-ink-700 align-top">
-                          <td className="py-2 pr-3">{payment.payment_date}</td>
-                          <td className="py-2 pr-3">{payment.amount}</td>
+                          <td className="py-2 pr-3">{formatDate(payment.payment_date)}</td>
+                          <td className="py-2 pr-3">
+                            {payment.amount}
+                            {payment.is_final && <span className="block text-xs text-gold-100/50">Final payment</span>}
+                          </td>
                           <td className="py-2 pr-3">{payment.payment_method ?? '—'}</td>
                           <td className="py-2 pr-3">{payment.reference_number ?? '—'}</td>
                           <td className="py-2 pr-3">
@@ -1313,7 +1361,7 @@ export function PurchaseOrdersPage() {
                     </tbody>
                   </table>
                 )}
-                {canManage && !paymentFormOpen && detailTarget.status !== 'cancelled' && (
+                {canManage && !paymentFormOpen && isOpen && (
                   <Button type="button" variant="secondary" className="mt-2" onClick={openRecordPayment}>Record Payment</Button>
                 )}
                 {canManage && paymentFormOpen && (
@@ -1325,11 +1373,115 @@ export function PurchaseOrdersPage() {
                     <TextField label="Reference No." {...paymentForm.register('reference_number')} />
                     <FileUploadField label="Attachment" multiple accept=".pdf,.png,.jpg,.jpeg" value={paymentFiles} onChange={setPaymentFiles} />
                     <TextareaField label="Notes" {...paymentForm.register('notes')} />
+                    <CheckboxField
+                      label="Final payment — this settles the PO"
+                      hint="If the total paid then differs from the PO amount, it goes back to the PO creator."
+                      {...paymentForm.register('is_final')}
+                    />
                     <div className="flex gap-2">
                       <Button type="submit" isLoading={paymentForm.formState.isSubmitting}>Save Payment</Button>
                       <Button type="button" variant="secondary" onClick={() => setPaymentFormOpen(false)}>Cancel</Button>
                     </div>
                   </form>
+                )}
+              </div>
+            )}
+
+            {/* Reconciliation */}
+            {detailTarget.reconciliations.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Reconciliation</h3>
+                <div className="flex flex-col gap-3">
+                  {detailTarget.reconciliations.map((rec) => (
+                    <div key={rec.id} className={`rounded-md border p-3 text-sm ${rec.status === 'open' ? 'border-danger-500' : 'border-ink-700'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          <Badge tone={rec.status === 'open' ? 'danger' : 'success'}>
+                            {`${rec.kind === 'receipt' ? 'Receipt' : 'Payment'} — ${rec.status === 'open' ? 'Open' : 'Resolved'}`}
+                          </Badge>{' '}
+                          <span className="text-xs text-gold-100/50">{formatKuwaitTime(rec.created_at)}</span>
+                        </span>
+                      </div>
+                      <p className="mt-1">{rec.discrepancy}</p>
+                      {rec.status === 'resolved' ? (
+                        <p className="mt-1 text-gold-100/70">
+                          {RESOLUTION_LABELS[rec.resolution ?? ''] ?? rec.resolution}: {rec.resolution_note}
+                          <span className="block text-xs text-gold-100/50">{stamp(rec.resolved_at, rec.resolved_by_name)}</span>
+                        </p>
+                      ) : (
+                        canManage && (
+                          <div className="mt-2 flex flex-col gap-2">
+                            <SelectField
+                              label="Resolution"
+                              value={resolveChoice[rec.id] ?? RESOLUTIONS[rec.kind][0].value}
+                              onChange={(e) => setResolveChoice((prev) => ({ ...prev, [rec.id]: e.target.value }))}
+                            >
+                              {RESOLUTIONS[rec.kind].map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </SelectField>
+                            <TextareaField
+                              label="Resolution note"
+                              required
+                              hint={rec.kind === 'receipt' ? 'e.g. supplier sends balance Friday; substitution accepted; material rejected (reverse the receipt).' : 'e.g. agreed discount; Finance to refund.'}
+                              value={resolveNotes[rec.id] ?? ''}
+                              onChange={(e) => setResolveNotes((prev) => ({ ...prev, [rec.id]: e.target.value }))}
+                            />
+                            <div>
+                              <Button onClick={() => resolveReconciliation(rec)} isLoading={actionBusy === `resolve-${rec.id}`}>Resolve</Button>
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Supplier follow-up */}
+            {(detailTarget.communications.length > 0 || isOpen) && (
+              <div>
+                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Supplier Follow-up</h3>
+                {detailTarget.communications.length > 0 && (
+                  <ul className="flex flex-col gap-2 text-sm">
+                    {detailTarget.communications.map((entry) => (
+                      <li key={entry.id} className="rounded-md border border-ink-700 p-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-gold-100/50">{formatKuwaitTime(entry.created_at)}</span>
+                          <span>{COMMUNICATION_LABELS[entry.kind]}</span>
+                          {entry.status === 'failed' && <Badge tone="danger">Failed</Badge>}
+                          {entry.recipient && <span className="text-xs text-gold-100/50">to {entry.recipient}</span>}
+                          {entry.sent_by_name && <span className="text-xs text-gold-100/50">by {entry.sent_by_name}</span>}
+                        </div>
+                        {entry.subject && <div className="mt-1 font-medium">{entry.subject}</div>}
+                        {entry.message && <div className="mt-1 whitespace-pre-line text-gold-100/80">{entry.message}</div>}
+                        {entry.error && <div className="mt-1 text-xs text-danger-500">{entry.error}</div>}
+                        {entry.files.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {entry.files.map((file) => (
+                              <button key={file.id} type="button" onClick={() => downloadFile(file)} className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400">
+                                {file.original_filename}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {canManage && isOpen && (
+                  <div className="mt-2 flex flex-col gap-3 rounded-md border border-ink-700 p-3">
+                    <Alert variant="danger">{followUpError}</Alert>
+                    <TextField label="Subject" placeholder={`Follow-up: Purchase Order ${detailTarget.po_number}`} value={followUpSubject} onChange={(e) => setFollowUpSubject(e.target.value)} />
+                    <TextareaField label="Message" required value={followUpMessage} onChange={(e) => setFollowUpMessage(e.target.value)} />
+                    <CheckboxField label="Attach the PO PDF" checked={followUpAttachPdf} onChange={(e) => setFollowUpAttachPdf(e.target.checked)} />
+                    <FileUploadField label="Attachment" multiple accept=".pdf,.png,.jpg,.jpeg" value={followUpFiles} onChange={setFollowUpFiles} />
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={() => submitFollowUp(true)} isLoading={actionBusy === 'follow-up'}>Send Follow-up Email</Button>
+                      <Button variant="secondary" onClick={() => submitFollowUp(false)} isLoading={actionBusy === 'reply'}>Record Supplier Reply</Button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -1353,7 +1505,7 @@ export function PurchaseOrdersPage() {
                       <>
                         <tr key={revision.id} className="border-t border-ink-700">
                           <td className="py-2 pr-3">{revision.revision_number}</td>
-                          <td className="py-2 pr-3">{new Date(revision.issued_at).toLocaleString()}</td>
+                          <td className="py-2 pr-3">{formatKuwaitTime(revision.issued_at)}</td>
                           <td className="py-2 pr-3">{revision.total_amount}</td>
                           <td className="py-2 pr-3">
                             {revision.pdf_file ? (

@@ -1,6 +1,6 @@
 """Tests for docs/modules/purchase_orders.md Revision 3: supplier
 payments against a PO -- payment number format/yearly reset, recording
-a payment (only once issued, never exceeding the outstanding amount),
+a payment (only once approved; an overpayment goes to reconciliation),
 partial payments summing correctly toward paid/outstanding, cancelling
 a payment (never a hard delete, stays visible with its original amount),
 the separate purchase_payment permission grant (so Finance can be
@@ -111,10 +111,13 @@ def test_zero_and_negative_amount_rejected(client, admin_headers, acme_supplier,
     assert _record_payment(client, admin_headers, po["id"], "-50").status_code == 422
 
 
-def test_cannot_overpay(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+def test_overpayment_is_recorded_and_returned_to_the_creator(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
     po = _issued_po_with_line(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material)  # total = 1000
     response = _record_payment(client, admin_headers, po["id"], "1000.01")
-    assert response.status_code == 422
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "payment_reconciliation"
+    assert body["reconciliations"][0]["kind"] == "payment"
 
 
 def test_partial_payments_and_outstanding(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session):
@@ -188,7 +191,6 @@ def test_cancelling_a_payment_frees_up_room_for_a_new_one(
 ):
     po = _issued_po_with_line(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material)  # total = 1000
     payment_id = _record_payment(client, admin_headers, po["id"], "1000").json()["payments"][0]["id"]
-    assert _record_payment(client, admin_headers, po["id"], "1").status_code == 422  # already fully paid
 
     _cancel_payment(client, admin_headers, po["id"], payment_id)
     response = _record_payment(client, admin_headers, po["id"], "1000")

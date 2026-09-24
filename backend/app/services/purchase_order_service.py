@@ -21,12 +21,24 @@ from app.models.purchase_order import (
     ALLOWED_RECEIPT_STATUS_TRANSITIONS,
     ALLOWED_STATUS_TRANSITIONS,
     APPROVED,
+    CLOSED,
     DEFAULT_CURRENCY,
     DRAFT,
+    FULFILMENT_STATUSES,
     PARTIALLY_RECEIVED,
     PAYMENT_CANCELLED,
+    PAYMENT_RECONCILIATION,
     PAYMENT_RECORDED,
+    PAYMENT_RESOLUTIONS,
     PENDING_APPROVAL,
+    RECEIPT_RESOLUTIONS,
+    RECONCILIATION_OPEN,
+    RECONCILIATION_PAYMENT,
+    RECONCILIATION_RECEIPT,
+    RECONCILIATION_REQUIRED,
+    RECONCILIATION_RESOLVED,
+    RESOLVE_ACCEPT_PAID_AMOUNT,
+    RESOLVE_CANCEL_REMAINING,
     RECEIPT_CANCELLED,
     RECEIPT_DRAFT,
     RECEIPT_POSTED,
@@ -38,6 +50,7 @@ from app.models.purchase_order import (
     PurchaseOrderPayment,
     PurchaseOrderReceipt,
     PurchaseOrderReceiptLine,
+    PurchaseOrderReconciliation,
     PurchaseOrderRevision,
     PurchaseOrderRevisionLine,
 )
@@ -52,8 +65,9 @@ _MAX_YEARLY_RECEIPT_SEQUENCE = 9999
 # against a PO that has been sent to the supplier.
 _RECEIVABLE_STATUSES = (SENT, PARTIALLY_RECEIVED)
 # docs/modules/purchase_orders.md #30 -- a payment is only meaningful
-# once the PO is approved (its total is fixed) and not cancelled.
-_PAYABLE_STATUSES = (APPROVED, SENT, PARTIALLY_RECEIVED, RECEIVED)
+# once the PO is approved (its total is fixed), and never once it is
+# closed or cancelled.
+_PAYABLE_STATUSES = (APPROVED, SENT, PARTIALLY_RECEIVED, RECONCILIATION_REQUIRED, RECEIVED, PAYMENT_RECONCILIATION)
 
 UNPAID = "unpaid"
 PARTIALLY_PAID = "partially_paid"
@@ -212,6 +226,158 @@ def total_amount(lines: list[PurchaseOrderLine]) -> Decimal:
     return total
 
 
+def final_amount(purchase_order: PurchaseOrder, lines: list[PurchaseOrderLine]) -> Decimal:
+    """What JDK finally owes: every line's ordered quantity less any
+    cancelled remainder, at its agreed price, plus a creator-accepted
+    payment adjustment (docs/modules/purchase_orders.md Revision 6)."""
+    total = Decimal("0")
+    for line in lines:
+        total += compute_line_total(line.quantity - line.cancelled_quantity, line.unit_price)
+    return total + purchase_order.amount_adjustment
+
+
+def _lines(db: Session, purchase_order: PurchaseOrder) -> list[PurchaseOrderLine]:
+    return (
+        db.query(PurchaseOrderLine)
+        .filter(PurchaseOrderLine.purchase_order_id == purchase_order.id)
+        .order_by(PurchaseOrderLine.id)
+        .all()
+    )
+
+
+def _paid(db: Session, purchase_order: PurchaseOrder) -> Decimal:
+    return paid_amount(
+        db.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.purchase_order_id == purchase_order.id).all()
+    )
+
+
+def _open_reconciliations(db: Session, purchase_order: PurchaseOrder) -> list[PurchaseOrderReconciliation]:
+    return (
+        db.query(PurchaseOrderReconciliation)
+        .filter(
+            PurchaseOrderReconciliation.purchase_order_id == purchase_order.id,
+            PurchaseOrderReconciliation.status == RECONCILIATION_OPEN,
+        )
+        .all()
+    )
+
+
+def _open(db: Session, purchase_order: PurchaseOrder, kind: str, discrepancy: str) -> None:
+    """Returns the PO to its creator -- one open reconciliation per kind."""
+    if any(rec.kind == kind for rec in _open_reconciliations(db, purchase_order)):
+        return
+    db.add(PurchaseOrderReconciliation(purchase_order_id=purchase_order.id, kind=kind, discrepancy=discrepancy))
+    db.flush()
+
+
+def _fmt(value: Decimal) -> str:
+    return f"{value.normalize():,f}"
+
+
+def check_receipt_discrepancy(db: Session, purchase_order: PurchaseOrder, material_names: dict[int, str]) -> None:
+    """After a receipt posts: any line still short of what is expected
+    (ordered less cancelled) is a quantity discrepancy for the creator.
+    Material and supplier always match by construction -- a receipt can
+    only reference this PO's own lines."""
+    short = [
+        line for line in _lines(db, purchase_order) if line.received_quantity < line.quantity - line.cancelled_quantity
+    ]
+    if short:
+        details = "; ".join(
+            f"{material_names.get(line.raw_material_id, f'#{line.raw_material_id}')}: ordered "
+            f"{_fmt(line.quantity - line.cancelled_quantity)}, received {_fmt(line.received_quantity)}"
+            for line in short
+        )
+        _open(db, purchase_order, RECONCILIATION_RECEIPT, f"Quantity short -- {details}.")
+
+
+def check_payment_discrepancy(db: Session, purchase_order: PurchaseOrder, *, final_payment: bool) -> None:
+    """Paid more than the final amount, or a payment marked final that
+    doesn't settle it exactly: returned to the creator instead of closing."""
+    final = final_amount(purchase_order, _lines(db, purchase_order))
+    paid = _paid(db, purchase_order)
+    if paid > final or (final_payment and paid != final):
+        _open(
+            db,
+            purchase_order,
+            RECONCILIATION_PAYMENT,
+            f"Paid {_fmt(paid)} {purchase_order.currency} against a PO amount of {_fmt(final)} "
+            f"{purchase_order.currency} (difference {_fmt(paid - final)}).",
+        )
+
+
+def refresh_status(db: Session, purchase_order: PurchaseOrder) -> None:
+    """Derives the status of an approved PO (docs/modules/purchase_orders.md
+    Revision 6). A PO closes only when everything expected has been
+    received, no discrepancy is open, and the amount paid equals the final
+    amount."""
+    if purchase_order.status not in FULFILMENT_STATUSES or purchase_order.status == CLOSED:
+        return
+    open_kinds = {rec.kind for rec in _open_reconciliations(db, purchase_order)}
+    lines = _lines(db, purchase_order)
+    any_received = any(line.received_quantity > 0 for line in lines)
+    all_received = bool(lines) and all(line.received_quantity >= line.quantity - line.cancelled_quantity for line in lines)
+
+    if RECONCILIATION_RECEIPT in open_kinds:
+        status = RECONCILIATION_REQUIRED
+    elif RECONCILIATION_PAYMENT in open_kinds:
+        status = PAYMENT_RECONCILIATION
+    elif all_received and any_received:
+        status = CLOSED if _paid(db, purchase_order) == final_amount(purchase_order, lines) else RECEIVED
+    elif any_received:
+        status = PARTIALLY_RECEIVED
+    else:
+        status = SENT if purchase_order.sent_at else APPROVED
+    purchase_order.status = status
+    db.add(purchase_order)
+    db.flush()
+
+
+def resolve_reconciliation(
+    db: Session,
+    *,
+    purchase_order: PurchaseOrder,
+    reconciliation: PurchaseOrderReconciliation,
+    resolution: str,
+    note: str,
+    resolved_by_user_id: int | None,
+) -> None:
+    """The creator's documented decision on an open discrepancy."""
+    if reconciliation.status != RECONCILIATION_OPEN:
+        raise BusinessRuleError("This discrepancy has already been resolved.")
+    allowed = RECEIPT_RESOLUTIONS if reconciliation.kind == RECONCILIATION_RECEIPT else PAYMENT_RESOLUTIONS
+    if resolution not in allowed:
+        raise ValidationError(
+            f"'{resolution}' is not a valid resolution for this discrepancy.",
+            fields={"resolution": f"Must be one of {allowed}."},
+        )
+
+    lines = _lines(db, purchase_order)
+    if resolution == RESOLVE_CANCEL_REMAINING:
+        if not any(line.received_quantity > 0 for line in lines):
+            raise BusinessRuleError("Nothing has been received -- cancel the purchase order instead.")
+        for line in lines:
+            line.cancelled_quantity = max(line.quantity - line.received_quantity, Decimal("0"))
+            db.add(line)
+        db.flush()
+    elif resolution == RESOLVE_ACCEPT_PAID_AMOUNT:
+        purchase_order.amount_adjustment += _paid(db, purchase_order) - final_amount(purchase_order, lines)
+        db.add(purchase_order)
+
+    reconciliation.status = RECONCILIATION_RESOLVED
+    reconciliation.resolution = resolution
+    reconciliation.resolution_note = note
+    reconciliation.resolved_at = datetime.utcnow()
+    reconciliation.resolved_by_user_id = resolved_by_user_id
+    db.add(reconciliation)
+    db.flush()
+
+    if resolution == RESOLVE_CANCEL_REMAINING:
+        # A smaller final amount can leave the PO overpaid.
+        check_payment_discrepancy(db, purchase_order, final_payment=False)
+    refresh_status(db, purchase_order)
+
+
 def submit_for_approval(db: Session, *, purchase_order: PurchaseOrder) -> None:
     """`draft -> pending_approval`. Every required field must be present:
     at least one item, expected delivery date, payment terms, currency
@@ -329,6 +495,7 @@ def create_receipt(
     notes: str | None,
     entries: list[tuple[int, Decimal]],
     created_by_user_id: int | None,
+    remarks: dict[int, str | None] | None = None,
 ) -> PurchaseOrderReceipt:
     """docs/modules/purchase_orders.md #37/#39. `entries` is a list of
     (purchase_order_line_id, quantity) pairs, all belonging to
@@ -360,7 +527,7 @@ def create_receipt(
             raise ValidationError("One or more lines do not belong to this purchase order.")
         if quantity <= 0:
             raise ValidationError("Received quantity must be greater than zero.")
-        remaining = line.quantity - line.received_quantity
+        remaining = line.quantity - line.cancelled_quantity - line.received_quantity
         if quantity > remaining:
             raise ValidationError(
                 f"Cannot receive {quantity} for raw material #{line.raw_material_id} -- "
@@ -401,6 +568,7 @@ def create_receipt(
                 purchase_order_line_id=line.id,
                 raw_material_id=line.raw_material_id,
                 quantity=quantity,
+                remarks=(remarks or {}).get(line.id),
             )
         )
     db.flush()
@@ -436,7 +604,8 @@ def post_receipt(db: Session, *, receipt: PurchaseOrderReceipt, purchase_order: 
             db.query(PurchaseOrderLine)
             .filter(
                 PurchaseOrderLine.id == receipt_line.purchase_order_line_id,
-                PurchaseOrderLine.received_quantity + receipt_line.quantity <= PurchaseOrderLine.quantity,
+                PurchaseOrderLine.received_quantity + receipt_line.quantity
+                <= PurchaseOrderLine.quantity - PurchaseOrderLine.cancelled_quantity,
             )
             .update(
                 {"received_quantity": PurchaseOrderLine.received_quantity + receipt_line.quantity},
@@ -461,7 +630,13 @@ def post_receipt(db: Session, *, receipt: PurchaseOrderReceipt, purchase_order: 
         )
 
     db.flush()
-    _recompute_status(db, purchase_order)
+    material_names = dict(
+        db.query(RawMaterial.id, RawMaterial.name)
+        .filter(RawMaterial.id.in_({line.raw_material_id for line in receipt_lines}))
+        .all()
+    )
+    check_receipt_discrepancy(db, purchase_order, material_names)
+    refresh_status(db, purchase_order)
 
 
 def cancel_receipt(db: Session, *, receipt: PurchaseOrderReceipt, cancelled_by_user_id: int | None) -> None:
@@ -529,7 +704,7 @@ def reverse_receipt(
     receipt.reversal_reason = reason
     db.add(receipt)
     db.flush()
-    _recompute_status(db, purchase_order)
+    refresh_status(db, purchase_order)
 
 
 def _conversion_factors(db: Session, receipt_lines: list[PurchaseOrderReceiptLine]) -> dict[int, Decimal]:
@@ -543,20 +718,6 @@ def _stock_quantity(quantity: Decimal, factor: Decimal) -> Decimal:
     """Receipts are in the PO line's purchase unit; stock is always kept
     in the material's own unit."""
     return quantity if factor == 1 else (quantity * factor).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-
-
-def _recompute_status(db: Session, purchase_order: PurchaseOrder) -> None:
-    """Called after both post_receipt and reverse_receipt -- a reversal
-    can bring every line's received_quantity back to zero, which reverts
-    the PO to `sent`, the status it was in before its first receipt."""
-    lines = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.purchase_order_id == purchase_order.id).all()
-    if all(line.received_quantity >= line.quantity for line in lines):
-        purchase_order.status = RECEIVED
-    elif any(line.received_quantity > 0 for line in lines):
-        purchase_order.status = PARTIALLY_RECEIVED
-    else:
-        purchase_order.status = SENT
-    db.add(purchase_order)
 
 
 def generate_payment_number(db: Session, organisation_id: int, today: date | None = None) -> str:
@@ -599,6 +760,7 @@ def record_payment(
     reference_number: str | None,
     notes: str | None,
     created_by_user_id: int | None,
+    is_final: bool = False,
 ) -> PurchaseOrderPayment:
     """docs/modules/purchase_orders.md #33 -- only valid once the PO has
     been issued (its total is no longer a moving target) and isn't
@@ -610,16 +772,12 @@ def record_payment(
     low-concurrency finance entries, not a high-contention counter, so
     that extra mechanism would be disproportionate here."""
     if purchase_order.status not in _PAYABLE_STATUSES:
-        raise BusinessRuleError("Payments can only be recorded against an approved purchase order.")
+        raise BusinessRuleError("Payments can only be recorded against an approved, open purchase order.")
     if amount <= 0:
         raise ValidationError("Payment amount must be greater than zero.")
-
-    outstanding = total_amount(current_lines) - paid_amount(existing_payments)
-    if amount > outstanding:
-        raise ValidationError(
-            f"Cannot record a payment of {amount} -- only {outstanding} remains outstanding on this purchase order.",
-            fields={"amount": "Exceeds the outstanding amount."},
-        )
+    # A payment that doesn't match is still recorded -- Finance records
+    # what was actually paid; the difference goes to the PO creator
+    # (check_payment_discrepancy, called by the API after this).
 
     for _ in range(_MAX_CODE_ATTEMPTS):
         payment = PurchaseOrderPayment(
@@ -632,6 +790,7 @@ def record_payment(
             reference_number=reference_number,
             notes=notes,
             status=PAYMENT_RECORDED,
+            is_final=is_final,
             created_by_user_id=created_by_user_id,
         )
         db.add(payment)

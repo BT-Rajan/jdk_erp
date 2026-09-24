@@ -20,6 +20,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from app.core.timezone import to_jdk_time
+
 _TABLE_HEADER_BG = colors.HexColor("#1a1a28")
 _TABLE_HEADER_FG = colors.white
 _TABLE_GRID = colors.HexColor("#c9c9c9")
@@ -73,7 +75,7 @@ def generate_purchase_order_receipt_pdf(data: PurchaseOrderReceiptPdfData) -> by
 
     header_table = Table(
         [
-            ["Receipt Date", str(data.receipt_date), "Purchase Order", data.po_number],
+            ["Receipt Date", data.receipt_date.strftime("%d-%m-%Y"), "Purchase Order", data.po_number],
             ["Supplier", data.supplier_name, "Warehouse", data.warehouse_name],
             [
                 "Supplier Delivery Ref.",
@@ -132,7 +134,7 @@ def generate_purchase_order_receipt_pdf(data: PurchaseOrderReceiptPdfData) -> by
         story.append(Paragraph(data.notes, styles["Normal"]))
 
     story.append(Spacer(1, 10 * mm))
-    story.append(Paragraph(f"Posted {data.posted_at.strftime('%d %b %Y %H:%M')}", styles["Normal"]))
+    story.append(Paragraph(f"Posted {to_jdk_time(data.posted_at).strftime('%d-%m-%Y %H:%M')}", styles["Normal"]))
 
     doc.build(story)
     return buffer.getvalue()

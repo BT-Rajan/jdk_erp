@@ -8,6 +8,7 @@ import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentSettingsPage } from '@/pages/DocumentSettingsPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
+import { GoodsReceivingPage } from '@/pages/GoodsReceivingPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { ProductsPage } from '@/pages/ProductsPage'
@@ -52,6 +53,7 @@ export function App() {
           <Route path="/boms" element={<BomsPage />} />
           <Route path="/rfqs" element={<RfqsPage />} />
           <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
+          <Route path="/receiving" element={<GoodsReceivingPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

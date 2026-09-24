@@ -44,8 +44,9 @@ describe('formatPercent', () => {
 })
 
 describe('formatDate', () => {
-  it('renders DD/MM/YYYY regardless of environment locale', () => {
-    expect(formatDate(new Date(2026, 0, 5))).toBe('05/01/2026')
+  it('renders DD-MM-YYYY regardless of environment locale', () => {
+    expect(formatDate(new Date(2026, 0, 5))).toBe('05-01-2026')
+    expect(formatDate('2026-09-24')).toBe('24-09-2026')
   })
 
   it('returns the empty-value placeholder for missing or invalid values', () => {
@@ -56,8 +57,8 @@ describe('formatDate', () => {
 })
 
 describe('formatDateTime', () => {
-  it('renders DD/MM/YYYY HH:MM in 24-hour time', () => {
-    expect(formatDateTime(new Date(2026, 0, 5, 17, 6))).toBe('05/01/2026 17:06')
+  it('renders DD-MM-YYYY HH:MM in 24-hour time', () => {
+    expect(formatDateTime(new Date(2026, 0, 5, 17, 6))).toBe('05-01-2026 17:06')
   })
 
   it('returns the empty-value placeholder for missing values', () => {

@@ -46,6 +46,7 @@ const NAV_ENTRIES: NavEntry[] = [
     items: [
       { label: 'RFQs', to: '/rfqs' },
       { label: 'Purchase Orders', to: '/purchase-orders' },
+      { label: 'Goods Receiving', to: '/receiving' },
     ],
   },
 ]

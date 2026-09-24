@@ -36,7 +36,6 @@ const UNITS = [
   { id: 21, name: 'Metric Tonne', code: 'MT', is_active: true },
 ]
 const WAREHOUSES = [{ id: 5, name: 'Factory Warehouse', code: 'WH-001', is_active: true }]
-const TEAMS = [{ id: 7, name: 'Production', code: 'PROD', is_active: true }]
 
 function response(id: number, invitationId: number, lines: { rfq_line_id: number; unit_price: string; delivery_days?: number }[]) {
   return {
@@ -68,7 +67,6 @@ function makeRfq(overrides: Record<string, unknown> = {}) {
     priority: 'urgent',
     rfq_date: '2026-01-10',
     required_delivery_date: '2026-09-30',
-    team_id: 7,
     requested_by_user_id: 1,
     requested_by_name: 'Admin',
     notes: null,
@@ -102,9 +100,9 @@ function mockGets(rfqs: ReturnType<typeof makeRfq>[]) {
   getMock.mockImplementation((url: string) => {
     if (url === '/api/suppliers') return Promise.resolve({ data: page(SUPPLIERS) })
     if (url === '/api/raw-materials') return Promise.resolve({ data: page(MATERIALS) })
-    if (url === '/api/units') return Promise.resolve({ data: page(UNITS) })
+    if (url === '/api/units-of-measure') return Promise.resolve({ data: page(UNITS) })
     if (url === '/api/warehouses') return Promise.resolve({ data: page(WAREHOUSES) })
-    if (url === '/api/teams') return Promise.resolve({ data: page(TEAMS) })
+    if (url === '/api/rfqs/next-number') return Promise.resolve({ data: { rfq_number: '2630009' } })
     if (url === '/api/rfqs') return Promise.resolve({ data: page(rfqs) })
     const match = rfqs.find((r) => url === `/api/rfqs/${r.id}`)
     if (match) return Promise.resolve({ data: match })
@@ -135,11 +133,11 @@ beforeEach(() => {
 })
 
 describe('RfqsPage', () => {
-  it('lists department, priority and how many invited suppliers have quoted', async () => {
+  it('lists how many invited suppliers have quoted, with dates as DD-MM-YYYY', async () => {
     mockGets([makeRfq()])
     renderPage()
     expect(await screen.findByText('2 of 3 quoted')).toBeInTheDocument()
-    expect(await screen.findByText('Production')).toBeInTheDocument()
+    expect(screen.getByText('10-01-2026')).toBeInTheDocument()
   })
 
   it('creates an RFQ: unit defaults from the item, suppliers need 2 letters, submit sends the whole form', async () => {
@@ -150,10 +148,11 @@ describe('RfqsPage', () => {
 
     await user.click(await screen.findByRole('button', { name: 'New RFQ' }))
     const modal = await screen.findByRole('dialog', { name: 'New RFQ' })
-    expect(within(modal).getByText('Auto-generated')).toBeInTheDocument()
+    expect(await within(modal).findByText('2630009')).toBeInTheDocument()
+    expect(within(modal).queryByLabelText(/Department/)).not.toBeInTheDocument()
+    expect(within(modal).queryByLabelText(/Notes/)).not.toBeInTheDocument()
 
     await user.type(within(modal).getByLabelText(/Required By/), '2099-09-30')
-    await user.selectOptions(within(modal).getByLabelText(/Department/), '7')
     await user.selectOptions(within(modal).getByLabelText('Item 1 product / material'), '10')
     expect((within(modal).getByLabelText('Item 1 unit') as HTMLSelectElement).value).toBe('20')
     await user.selectOptions(within(modal).getByLabelText('Item 1 unit'), '21')
@@ -170,9 +169,7 @@ describe('RfqsPage', () => {
     expect(postMock).toHaveBeenCalledWith('/api/rfqs', {
       submit: true,
       required_delivery_date: '2099-09-30',
-      team_id: 7,
       priority: 'normal',
-      notes: null,
       supplier_ids: [2],
       lines: [{ raw_material_id: 10, quantity: '2', unit_of_measure_id: 21, required_by_date: null, remarks: null }],
     })
@@ -185,7 +182,6 @@ describe('RfqsPage', () => {
     await user.click(await screen.findByRole('button', { name: 'New RFQ' }))
     const modal = await screen.findByRole('dialog', { name: 'New RFQ' })
     await user.type(within(modal).getByLabelText(/Required By/), '2099-09-30')
-    await user.selectOptions(within(modal).getByLabelText(/Department/), '7')
     await user.selectOptions(within(modal).getByLabelText('Item 1 product / material'), '10')
     await user.type(within(modal).getByLabelText('Item 1 quantity'), '0')
     await user.click(within(modal).getByRole('button', { name: 'Save Draft' }))
