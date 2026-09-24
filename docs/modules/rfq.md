@@ -214,7 +214,7 @@ no `OWN`/`TEAM` scope.
 `rfqs`/`rfq_responses` are organisation-scoped. `rfq_lines`,
 `rfq_supplier_invitations` and `rfq_response_lines` are children of an
 already-scoped `Rfq`/`RfqResponse` (no `organisation_id` of their own).
-`supplier_id`/`team_id`/`raw_material_id`/`warehouse_id` are validated
+`supplier_id`/`raw_material_id`/`warehouse_id` are validated
 active-and-same-organisation on every write. An invitation id is always
 resolved within the RFQ in the path. A cross-organisation id anywhere in
 this module 404s, never 403s.
@@ -227,10 +227,10 @@ Unchanged from v1: the existing generic `files` system,
 ## 18. List and comparison UX
 
 List page (`DataTable`/`FilterBar`/`ActionMenu`/`Badge`): RFQ number,
-department (if set), date, priority badge, "Suppliers" (invited count,
+date, priority badge, "Suppliers" (invited count,
 and once any have quoted, e.g. "2 of 3 quoted"), status, PO status.
 Filters: RFQ number search, priority; the API also filters by `status`,
-`team_id`, and `supplier_id` (RFQs that supplier was invited to).
+and `supplier_id` (RFQs that supplier was invited to).
 
 Inside the RFQ record: grouped by invited supplier — each invitation
 shows its own status, its own capture-response action, and its own
