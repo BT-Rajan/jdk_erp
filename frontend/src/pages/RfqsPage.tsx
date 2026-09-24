@@ -236,7 +236,6 @@ export function RfqsPage() {
   const navigate = useNavigate()
 
   const [suppliers, setSuppliers] = useState<LookupOption[]>([])
-  const [warehouses, setWarehouses] = useState<LookupOption[]>([])
   const [materials, setMaterials] = useState<MaterialOption[]>([])
   const [units, setUnits] = useState<LookupOption[]>([])
   const [pageError, setPageError] = useState<string | undefined>(undefined)
@@ -269,7 +268,6 @@ export function RfqsPage() {
   const [decisionError, setDecisionError] = useState<string | null>(null)
 
   const [convertOpen, setConvertOpen] = useState(false)
-  const [convertWarehouseId, setConvertWarehouseId] = useState('')
   const [convertLines, setConvertLines] = useState<Record<number, ConvertLineDraft>>({})
   const [convertExpectedDate, setConvertExpectedDate] = useState('')
   const [convertPaymentTerms, setConvertPaymentTerms] = useState('')
@@ -302,18 +300,16 @@ export function RfqsPage() {
 
   const loadLookups = useCallback(async () => {
     try {
-      const [suppliersResponse, warehousesResponse, materialsResponse, unitsResponse] = await Promise.all([
+      const [suppliersResponse, materialsResponse, unitsResponse] = await Promise.all([
         apiClient.get<PaginatedResponse<LookupOption>>('/api/suppliers', { params: { page_size: 200 } }),
-        apiClient.get<PaginatedResponse<LookupOption>>('/api/warehouses', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<MaterialOption>>('/api/raw-materials', { params: { page_size: 200 } }),
         apiClient.get<PaginatedResponse<LookupOption>>('/api/units-of-measure', { params: { page_size: 200 } }),
       ])
       setSuppliers(suppliersResponse.data.data)
-      setWarehouses(warehousesResponse.data.data)
       setMaterials(materialsResponse.data.data)
       setUnits(unitsResponse.data.data)
     } catch (err) {
-      setPageError(err instanceof ApiError ? err.message : 'Failed to load suppliers, warehouses, materials and units.')
+      setPageError(err instanceof ApiError ? err.message : 'Failed to load suppliers, materials and units.')
     }
   }, [])
 
@@ -618,7 +614,6 @@ export function RfqsPage() {
       drafts[line.id] = { include: true, unit_price: price ? String(Number(price)) : '' }
     }
     setConvertLines(drafts)
-    setConvertWarehouseId('')
     setConvertExpectedDate(rfq.required_delivery_date && rfq.required_delivery_date >= todayIso() ? rfq.required_delivery_date : '')
     setConvertPaymentTerms(approved?.payment_terms ?? '')
     setConvertSupplierRef(approved?.supplier_quotation_number ?? '')
@@ -629,10 +624,6 @@ export function RfqsPage() {
 
   async function submitConvert() {
     if (!detailTarget) return
-    if (!convertWarehouseId) {
-      setConvertError('Select the delivery location.')
-      return
-    }
     if (!convertExpectedDate || convertExpectedDate < todayIso()) {
       setConvertError('Enter an expected delivery date (today or later).')
       return
@@ -655,7 +646,6 @@ export function RfqsPage() {
     setConvertError(null)
     try {
       const { data } = await apiClient.post<Rfq>(`/api/rfqs/${detailTarget.id}/convert-to-po`, {
-        warehouse_id: Number(convertWarehouseId),
         expected_delivery_date: convertExpectedDate,
         payment_terms: convertPaymentTerms.trim(),
         supplier_reference: convertSupplierRef.trim() || null,
@@ -1146,12 +1136,6 @@ export function RfqsPage() {
               the approved RFQ ({detailTarget.rfq_number}). Prices and terms are pre-filled from the approved quotation and can be changed.
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
-              <SelectField label="Delivery Location" required value={convertWarehouseId} onChange={(e) => setConvertWarehouseId(e.target.value)}>
-                <option value="">Select a warehouse...</option>
-                {warehouses.filter((w) => w.is_active).map((w) => (
-                  <option key={w.id} value={w.id}>{w.name}</option>
-                ))}
-              </SelectField>
               <DateField label="Expected Delivery Date" required min={todayIso()} value={convertExpectedDate} onChange={(e) => setConvertExpectedDate(e.target.value)} />
               <TextField label="Payment Terms" required placeholder="e.g. Advance, 30 days" value={convertPaymentTerms} onChange={(e) => setConvertPaymentTerms(e.target.value)} />
               <TextField label="Supplier Reference" value={convertSupplierRef} onChange={(e) => setConvertSupplierRef(e.target.value)} />

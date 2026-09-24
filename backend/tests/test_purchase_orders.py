@@ -150,8 +150,9 @@ def test_create_stamps_date_creator_and_currency(client, admin_headers, admin_us
     assert body["payment_status"] == "unpaid"
 
 
-def test_create_without_warehouse_uses_first_active_warehouse(client, admin_headers, acme_supplier, warehouse_1, db_session):
-    body = {"supplier_id": acme_supplier.id, "expected_delivery_date": FUTURE, "payment_terms": "30 days"}
+def test_create_uses_the_warehouse_and_kwd(client, admin_headers, acme_supplier, warehouse_1, db_session):
+    # A posted warehouse_id / currency is ignored: one warehouse, always KWD.
+    body = {"supplier_id": acme_supplier.id, "expected_delivery_date": FUTURE, "payment_terms": "30 days", "currency": "USD", "warehouse_id": 999}
     created = client.post("/api/purchase-orders", json=body, headers=admin_headers)
     assert created.status_code == 201
     assert created.json()["warehouse_id"] == warehouse_1.id
@@ -161,7 +162,7 @@ def test_create_without_warehouse_uses_first_active_warehouse(client, admin_head
     db_session.commit()
     refused = client.post("/api/purchase-orders", json=body, headers=admin_headers)
     assert refused.status_code == 422
-    assert "warehouse_id" in refused.json()["error"]["fields"]
+    assert "No active warehouse" in refused.json()["error"]["message"]
 
 
 def test_add_line_requires_unit_price(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):

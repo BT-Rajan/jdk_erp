@@ -444,7 +444,7 @@ export function PurchaseOrderFormPage() {
               <Button type="button" variant="secondary" onClick={() => setForm((prev) => ({ ...prev, items: [...prev.items, emptyItem()] }))}>
                 Add Item
               </Button>
-              <span className="text-sm"><span className="text-gold-100/50">Total: </span>{orderTotal.toFixed(3)} {po?.currency ?? 'KWD'}</span>
+              <span className="text-sm"><span className="text-gold-100/50">Total: </span>{orderTotal.toFixed(3)} KWD</span>
             </div>
           </div>
 

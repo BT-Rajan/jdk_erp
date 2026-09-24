@@ -50,7 +50,6 @@ from app.models.rfq import (
 from app.models.supplier import Supplier
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
-from app.models.warehouse import Warehouse
 from app.schemas.file import FileOut
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.rfq import (
@@ -125,20 +124,6 @@ def _resolve_active_supplier(db: Session, supplier_id: int, organisation_id: int
             fields={"supplier_id": "Not a valid active supplier in your organisation."},
         )
     return supplier
-
-
-def _resolve_active_warehouse(db: Session, warehouse_id: int, organisation_id: int) -> Warehouse:
-    warehouse = (
-        db.query(Warehouse)
-        .filter(Warehouse.id == warehouse_id, Warehouse.organisation_id == organisation_id, Warehouse.is_active.is_(True))
-        .first()
-    )
-    if warehouse is None:
-        raise ValidationError(
-            "warehouse_id must be an active warehouse in your organisation.",
-            fields={"warehouse_id": "Not a valid active warehouse in your organisation."},
-        )
-    return warehouse
 
 
 def _resolve_active_raw_material(db: Session, raw_material_id: int, organisation_id: int) -> RawMaterial:
@@ -1017,7 +1002,6 @@ def convert_rfq_to_purchase_order(
             "Expected delivery date cannot be in the past.",
             fields={"expected_delivery_date": "Cannot be in the past."},
         )
-    _resolve_active_warehouse(db, payload.warehouse_id, current_user.organisation_id)
     invitation = rfq_service.get_selected_invitation(db, rfq)
     _resolve_active_supplier(db, invitation.supplier_id, current_user.organisation_id)
 
@@ -1064,7 +1048,6 @@ def convert_rfq_to_purchase_order(
         db,
         rfq=rfq,
         supplier_id=invitation.supplier_id,
-        warehouse_id=payload.warehouse_id,
         expected_delivery_date=payload.expected_delivery_date,
         payment_terms=payload.payment_terms,
         supplier_reference=payload.supplier_reference,

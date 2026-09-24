@@ -46,7 +46,6 @@ class PurchaseOrderReceiptPdfData:
     receipt_date: date
     po_number: str
     supplier_name: str
-    warehouse_name: str
     supplier_delivery_reference: str | None
     notes: str | None
     receiver_name: str
@@ -76,13 +75,8 @@ def generate_purchase_order_receipt_pdf(data: PurchaseOrderReceiptPdfData) -> by
     header_table = Table(
         [
             ["Receipt Date", data.receipt_date.strftime("%d-%m-%Y"), "Purchase Order", data.po_number],
-            ["Supplier", data.supplier_name, "Warehouse", data.warehouse_name],
-            [
-                "Supplier Delivery Ref.",
-                data.supplier_delivery_reference or "—",
-                "Received By",
-                data.receiver_name,
-            ],
+            ["Supplier", data.supplier_name, "Received By", data.receiver_name],
+            ["Supplier Delivery Ref.", data.supplier_delivery_reference or "—", "", ""],
         ],
         colWidths=[38 * mm, 55 * mm, 38 * mm, 55 * mm],
     )

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models.purchase_order import CANCELLED, DEFAULT_CURRENCY, DRAFT
+from app.models.purchase_order import CANCELLED, DRAFT
 from app.schemas.file import FileOut
 
 
@@ -12,13 +12,6 @@ def _strip_or_none(value: str | None) -> str | None:
         return None
     value = value.strip()
     return value or None
-
-
-def _check_currency(value: str) -> str:
-    value = value.strip().upper()
-    if len(value) != 3 or not value.isalpha():
-        raise ValueError("Currency must be a 3-letter code, e.g. KWD.")
-    return value
 
 
 class PurchaseOrderLineOut(BaseModel):
@@ -215,12 +208,8 @@ class PurchaseOrderCreateRequest(BaseModel):
     `rfq_id` is only ever set by the RFQ's PO-generation step."""
 
     supplier_id: int
-    # Omitted by the New Purchase Order page -> the organisation's first
-    # active warehouse (app/api/purchase_orders.py).
-    warehouse_id: int | None = None
     expected_delivery_date: date
     payment_terms: str = Field(min_length=1, max_length=200)
-    currency: str = DEFAULT_CURRENCY
     supplier_reference: str | None = Field(default=None, max_length=100)
     delivery_instructions: str | None = Field(default=None, max_length=2000)
     notes: str | None = Field(default=None, max_length=4000)
@@ -233,11 +222,6 @@ class PurchaseOrderCreateRequest(BaseModel):
             raise ValueError("Payment terms are required.")
         return value
 
-    @field_validator("currency")
-    @classmethod
-    def _validate_currency(cls, value: str) -> str:
-        return _check_currency(value)
-
     @field_validator("supplier_reference", "delivery_instructions", "notes")
     @classmethod
     def _strip(cls, value: str | None) -> str | None:
@@ -246,26 +230,20 @@ class PurchaseOrderCreateRequest(BaseModel):
 
 class PurchaseOrderUpdateRequest(BaseModel):
     """Draft-only (enforced in app/api/purchase_orders.py).
-    `supplier_id`/`warehouse_id`/`rfq_id` are immutable."""
+    `supplier_id`/`rfq_id` are immutable."""
 
     expected_delivery_date: date | None = None
     payment_terms: str | None = Field(default=None, max_length=200)
-    currency: str | None = None
     supplier_reference: str | None = Field(default=None, max_length=100)
     delivery_instructions: str | None = Field(default=None, max_length=2000)
     notes: str | None = Field(default=None, max_length=4000)
 
-    @field_validator("expected_delivery_date", "payment_terms", "currency")
+    @field_validator("expected_delivery_date", "payment_terms")
     @classmethod
     def _not_null(cls, value, info):
         if value is None or (isinstance(value, str) and not value.strip()):
             raise ValueError(f"{info.field_name} is required.")
         return value.strip() if isinstance(value, str) else value
-
-    @field_validator("currency")
-    @classmethod
-    def _validate_currency(cls, value: str) -> str:
-        return _check_currency(value)
 
     @field_validator("supplier_reference", "delivery_instructions", "notes")
     @classmethod

@@ -310,13 +310,11 @@ class RfqConvertLineRequest(BaseModel):
 
 
 class RfqConvertRequest(BaseModel):
-    """PO generation (docs/modules/rfq.md #8). `warehouse_id` is the
-    delivery location; `expected_delivery_date` and `payment_terms` are
-    required. `lines` omitted -> every RFQ line converts at the approved
+    """PO generation (docs/modules/rfq.md #8). `expected_delivery_date`
+    and `payment_terms` are required. `lines` omitted -> every RFQ line converts at the approved
     quote's price. `lines` given -> exactly those lines, each at its
     override price or, when none is given, the quoted one."""
 
-    warehouse_id: int
     expected_delivery_date: date
     payment_terms: str = Field(min_length=1, max_length=200)
     supplier_reference: str | None = Field(default=None, max_length=100)
