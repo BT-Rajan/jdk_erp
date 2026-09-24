@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { CategoriesPage } from './CategoriesPage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -48,7 +49,7 @@ beforeEach(() => {
 
 describe('CategoriesPage', () => {
   it('loads and renders categories on mount, with exactly one initial request', async () => {
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Electronics')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/categories')
@@ -57,7 +58,7 @@ describe('CategoriesPage', () => {
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Electronics')).toBeInTheDocument()
     // Categories is open-read (docs/modules/categories.md #5) -- a
@@ -68,13 +69,13 @@ describe('CategoriesPage', () => {
 
   it('shows an error state when the request fails', async () => {
     getMock.mockRejectedValue(new Error('Network down'))
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
   it('shows a distinct empty state for no categories at all vs. no search matches', async () => {
     getMock.mockResolvedValue({ data: categoriesResponse([]) })
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No categories yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -82,7 +83,7 @@ describe('CategoriesPage', () => {
   })
 
   it('debounces search: types quickly but only fires one request with the final term, resetting to page 1', async () => {
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Electronics')
     getMock.mockClear()
 
@@ -99,7 +100,7 @@ describe('CategoriesPage', () => {
 
   it('creating a category posts the payload and refetches the list', async () => {
     postMock.mockResolvedValue({ data: makeCategory({ id: 2, name: 'Hardware' }) })
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Electronics')
     getMock.mockClear()
 
@@ -119,7 +120,7 @@ describe('CategoriesPage', () => {
   it('creating a category shows a server-side field/name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
     postMock.mockRejectedValue(new ApiError({ message: 'A category with this name or code already exists.', code: 'CONFLICT' }, 409))
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Electronics')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Category' }))
@@ -131,7 +132,7 @@ describe('CategoriesPage', () => {
 
   it('editing a category pre-fills the form and sends a PATCH', async () => {
     patchMock.mockResolvedValue({ data: makeCategory({ name: 'Consumer Electronics' }) })
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Electronics')
 
     const row = screen.getByText('Electronics').closest('tr')!
@@ -153,7 +154,7 @@ describe('CategoriesPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeCategory({ is_active: false }) })
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Electronics')
 
     const row = screen.getByText('Electronics').closest('tr')!
@@ -166,7 +167,7 @@ describe('CategoriesPage', () => {
 
   it('shows an error message when changing status fails', async () => {
     patchMock.mockRejectedValue(new Error('Failed to change status.'))
-    render(<CategoriesPage />)
+    render(<CategoriesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Electronics')
 
     const row = screen.getByText('Electronics').closest('tr')!

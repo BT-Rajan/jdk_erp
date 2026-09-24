@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { FilterBar } from "@/components/ui/FilterBar";
-import { FormDialog } from "@/components/ui/FormDialog";
+import { FormPage } from "@/components/ui/FormPage";
 import { Modal } from "@/components/ui/Modal";
 import { PageHeader } from "@/components/ui/PageHeader";
 import type { SortState } from "@/components/ui/sort";
@@ -22,6 +22,7 @@ import { useAuth } from "@/lib/auth/AuthContext";
 import { isAdminRole } from "@/lib/auth/roles";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useServerTable, type ServerTableResult } from "@/lib/useServerTable";
+import { useFormRoute } from "@/lib/useFormRoute";
 
 /** Mirrors backend/app/schemas/raw_material.py's RawMaterialOut.
  * `alternate_conversion_*` is BOM's material-specific conversion
@@ -243,7 +244,6 @@ export function RawMaterialsPage() {
   const [searchInput, setSearchInput] = useState("");
   const debouncedSearch = useDebouncedValue(searchInput, 300);
 
-  const [formOpen, setFormOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState<RawMaterial | null>(
     null,
   );
@@ -340,19 +340,23 @@ export function RawMaterialsPage() {
     if (canManage) void loadLookups();
   }, [canManage, loadLookups]);
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingMaterial(null);
     reset(emptyMaterialDefaults);
     setFormError(null);
-    setFormOpen(true);
   }
 
-  function openEdit(material: RawMaterial) {
+  function prepareEdit(material: RawMaterial) {
     setEditingMaterial(material);
     reset(toMaterialFormValues(material));
     setFormError(null);
-    setFormOpen(true);
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<RawMaterial>(
+    "/raw-materials",
+    "/api/raw-materials",
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  );
 
   const onFormSubmit = useCallback(
     async (values: MaterialFormValues) => {
@@ -378,7 +382,7 @@ export function RawMaterialsPage() {
         } else {
           await apiClient.post("/api/raw-materials", payload);
         }
-        setFormOpen(false);
+        closeForm();
         table.refetch();
       } catch (err) {
         if (err instanceof ApiError) {
@@ -603,59 +607,63 @@ export function RawMaterialsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Raw Materials"
-        subtitle="The authoritative material identity for Procurement and Production."
-        actions={
-          canManage ? (
-            <Button onClick={openCreate}>New Raw Material</Button>
-          ) : undefined
-        }
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by name or code..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Raw Materials"
+          subtitle="The authoritative material identity for Procurement and Production."
+          actions={
+            canManage ? (
+              <Button onClick={openCreate}>New Raw Material</Button>
+            ) : undefined
+          }
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(m) => m.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={
-          debouncedSearch ? "No matching raw materials" : "No raw materials yet"
-        }
-        emptyMessage={
-          debouncedSearch
-            ? "Try a different search term."
-            : canManage
-              ? "Create the first raw material with the New Raw Material button above."
-              : "No raw materials have been created yet."
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
+
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by name or code..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(m) => m.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={
+            debouncedSearch ? "No matching raw materials" : "No raw materials yet"
+          }
+          emptyMessage={
+            debouncedSearch
+              ? "Try a different search term."
+              : canManage
+                ? "Create the first raw material with the New Raw Material button above."
+                : "No raw materials have been created yet."
+          }
+        />
+      </div>
 
       {canManage && (
         <>
-          <FormDialog
+          <FormPage
+            loading={formLoading}
+            loadError={formLoadError}
             open={formOpen}
             title={editingMaterial ? "Edit Raw Material" : "New Raw Material"}
-            onClose={() => setFormOpen(false)}
+            onClose={closeForm}
             onSubmit={handleSubmit(onFormSubmit)}
             submitting={isSubmitting}
             submitLabel={editingMaterial ? "Save" : "Create raw material"}
@@ -738,7 +746,7 @@ export function RawMaterialsPage() {
               {...register("alternate_conversion_factor")}
               error={errors.alternate_conversion_factor?.message}
             />
-          </FormDialog>
+          </FormPage>
 
           <ConfirmDialog
             open={!!statusTarget}

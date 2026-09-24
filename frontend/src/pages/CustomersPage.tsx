@@ -10,6 +10,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
 import { FormDialog } from '@/components/ui/FormDialog'
+import { FormPage } from '@/components/ui/FormPage'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { SelectField } from '@/components/forms/SelectField'
@@ -20,6 +21,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { MANAGER, isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
+import { useFormRoute } from '@/lib/useFormRoute'
 
 /** Mirrors backend/app/schemas/customer.py's CustomerOut. */
 interface Customer {
@@ -125,7 +127,6 @@ export function CustomersPage() {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -177,19 +178,23 @@ export function CustomersPage() {
     if (canAssign) void loadUsers()
   }, [canAssign, loadUsers])
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingCustomer(null)
     reset(emptyDefaults)
     setFormError(null)
-    setFormOpen(true)
   }
 
-  function openEdit(customer: Customer) {
+  function prepareEdit(customer: Customer) {
     setEditingCustomer(customer)
     reset(toFormValues(customer))
     setFormError(null)
-    setFormOpen(true)
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<Customer>(
+    '/customers',
+    '/api/customers',
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  )
 
   const onFormSubmit = useCallback(
     async (values: CustomerFormValues) => {
@@ -207,7 +212,7 @@ export function CustomersPage() {
         } else {
           await apiClient.post('/api/customers', payload)
         }
-        setFormOpen(false)
+        closeForm()
         table.refetch()
       } catch (err) {
         if (err instanceof ApiError) {
@@ -315,47 +320,51 @@ export function CustomersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Customers"
-        subtitle="The authoritative customer record consumed by Sales."
-        actions={<Button onClick={openCreate}>New Customer</Button>}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by name, code, contact or phone..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Customers"
+          subtitle="The authoritative customer record consumed by Sales."
+          actions={<Button onClick={openCreate}>New Customer</Button>}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(c) => c.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching customers' : 'No customers yet'}
-        emptyMessage={
-          debouncedSearch ? 'Try a different search term.' : 'Create the first customer with the New Customer button above.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
 
-      <FormDialog
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by name, code, contact or phone..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(c) => c.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching customers' : 'No customers yet'}
+          emptyMessage={
+            debouncedSearch ? 'Try a different search term.' : 'Create the first customer with the New Customer button above.'
+          }
+        />
+      </div>
+
+      <FormPage
+        loading={formLoading}
+        loadError={formLoadError}
         open={formOpen}
         title={editingCustomer ? 'Edit Customer' : 'New Customer'}
-        onClose={() => setFormOpen(false)}
+        onClose={closeForm}
         onSubmit={handleSubmit(onFormSubmit)}
         submitting={isSubmitting}
         submitLabel={editingCustomer ? 'Save' : 'Create customer'}
@@ -366,7 +375,7 @@ export function CustomersPage() {
         <TextField label="Phone" {...register('phone')} error={errors.phone?.message} />
         <TextField label="Email" type="email" {...register('email')} error={errors.email?.message} />
         <TextareaField label="Address" {...register('address')} error={errors.address?.message} />
-      </FormDialog>
+      </FormPage>
 
       {canEdit && (
         <ConfirmDialog

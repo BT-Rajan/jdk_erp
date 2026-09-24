@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
-import { FormDialog } from '@/components/ui/FormDialog'
+import { FormPage } from '@/components/ui/FormPage'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { TextField } from '@/components/forms/TextField'
@@ -19,6 +19,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
+import { useFormRoute } from '@/lib/useFormRoute'
 
 /** Mirrors backend/app/schemas/supplier.py's SupplierOut. */
 interface Supplier {
@@ -107,7 +108,6 @@ export function SuppliersPage() {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -137,19 +137,23 @@ export function SuppliersPage() {
     table.setFilters({ search: debouncedSearch })
   }, [debouncedSearch])
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingSupplier(null)
     reset(emptyDefaults)
     setFormError(null)
-    setFormOpen(true)
   }
 
-  function openEdit(supplier: Supplier) {
+  function prepareEdit(supplier: Supplier) {
     setEditingSupplier(supplier)
     reset(toFormValues(supplier))
     setFormError(null)
-    setFormOpen(true)
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<Supplier>(
+    '/suppliers',
+    '/api/suppliers',
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  )
 
   const onFormSubmit = useCallback(
     async (values: SupplierFormValues) => {
@@ -167,7 +171,7 @@ export function SuppliersPage() {
         } else {
           await apiClient.post('/api/suppliers', payload)
         }
-        setFormOpen(false)
+        closeForm()
         table.refetch()
       } catch (err) {
         if (err instanceof ApiError) {
@@ -237,53 +241,57 @@ export function SuppliersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Suppliers"
-        subtitle="The vendor master consumed by Procurement."
-        actions={canManage ? <Button onClick={openCreate}>New Supplier</Button> : undefined}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by name, code, contact or phone..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Suppliers"
+          subtitle="The vendor master consumed by Procurement."
+          actions={canManage ? <Button onClick={openCreate}>New Supplier</Button> : undefined}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(s) => s.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching suppliers' : 'No suppliers yet'}
-        emptyMessage={
-          debouncedSearch
-            ? 'Try a different search term.'
-            : canManage
-              ? 'Create the first supplier with the New Supplier button above.'
-              : 'No suppliers have been created yet.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
+
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by name, code, contact or phone..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(s) => s.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching suppliers' : 'No suppliers yet'}
+          emptyMessage={
+            debouncedSearch
+              ? 'Try a different search term.'
+              : canManage
+                ? 'Create the first supplier with the New Supplier button above.'
+                : 'No suppliers have been created yet.'
+          }
+        />
+      </div>
 
       {canManage && (
         <>
-          <FormDialog
+          <FormPage
+            loading={formLoading}
+            loadError={formLoadError}
             open={formOpen}
             title={editingSupplier ? 'Edit Supplier' : 'New Supplier'}
-            onClose={() => setFormOpen(false)}
+            onClose={closeForm}
             onSubmit={handleSubmit(onFormSubmit)}
             submitting={isSubmitting}
             submitLabel={editingSupplier ? 'Save' : 'Create supplier'}
@@ -294,7 +302,7 @@ export function SuppliersPage() {
             <TextField label="Phone" {...register('phone')} error={errors.phone?.message} />
             <TextField label="Email" type="email" {...register('email')} error={errors.email?.message} />
             <TextareaField label="Address" {...register('address')} error={errors.address?.message} />
-          </FormDialog>
+          </FormPage>
 
           <ConfirmDialog
             open={!!statusTarget}

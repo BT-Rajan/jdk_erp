@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { UnitsOfMeasurePage } from './UnitsOfMeasurePage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -50,7 +51,7 @@ beforeEach(() => {
 
 describe('UnitsOfMeasurePage', () => {
   it('loads and renders units on mount, with exactly one initial request', async () => {
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Kilogram')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/units-of-measure')
@@ -59,7 +60,7 @@ describe('UnitsOfMeasurePage', () => {
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Kilogram')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Unit' })).not.toBeInTheDocument()
@@ -68,13 +69,13 @@ describe('UnitsOfMeasurePage', () => {
 
   it('shows an error state when the request fails', async () => {
     getMock.mockRejectedValue(new Error('Network down'))
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
   it('shows a distinct empty state for no units at all vs. no search matches', async () => {
     getMock.mockResolvedValue({ data: unitsResponse([]) })
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No units yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -82,7 +83,7 @@ describe('UnitsOfMeasurePage', () => {
   })
 
   it('debounces search: types quickly but only fires one request with the final term, resetting to page 1', async () => {
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
     getMock.mockClear()
 
@@ -99,7 +100,7 @@ describe('UnitsOfMeasurePage', () => {
 
   it('creating a unit posts the payload and refetches the list', async () => {
     postMock.mockResolvedValue({ data: makeUnit({ id: 2, name: 'Litre', code: 'L' }) })
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
     getMock.mockClear()
 
@@ -120,7 +121,7 @@ describe('UnitsOfMeasurePage', () => {
   it('creating a unit shows a server-side name/code conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
     postMock.mockRejectedValue(new ApiError({ message: 'A unit with this name or code already exists.', code: 'CONFLICT' }, 409))
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Unit' }))
@@ -133,7 +134,7 @@ describe('UnitsOfMeasurePage', () => {
 
   it('editing a unit pre-fills the form and sends a PATCH', async () => {
     patchMock.mockResolvedValue({ data: makeUnit({ name: 'Kilogramme' }) })
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
 
     const row = screen.getByText('Kilogram').closest('tr')!
@@ -156,7 +157,7 @@ describe('UnitsOfMeasurePage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeUnit({ is_active: false }) })
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
 
     const row = screen.getByText('Kilogram').closest('tr')!
@@ -169,7 +170,7 @@ describe('UnitsOfMeasurePage', () => {
 
   it('creating a unit with a dimension and conversion factor posts both', async () => {
     postMock.mockResolvedValue({ data: makeUnit({ id: 2, name: 'Tonne', code: 'TON', dimension: 'mass', conversion_factor_to_base: '1000' }) })
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Unit' }))
@@ -188,7 +189,7 @@ describe('UnitsOfMeasurePage', () => {
   })
 
   it('rejects a dimension entered without a conversion factor before submitting', async () => {
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Unit' }))
@@ -205,7 +206,7 @@ describe('UnitsOfMeasurePage', () => {
 
   it('shows an error message when changing status fails', async () => {
     patchMock.mockRejectedValue(new Error('Failed to change status.'))
-    render(<UnitsOfMeasurePage />)
+    render(<UnitsOfMeasurePage />, { wrapper: MemoryRouter })
     await screen.findByText('Kilogram')
 
     const row = screen.getByText('Kilogram').closest('tr')!

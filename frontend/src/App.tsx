@@ -44,15 +44,35 @@ export function App() {
         >
           <Route path="/" element={<DashboardPage />} />
           <Route path="/categories" element={<CategoriesPage />} />
+          <Route path="/categories/new" element={<CategoriesPage />} />
+          <Route path="/categories/:recordId/edit" element={<CategoriesPage />} />
           <Route path="/customers" element={<CustomersPage />} />
+          <Route path="/customers/new" element={<CustomersPage />} />
+          <Route path="/customers/:recordId/edit" element={<CustomersPage />} />
           <Route path="/units-of-measure" element={<UnitsOfMeasurePage />} />
+          <Route path="/units-of-measure/new" element={<UnitsOfMeasurePage />} />
+          <Route path="/units-of-measure/:recordId/edit" element={<UnitsOfMeasurePage />} />
           <Route path="/suppliers" element={<SuppliersPage />} />
+          <Route path="/suppliers/new" element={<SuppliersPage />} />
+          <Route path="/suppliers/:recordId/edit" element={<SuppliersPage />} />
           <Route path="/products" element={<ProductsPage />} />
+          <Route path="/products/new" element={<ProductsPage />} />
+          <Route path="/products/:recordId/edit" element={<ProductsPage />} />
           <Route path="/raw-materials" element={<RawMaterialsPage />} />
+          <Route path="/raw-materials/new" element={<RawMaterialsPage />} />
+          <Route path="/raw-materials/:recordId/edit" element={<RawMaterialsPage />} />
           <Route path="/production-lines" element={<ProductionLinesPage />} />
+          <Route path="/production-lines/new" element={<ProductionLinesPage />} />
+          <Route path="/production-lines/:recordId/edit" element={<ProductionLinesPage />} />
           <Route path="/machines" element={<MachinesPage />} />
+          <Route path="/machines/new" element={<MachinesPage />} />
+          <Route path="/machines/:recordId/edit" element={<MachinesPage />} />
           <Route path="/warehouses" element={<WarehousesPage />} />
+          <Route path="/warehouses/new" element={<WarehousesPage />} />
+          <Route path="/warehouses/:recordId/edit" element={<WarehousesPage />} />
           <Route path="/boms" element={<BomsPage />} />
+          <Route path="/boms/new" element={<BomsPage />} />
+          <Route path="/boms/:recordId/edit" element={<BomsPage />} />
           <Route path="/rfqs" element={<RfqsPage />} />
           <Route path="/rfqs/new" element={<RfqFormPage />} />
           <Route path="/rfqs/:rfqId/edit" element={<RfqFormPage />} />
