@@ -176,9 +176,9 @@ export function RfqFormPage() {
     }
     try {
       const { data } = rfq ? await apiClient.put<Rfq>(`/api/rfqs/${rfq.id}`, body) : await apiClient.post<Rfq>('/api/rfqs', body)
-      navigate('/rfqs', {
+      navigate(`/rfqs/${data.id}`, {
         state: {
-          openRfqId: data.id,
+          record: data,
           notice:
             data.status === 'draft'
               ? `RFQ ${data.rfq_number} saved as draft.`

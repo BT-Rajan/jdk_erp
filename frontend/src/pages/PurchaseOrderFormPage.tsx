@@ -287,9 +287,8 @@ export function PurchaseOrderFormPage() {
     try {
       const saved = await persist()
       if (submit) await apiClient.post(`/api/purchase-orders/${saved.id}/submit`)
-      navigate('/purchase-orders', {
+      navigate(`/purchase-orders/${saved.id}`, {
         state: {
-          openPurchaseOrderId: saved.id,
           notice: submit
             ? `Purchase Order ${saved.po_number} submitted for approval.`
             : `Purchase Order ${saved.po_number} saved as draft.`,

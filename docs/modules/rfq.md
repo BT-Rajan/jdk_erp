@@ -21,6 +21,9 @@ commits to buying anything by itself. Unchanged from v1.
 
 One form page (`/rfqs/new`, `/rfqs/{id}/edit`) creates, edits and submits the whole RFQ:
 `POST /api/rfqs` / `PUT /api/rfqs/{id}` with the same body.
+Viewing an RFQ is also a page (`/rfqs/{id}`): details, comparison, per-supplier
+PDF / email and the action buttons. Saving the form lands there. Approve /
+Reject, quote capture, cancel and PO generation stay dialogs over it.
 
 - Auto: `rfq_number` (#10 — the form shows the next number from
   `GET /api/rfqs/next-number`; it is assigned on save), `rfq_date`

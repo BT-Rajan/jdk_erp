@@ -75,9 +75,11 @@ export function App() {
           <Route path="/boms/:recordId/edit" element={<BomsPage />} />
           <Route path="/rfqs" element={<RfqsPage />} />
           <Route path="/rfqs/new" element={<RfqFormPage />} />
+          <Route path="/rfqs/:rfqId" element={<RfqsPage />} />
           <Route path="/rfqs/:rfqId/edit" element={<RfqFormPage />} />
           <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
           <Route path="/purchase-orders/new" element={<PurchaseOrderFormPage />} />
+          <Route path="/purchase-orders/:purchaseOrderId" element={<PurchaseOrdersPage />} />
           <Route path="/purchase-orders/:purchaseOrderId/edit" element={<PurchaseOrderFormPage />} />
           <Route path="/receiving" element={<GoodsReceivingPage />} />
           <Route path="/users" element={<UsersPage />} />
