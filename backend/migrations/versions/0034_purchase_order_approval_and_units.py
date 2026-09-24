@@ -116,8 +116,8 @@ def downgrade() -> None:
         batch_op.drop_column("unit_of_measure_id")
 
     with op.batch_alter_table("purchase_order_lines") as batch_op:
-        batch_op.drop_index("ix_purchase_order_lines_unit_of_measure_id")
         batch_op.drop_constraint("fk_purchase_order_lines_unit_of_measure_id_units_of_measure", type_="foreignkey")
+        batch_op.drop_index("ix_purchase_order_lines_unit_of_measure_id")
         batch_op.drop_column("remarks")
         batch_op.drop_column("required_by_date")
         batch_op.drop_column("conversion_factor")

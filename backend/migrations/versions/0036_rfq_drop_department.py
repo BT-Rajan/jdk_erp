@@ -17,8 +17,9 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("rfqs") as batch_op:
-        batch_op.drop_index("ix_rfqs_team_id")
+        # MySQL: the foreign key must go before the index it uses.
         batch_op.drop_constraint("fk_rfqs_team_id_teams", type_="foreignkey")
+        batch_op.drop_index("ix_rfqs_team_id")
         batch_op.drop_column("team_id")
 
 
