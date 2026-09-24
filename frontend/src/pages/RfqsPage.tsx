@@ -12,6 +12,7 @@ import { FilterBar } from '@/components/ui/FilterBar'
 import { Modal } from '@/components/ui/Modal'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
+import { Spinner } from '@/components/ui/Spinner'
 import { DateField } from '@/components/forms/DateField'
 import { FileUploadField } from '@/components/forms/FileUploadField'
 import { SelectField } from '@/components/forms/SelectField'
@@ -325,20 +326,43 @@ export function RfqsPage() {
     navigate('/purchase-orders', { state: purchaseOrderId ? { openPurchaseOrderId: purchaseOrderId } : undefined })
   }
 
-  // Arriving back from the RFQ form page: open the saved RFQ.
+  // Viewing an RFQ is its own page: /rfqs/:rfqId. Opening it from the
+  // list passes the row along; a direct visit, refresh or arrival from
+  // the RFQ form page loads it.
   const location = useLocation()
-  const arrival = location.state as { openRfqId?: number; notice?: string } | null
+  const viewMatch = /^\/rfqs\/(\d+)$/.exec(location.pathname)
+  const viewId = viewMatch ? Number(viewMatch[1]) : null
+  const arrival = location.state as { record?: Rfq; notice?: string } | null
+  const [viewLoading, setViewLoading] = useState(false)
   useEffect(() => {
-    if (!arrival?.openRfqId) return
-    navigate(location.pathname, { replace: true, state: null })
+    if (viewId === null) {
+      setDetailTarget(null)
+      return
+    }
+    resetDetail()
+    setDetailNotice(arrival?.notice ?? null)
+    if (arrival?.record && arrival.record.id === viewId) {
+      setDetailTarget(arrival.record)
+      return
+    }
+    let cancelled = false
+    setDetailTarget(null)
+    setViewLoading(true)
     apiClient
-      .get<Rfq>(`/api/rfqs/${arrival.openRfqId}`)
+      .get<Rfq>(`/api/rfqs/${viewId}`)
       .then(({ data }) => {
-        openDetail(data)
-        setDetailNotice(arrival.notice ?? null)
+        if (!cancelled) setDetailTarget(data)
       })
-      .catch((err) => setPageError(err instanceof ApiError ? err.message : 'Failed to open the RFQ.'))
-  }, [arrival?.openRfqId])
+      .catch((err) => {
+        if (!cancelled) setDetailError(err instanceof ApiError ? err.message : 'Failed to open the RFQ.')
+      })
+      .finally(() => {
+        if (!cancelled) setViewLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [viewId])
 
   const refreshDetail = useCallback(
     async (id: number) => {
@@ -351,7 +375,14 @@ export function RfqsPage() {
   )
 
   function openDetail(rfq: Rfq) {
-    setDetailTarget(rfq)
+    navigate(`/rfqs/${rfq.id}`, { state: { record: rfq } })
+  }
+
+  function closeDetail() {
+    navigate('/rfqs')
+  }
+
+  function resetDetail() {
     setDetailError(null)
     setDetailNotice(null)
     setCaptureInvitation(null)
@@ -684,230 +715,240 @@ export function RfqsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="RFQs"
-        subtitle="Request for Quotation → Supplier Quotes → Accept / Reject → Purchase Order."
-        actions={canManage ? <Button onClick={() => openForm(null)}>New RFQ</Button> : undefined}
-      />
+      <div hidden={viewId !== null} className="space-y-6">
+        <PageHeader
+          title="RFQs"
+          subtitle="Request for Quotation → Supplier Quotes → Accept / Reject → Purchase Order."
+          actions={canManage ? <Button onClick={() => openForm(null)}>New RFQ</Button> : undefined}
+        />
 
-      <Alert variant="danger">{pageError}</Alert>
+        <Alert variant="danger">{pageError}</Alert>
 
-      <FilterBar>
-        <TextField label="Search" placeholder="Search by RFQ number..." value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
-        <SelectField label="Priority" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-          <option value="">All</option>
-          <option value="urgent">Urgent</option>
-          <option value="normal">Normal</option>
-        </SelectField>
-      </FilterBar>
+        <FilterBar>
+          <TextField label="Search" placeholder="Search by RFQ number..." value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
+          <SelectField label="Priority" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="urgent">Urgent</option>
+            <option value="normal">Normal</option>
+          </SelectField>
+        </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(rfq) => rfq.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch || priorityFilter ? 'No matching RFQs' : 'No RFQs yet'}
-        emptyMessage={
-          debouncedSearch || priorityFilter
-            ? 'Try a different search or filter.'
-            : canManage
-              ? 'Create the first RFQ with the New RFQ button above.'
-              : 'No RFQs have been created yet.'
-        }
-      />
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(rfq) => rfq.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch || priorityFilter ? 'No matching RFQs' : 'No RFQs yet'}
+          emptyMessage={
+            debouncedSearch || priorityFilter
+              ? 'Try a different search or filter.'
+              : canManage
+                ? 'Create the first RFQ with the New RFQ button above.'
+                : 'No RFQs have been created yet.'
+          }
+        />
+      </div>
 
 
-      <Modal
-        open={!!detailTarget}
-        title={detailTarget ? `RFQ ${detailTarget.rfq_number}${detailTarget.revision_number > 0 ? ` — Rev ${detailTarget.revision_number}` : ''}` : ''}
-        size="wide"
-        onClose={() => setDetailTarget(null)}
-        footer={
-          <>
-            {canManage && detailTarget?.status === 'draft' && <Button onClick={() => openForm(detailTarget)}>Edit / Submit...</Button>}
-            {canManage && detailTarget?.status === 'issued' && !hasQuotes(detailTarget) && (
-              <Button variant="secondary" onClick={() => openForm(detailTarget)}>Revise...</Button>
-            )}
-            {canManage && detailTarget?.status === 'response_received' && <Button onClick={openDecision}>Approve / Reject...</Button>}
-            {canManage && detailTarget?.status === 'selected' && <Button onClick={() => openConvert()}>Generate Purchase Order...</Button>}
-            {detailTarget?.status === 'converted' && detailTarget.purchase_order_id && (
-              <Button variant="secondary" onClick={() => openPurchaseOrder(detailTarget.purchase_order_id)}>View Purchase Order</Button>
-            )}
-            <Button variant="secondary" onClick={() => setDetailTarget(null)}>Close</Button>
-          </>
-        }
-      >
-        {detailTarget && (
-          <div className="flex flex-col gap-4">
-            <Alert variant="danger">{detailError}</Alert>
-            <Alert variant="success">{detailNotice}</Alert>
-
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-              <div><span className="text-gold-100/50">RFQ Date: </span>{formatDate(detailTarget.rfq_date)}</div>
-              <div><span className="text-gold-100/50">Required By: </span>{formatDate(detailTarget.required_delivery_date)}</div>
-              <div><span className="text-gold-100/50">Requested By: </span>{detailTarget.requested_by_name ?? '—'}</div>
+      {viewId !== null && (
+        <section aria-label={detailTarget ? `RFQ ${detailTarget.rfq_number}` : 'RFQ'} className="space-y-6">
+          <PageHeader
+            title={detailTarget ? `RFQ ${detailTarget.rfq_number}${detailTarget.revision_number > 0 ? ` — Rev ${detailTarget.revision_number}` : ''}` : 'RFQ'}
+          />
+          {!detailTarget ? (
+            <div className="flex flex-col gap-4">
+              {viewLoading ? <Spinner /> : <Alert variant="danger">{detailError}</Alert>}
               <div>
-                <span className="text-gold-100/50">Priority: </span>
-                {detailTarget.priority === 'urgent' ? <Badge tone="danger">Urgent</Badge> : 'Normal'}
+                <Button variant="secondary" onClick={closeDetail}>Back to RFQs</Button>
               </div>
-              <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
-              {detailTarget.notes && <div className="col-span-2"><span className="text-gold-100/50">Notes: </span>{detailTarget.notes}</div>}
-              {detailTarget.cancel_reason && <div className="col-span-2"><span className="text-gold-100/50">Cancel Reason: </span>{detailTarget.cancel_reason}</div>}
-              {detailTarget.decided_at && (
-                <div className="col-span-2">
-                  <span className="text-gold-100/50">Decision: </span>
-                  {selectedResponse ? `Approved ${supplierName(selectedResponse.invitation.supplier_id)}` : 'Rejected'} on{' '}
-                  {formatKuwaitTime(detailTarget.decided_at)}
-                  {detailTarget.decision_note ? ` — ${detailTarget.decision_note}` : ''}
-                </div>
-              )}
             </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-4">
+                <Alert variant="danger">{detailError}</Alert>
+                <Alert variant="success">{detailNotice}</Alert>
 
-            {detailTarget.acceptance_files.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Supplier Document (Approval)</h3>
-                <div className="flex flex-wrap gap-2">
-                  {detailTarget.acceptance_files.map((file) => (
-                    <button key={file.id} type="button" onClick={() => downloadFile(file)} className="rounded border border-ink-700 px-2 py-1 text-xs hover:border-gold-400">
-                      {file.original_filename} ({formatBytes(file.size_bytes)})
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {quotedCount >= 2 && (
-              <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Comparison (latest quote per supplier)</h3>
-                <ComparisonTable rfq={detailTarget} materialName={materialName} unitCode={unitCode} supplierName={supplierName} />
-              </div>
-            )}
-
-            <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Items</h3>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
-                    <th className="py-2 pr-3">Product / Material</th>
-                    <th className="py-2 pr-3">Quantity</th>
-                    <th className="py-2 pr-3">UOM</th>
-                    <th className="py-2 pr-3">Specification / Remarks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detailTarget.lines.map((line) => (
-                    <tr key={line.id} className="border-t border-ink-700">
-                      <td className="py-2 pr-3">{materialName(line.raw_material_id)}</td>
-                      <td className="py-2 pr-3">{formatNumber(line.quantity)}</td>
-                      <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
-                      <td className="py-2 pr-3">{line.remarks ?? '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Suppliers</h3>
-              <div className="flex flex-col gap-3">
-                {detailTarget.invitations.map((invitation) => (
-                  <div key={invitation.id} className="rounded-md border border-ink-700 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{supplierName(invitation.supplier_id)}</span>
-                        {detailTarget.status !== 'draft' && (
-                          <Badge tone={INVITATION_TONES[invitation.status]}>{INVITATION_LABELS[invitation.status]}</Badge>
-                        )}
-                        {invitation.last_emailed_at && (
-                          <span className="text-xs text-gold-100/50">Emailed {formatKuwaitTime(invitation.last_emailed_at)}</span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {invitation.pdf_file && (
-                          <Button variant="secondary" onClick={() => downloadFile(invitation.pdf_file!)}>Download PDF</Button>
-                        )}
-                        {canManage && invitation.pdf_file && isOpenForQuotes && (
-                          <Button variant="secondary" onClick={() => emailInvitation(invitation)} isLoading={emailBusy === invitation.id}>Email</Button>
-                        )}
-                        {canManage && isOpenForQuotes && (
-                          <Button variant="secondary" onClick={() => openCapture(invitation)}>
-                            {invitation.responses.length > 0 ? 'Capture Revised Quote...' : 'Capture Quote...'}
-                          </Button>
-                        )}
-                        {canManage && isOpenForQuotes && invitation.status === 'sent' && (
-                          <Button variant="secondary" onClick={() => declineInvitation(invitation)}>Mark Declined</Button>
-                        )}
-                      </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                  <div><span className="text-gold-100/50">RFQ Date: </span>{formatDate(detailTarget.rfq_date)}</div>
+                  <div><span className="text-gold-100/50">Required By: </span>{formatDate(detailTarget.required_delivery_date)}</div>
+                  <div><span className="text-gold-100/50">Requested By: </span>{detailTarget.requested_by_name ?? '—'}</div>
+                  <div>
+                    <span className="text-gold-100/50">Priority: </span>
+                    {detailTarget.priority === 'urgent' ? <Badge tone="danger">Urgent</Badge> : 'Normal'}
+                  </div>
+                  <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
+                  {detailTarget.notes && <div className="col-span-2"><span className="text-gold-100/50">Notes: </span>{detailTarget.notes}</div>}
+                  {detailTarget.cancel_reason && <div className="col-span-2"><span className="text-gold-100/50">Cancel Reason: </span>{detailTarget.cancel_reason}</div>}
+                  {detailTarget.decided_at && (
+                    <div className="col-span-2">
+                      <span className="text-gold-100/50">Decision: </span>
+                      {selectedResponse ? `Approved ${supplierName(selectedResponse.invitation.supplier_id)}` : 'Rejected'} on{' '}
+                      {formatKuwaitTime(detailTarget.decided_at)}
+                      {detailTarget.decision_note ? ` — ${detailTarget.decision_note}` : ''}
                     </div>
+                  )}
+                </div>
 
-                    {invitation.responses.map((response) => (
-                      <div
-                        key={response.id}
-                        className={`mt-3 rounded-md border p-3 ${detailTarget.selected_response_id === response.id ? 'border-gold-400' : 'border-ink-700'}`}
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                          <span>
-                            Received {formatKuwaitTime(response.response_received_at)}
-                            {response.supplier_quotation_number && ` · Ref ${response.supplier_quotation_number}`}
-                            {response.valid_until && ` · Valid until ${formatDate(response.valid_until)}`}
-                          </span>
-                          {detailTarget.selected_response_id === response.id && <Badge tone="gold">Approved</Badge>}
-                        </div>
-                        {(response.payment_terms || response.delivery_terms || response.freight_terms) && (
-                          <p className="mt-1 text-xs text-gold-100/60">
-                            {[
-                              response.payment_terms && `Payment: ${response.payment_terms}`,
-                              response.delivery_terms && `Delivery: ${response.delivery_terms}`,
-                              response.freight_terms && `Freight: ${response.freight_terms}`,
-                            ]
-                              .filter(Boolean)
-                              .join(' · ')}
-                          </p>
-                        )}
-                        <table className="mt-2 w-full text-sm">
-                          <tbody>
-                            {response.lines.map((quoted) => {
-                              const rfqLine = detailTarget.lines.find((l) => l.id === quoted.rfq_line_id)
-                              return (
-                                <tr key={quoted.id} className="border-t border-ink-700">
-                                  <td className="py-1 pr-3">{rfqLine ? materialName(rfqLine.raw_material_id) : `Item #${quoted.rfq_line_id}`}</td>
-                                  <td className="py-1 pr-3">{rfqLine ? `${formatNumber(rfqLine.quantity)} ${unitCode(rfqLine.unit_of_measure_id)}` : ''}</td>
-                                  <td className="py-1 pr-3">{formatPrice(quoted.unit_price)}</td>
-                                  <td className="py-1 pr-3">{quoted.delivery_days !== null ? `${quoted.delivery_days} days` : '—'}</td>
-                                  <td className="py-1 pr-3 text-gold-100/60">{quoted.remarks ?? ''}</td>
-                                </tr>
-                              )
-                            })}
-                          </tbody>
-                        </table>
-                        {response.note && <p className="mt-1 text-sm text-gold-100/80">{response.note}</p>}
-                        {response.files.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {response.files.map((file) => (
-                              <button key={file.id} type="button" onClick={() => downloadFile(file)} className="rounded border border-ink-700 px-2 py-1 text-xs hover:border-gold-400">
-                                {file.original_filename} ({formatBytes(file.size_bytes)})
-                              </button>
-                            ))}
+                {detailTarget.acceptance_files.length > 0 && (
+                  <div>
+                    <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Supplier Document (Approval)</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {detailTarget.acceptance_files.map((file) => (
+                        <button key={file.id} type="button" onClick={() => downloadFile(file)} className="rounded border border-ink-700 px-2 py-1 text-xs hover:border-gold-400">
+                          {file.original_filename} ({formatBytes(file.size_bytes)})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {quotedCount >= 2 && (
+                  <div>
+                    <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Comparison (latest quote per supplier)</h3>
+                    <ComparisonTable rfq={detailTarget} materialName={materialName} unitCode={unitCode} supplierName={supplierName} />
+                  </div>
+                )}
+
+                <div>
+                  <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Items</h3>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
+                        <th className="py-2 pr-3">Product / Material</th>
+                        <th className="py-2 pr-3">Quantity</th>
+                        <th className="py-2 pr-3">UOM</th>
+                        <th className="py-2 pr-3">Specification / Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detailTarget.lines.map((line) => (
+                        <tr key={line.id} className="border-t border-ink-700">
+                          <td className="py-2 pr-3">{materialName(line.raw_material_id)}</td>
+                          <td className="py-2 pr-3">{formatNumber(line.quantity)}</td>
+                          <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
+                          <td className="py-2 pr-3">{line.remarks ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div>
+                  <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Suppliers</h3>
+                  <div className="flex flex-col gap-3">
+                    {detailTarget.invitations.map((invitation) => (
+                      <div key={invitation.id} className="rounded-md border border-ink-700 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{supplierName(invitation.supplier_id)}</span>
+                            {detailTarget.status !== 'draft' && (
+                              <Badge tone={INVITATION_TONES[invitation.status]}>{INVITATION_LABELS[invitation.status]}</Badge>
+                            )}
+                            {invitation.last_emailed_at && (
+                              <span className="text-xs text-gold-100/50">Emailed {formatKuwaitTime(invitation.last_emailed_at)}</span>
+                            )}
                           </div>
-                        )}
+                          <div className="flex flex-wrap gap-2">
+                            {invitation.pdf_file && (
+                              <Button variant="secondary" onClick={() => downloadFile(invitation.pdf_file!)}>Download PDF</Button>
+                            )}
+                            {canManage && invitation.pdf_file && isOpenForQuotes && (
+                              <Button variant="secondary" onClick={() => emailInvitation(invitation)} isLoading={emailBusy === invitation.id}>Email</Button>
+                            )}
+                            {canManage && isOpenForQuotes && (
+                              <Button variant="secondary" onClick={() => openCapture(invitation)}>
+                                {invitation.responses.length > 0 ? 'Capture Revised Quote...' : 'Capture Quote...'}
+                              </Button>
+                            )}
+                            {canManage && isOpenForQuotes && invitation.status === 'sent' && (
+                              <Button variant="secondary" onClick={() => declineInvitation(invitation)}>Mark Declined</Button>
+                            )}
+                          </div>
+                        </div>
+
+                        {invitation.responses.map((response) => (
+                          <div
+                            key={response.id}
+                            className={`mt-3 rounded-md border p-3 ${detailTarget.selected_response_id === response.id ? 'border-gold-400' : 'border-ink-700'}`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                              <span>
+                                Received {formatKuwaitTime(response.response_received_at)}
+                                {response.supplier_quotation_number && ` · Ref ${response.supplier_quotation_number}`}
+                                {response.valid_until && ` · Valid until ${formatDate(response.valid_until)}`}
+                              </span>
+                              {detailTarget.selected_response_id === response.id && <Badge tone="gold">Approved</Badge>}
+                            </div>
+                            {(response.payment_terms || response.delivery_terms || response.freight_terms) && (
+                              <p className="mt-1 text-xs text-gold-100/60">
+                                {[
+                                  response.payment_terms && `Payment: ${response.payment_terms}`,
+                                  response.delivery_terms && `Delivery: ${response.delivery_terms}`,
+                                  response.freight_terms && `Freight: ${response.freight_terms}`,
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </p>
+                            )}
+                            <table className="mt-2 w-full text-sm">
+                              <tbody>
+                                {response.lines.map((quoted) => {
+                                  const rfqLine = detailTarget.lines.find((l) => l.id === quoted.rfq_line_id)
+                                  return (
+                                    <tr key={quoted.id} className="border-t border-ink-700">
+                                      <td className="py-1 pr-3">{rfqLine ? materialName(rfqLine.raw_material_id) : `Item #${quoted.rfq_line_id}`}</td>
+                                      <td className="py-1 pr-3">{rfqLine ? `${formatNumber(rfqLine.quantity)} ${unitCode(rfqLine.unit_of_measure_id)}` : ''}</td>
+                                      <td className="py-1 pr-3">{formatPrice(quoted.unit_price)}</td>
+                                      <td className="py-1 pr-3">{quoted.delivery_days !== null ? `${quoted.delivery_days} days` : '—'}</td>
+                                      <td className="py-1 pr-3 text-gold-100/60">{quoted.remarks ?? ''}</td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                            {response.note && <p className="mt-1 text-sm text-gold-100/80">{response.note}</p>}
+                            {response.files.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {response.files.map((file) => (
+                                  <button key={file.id} type="button" onClick={() => downloadFile(file)} className="rounded border border-ink-700 px-2 py-1 text-xs hover:border-gold-400">
+                                    {file.original_filename} ({formatBytes(file.size_bytes)})
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     ))}
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
-          </div>
-        )}
-      </Modal>
+
+              <div className="flex flex-wrap justify-end gap-2 border-t border-ink-700 pt-4">
+              {canManage && detailTarget?.status === 'draft' && <Button onClick={() => openForm(detailTarget)}>Edit / Submit...</Button>}
+              {canManage && detailTarget?.status === 'issued' && !hasQuotes(detailTarget) && (
+                <Button variant="secondary" onClick={() => openForm(detailTarget)}>Revise...</Button>
+              )}
+              {canManage && detailTarget?.status === 'response_received' && <Button onClick={openDecision}>Approve / Reject...</Button>}
+              {canManage && detailTarget?.status === 'selected' && <Button onClick={() => openConvert()}>Generate Purchase Order...</Button>}
+              {detailTarget?.status === 'converted' && detailTarget.purchase_order_id && (
+                <Button variant="secondary" onClick={() => openPurchaseOrder(detailTarget.purchase_order_id)}>View Purchase Order</Button>
+              )}
+              <Button variant="secondary" onClick={closeDetail}>Back to RFQs</Button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       <Modal
         open={!!captureInvitation}

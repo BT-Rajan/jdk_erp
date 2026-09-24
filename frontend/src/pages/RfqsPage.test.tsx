@@ -117,6 +117,7 @@ function renderAt(path: string) {
       <Routes>
         <Route path="/rfqs" element={<RfqsPage />} />
         <Route path="/rfqs/new" element={<RfqFormPage />} />
+        <Route path="/rfqs/:rfqId" element={<RfqsPage />} />
         <Route path="/rfqs/:rfqId/edit" element={<div>Editing RFQ form</div>} />
       </Routes>
     </MemoryRouter>,
@@ -130,7 +131,7 @@ function renderPage() {
 async function openRfq(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: 'Actions for 2630001' }))
   await user.click(await screen.findByRole('menuitem', { name: 'View' }))
-  return screen.findByRole('dialog', { name: /RFQ 2630001/ })
+  return screen.findByRole('region', { name: /RFQ 2630001/ })
 }
 
 beforeEach(() => {
