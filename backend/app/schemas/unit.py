@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.core.validation import check_max_length
 
 
 class UnitOfMeasureOut(BaseModel):
@@ -24,7 +26,7 @@ def _normalize_code(value: str) -> str:
     value = value.strip().upper()
     if not value:
         raise ValueError("Code is required.")
-    return value
+    return check_max_length(value, 20, "Code")
 
 
 def _check_dimension_pair(dimension: str | None, factor: Decimal | None) -> None:
@@ -47,7 +49,7 @@ class UnitOfMeasureCreateRequest(BaseModel):
     code: str
     description: str | None = None
     dimension: str | None = None
-    conversion_factor_to_base: Decimal | None = None
+    conversion_factor_to_base: Decimal | None = Field(default=None, max_digits=18, decimal_places=6)
 
     @field_validator("name")
     @classmethod
@@ -55,7 +57,7 @@ class UnitOfMeasureCreateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 80, "Name")
 
     @field_validator("code")
     @classmethod
@@ -68,7 +70,7 @@ class UnitOfMeasureCreateRequest(BaseModel):
         if value is None:
             return value
         value = value.strip()
-        return value or None
+        return check_max_length(value, 40, "Dimension") if value else None
 
     @model_validator(mode="after")
     def _check_dimension_and_factor(self) -> "UnitOfMeasureCreateRequest":
@@ -87,7 +89,7 @@ class UnitOfMeasureUpdateRequest(BaseModel):
     code: str | None = None
     description: str | None = None
     dimension: str | None = None
-    conversion_factor_to_base: Decimal | None = None
+    conversion_factor_to_base: Decimal | None = Field(default=None, max_digits=18, decimal_places=6)
 
     @field_validator("name")
     @classmethod
@@ -97,7 +99,7 @@ class UnitOfMeasureUpdateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 80, "Name")
 
     @field_validator("code")
     @classmethod
@@ -112,7 +114,7 @@ class UnitOfMeasureUpdateRequest(BaseModel):
         if value is None:
             return value
         value = value.strip()
-        return value or None
+        return check_max_length(value, 40, "Dimension") if value else None
 
 
 class UnitOfMeasureStatusChangeRequest(BaseModel):
