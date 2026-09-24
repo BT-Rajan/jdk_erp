@@ -8,6 +8,7 @@ import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentSettingsPage } from '@/pages/DocumentSettingsPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
+import { FinancePaymentsPage } from '@/pages/FinancePaymentsPage'
 import { GoodsReceivingPage } from '@/pages/GoodsReceivingPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
@@ -82,6 +83,8 @@ export function App() {
           <Route path="/purchase-orders/:purchaseOrderId" element={<PurchaseOrdersPage />} />
           <Route path="/purchase-orders/:purchaseOrderId/edit" element={<PurchaseOrderFormPage />} />
           <Route path="/receiving" element={<GoodsReceivingPage />} />
+          <Route path="/finance/payments" element={<FinancePaymentsPage />} />
+          <Route path="/finance/payments/:purchaseOrderId" element={<FinancePaymentsPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />

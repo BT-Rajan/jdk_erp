@@ -39,7 +39,7 @@ def warehouse_headers(client, db_session, organisation, active_user):
 def _sent_po(client, headers, supplier_id, warehouse_id, material_id, quantity="100", unit_price="10"):
     po = client.post(
         "/api/purchase-orders",
-        json={"supplier_id": supplier_id, "warehouse_id": warehouse_id, "expected_delivery_date": FUTURE, "payment_terms": "30 days"},
+        json={"supplier_id": supplier_id, "warehouse_id": warehouse_id, "expected_delivery_date": FUTURE, "payment_terms": "Others: 30 days"},
         headers=headers,
     ).json()
     client.post(f"/api/purchase-orders/{po['id']}/lines", json={"raw_material_id": material_id, "quantity": quantity, "unit_price": unit_price}, headers=headers)

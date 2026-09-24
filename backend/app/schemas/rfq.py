@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.payment_terms import normalise_payment_terms
 from app.models.rfq import CANCELLED, PRIORITY_NORMAL, REJECTED, RFQ_PRIORITIES, SELECTED
 from app.schemas.file import FileOut
 
@@ -323,10 +324,7 @@ class RfqConvertRequest(BaseModel):
     @field_validator("payment_terms")
     @classmethod
     def _check_payment_terms(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Payment terms are required.")
-        return value
+        return normalise_payment_terms(value)
 
     @field_validator("supplier_reference", "notes")
     @classmethod
