@@ -18,10 +18,12 @@ import { FileUploadField } from '@/components/forms/FileUploadField'
 import { SelectField } from '@/components/forms/SelectField'
 import { TextField } from '@/components/forms/TextField'
 import { TextareaField } from '@/components/forms/TextareaField'
+import { PaymentTermsField } from '@/components/forms/PaymentTermsField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
 import { formatDate, formatNumber } from '@/lib/format'
+import { composePaymentTerms, parsePaymentTerms, paymentTermsError, type PaymentTerms } from '@/lib/paymentTerms'
 import { formatKuwaitTime } from '@/lib/timezone'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
@@ -270,7 +272,7 @@ export function RfqsPage() {
   const [convertOpen, setConvertOpen] = useState(false)
   const [convertLines, setConvertLines] = useState<Record<number, ConvertLineDraft>>({})
   const [convertExpectedDate, setConvertExpectedDate] = useState('')
-  const [convertPaymentTerms, setConvertPaymentTerms] = useState('')
+  const [convertPaymentTerms, setConvertPaymentTerms] = useState<PaymentTerms>(() => parsePaymentTerms(''))
   const [convertSupplierRef, setConvertSupplierRef] = useState('')
   const [convertNotes, setConvertNotes] = useState('')
   const [convertBusy, setConvertBusy] = useState(false)
@@ -615,7 +617,7 @@ export function RfqsPage() {
     }
     setConvertLines(drafts)
     setConvertExpectedDate(rfq.required_delivery_date && rfq.required_delivery_date >= todayIso() ? rfq.required_delivery_date : '')
-    setConvertPaymentTerms(approved?.payment_terms ?? '')
+    setConvertPaymentTerms(parsePaymentTerms(approved?.payment_terms))
     setConvertSupplierRef(approved?.supplier_quotation_number ?? '')
     setConvertNotes('')
     setConvertError(null)
@@ -628,8 +630,9 @@ export function RfqsPage() {
       setConvertError('Enter an expected delivery date (today or later).')
       return
     }
-    if (!convertPaymentTerms.trim()) {
-      setConvertError('Enter the payment terms.')
+    const termsProblem = paymentTermsError(convertPaymentTerms)
+    if (termsProblem) {
+      setConvertError(termsProblem)
       return
     }
     const included = detailTarget.lines.filter((line) => convertLines[line.id]?.include)
@@ -647,7 +650,7 @@ export function RfqsPage() {
     try {
       const { data } = await apiClient.post<Rfq>(`/api/rfqs/${detailTarget.id}/convert-to-po`, {
         expected_delivery_date: convertExpectedDate,
-        payment_terms: convertPaymentTerms.trim(),
+        payment_terms: composePaymentTerms(convertPaymentTerms),
         supplier_reference: convertSupplierRef.trim() || null,
         notes: convertNotes.trim() || null,
         lines,
@@ -1137,7 +1140,7 @@ export function RfqsPage() {
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
               <DateField label="Expected Delivery Date" required min={todayIso()} value={convertExpectedDate} onChange={(e) => setConvertExpectedDate(e.target.value)} />
-              <TextField label="Payment Terms" required placeholder="e.g. Advance, 30 days" value={convertPaymentTerms} onChange={(e) => setConvertPaymentTerms(e.target.value)} />
+              <PaymentTermsField value={convertPaymentTerms} onChange={setConvertPaymentTerms} />
               <TextField label="Supplier Reference" value={convertSupplierRef} onChange={(e) => setConvertSupplierRef(e.target.value)} />
             </div>
             <table className="w-full text-sm">

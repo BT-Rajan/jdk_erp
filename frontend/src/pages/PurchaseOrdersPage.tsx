@@ -15,7 +15,6 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { Spinner } from '@/components/ui/Spinner'
 import { CheckboxField } from '@/components/forms/CheckboxField'
-import { DateField } from '@/components/forms/DateField'
 import { FileUploadField } from '@/components/forms/FileUploadField'
 import { SelectField } from '@/components/forms/SelectField'
 import { TextField } from '@/components/forms/TextField'
@@ -294,36 +293,12 @@ const RECEIPT_STATUS_TONES: Record<PurchaseOrderReceiptStatus, BadgeTone> = {
   reversed: 'warning',
 }
 
-const DECIMAL_RE = /^\d+(\.\d+)?$/
 
 const cancelSchema = z.object({
   cancel_reason: z.string().min(1, 'A reason is required to cancel this purchase order.'),
 })
 
 type CancelFormValues = z.infer<typeof cancelSchema>
-
-const paymentSchema = z.object({
-  payment_date: z.string().min(1, 'Payment date is required'),
-  amount: z
-    .string()
-    .min(1, 'Amount is required')
-    .refine((v) => DECIMAL_RE.test(v) && Number(v) > 0, 'Enter a positive number'),
-  payment_method: z.string(),
-  reference_number: z.string(),
-  notes: z.string(),
-  is_final: z.boolean(),
-})
-
-type PaymentFormValues = z.infer<typeof paymentSchema>
-
-const emptyPaymentDefaults: PaymentFormValues = {
-  payment_date: new Date().toISOString().slice(0, 10),
-  amount: '',
-  payment_method: '',
-  reference_number: '',
-  notes: '',
-  is_final: false,
-}
 
 const cancelPaymentSchema = z.object({
   reason: z.string().min(1, 'A reason is required to cancel this payment.'),
@@ -403,9 +378,6 @@ export function PurchaseOrdersPage() {
   const [cancelTarget, setCancelTarget] = useState<PurchaseOrder | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
 
-  const [paymentFormOpen, setPaymentFormOpen] = useState(false)
-  const [paymentFiles, setPaymentFiles] = useState<File[]>([])
-  const [paymentError, setPaymentError] = useState<string | null>(null)
 
   const [cancelPaymentTarget, setCancelPaymentTarget] = useState<PurchaseOrderPayment | null>(null)
   const [cancelPaymentError, setCancelPaymentError] = useState<string | null>(null)
@@ -430,7 +402,6 @@ export function PurchaseOrdersPage() {
   const [reverseReceiptError, setReverseReceiptError] = useState<string | null>(null)
 
   const cancelForm = useForm<CancelFormValues>({ resolver: zodResolver(cancelSchema), defaultValues: { cancel_reason: '' } })
-  const paymentForm = useForm<PaymentFormValues>({ resolver: zodResolver(paymentSchema), defaultValues: emptyPaymentDefaults })
   const cancelPaymentForm = useForm<CancelPaymentFormValues>({
     resolver: zodResolver(cancelPaymentSchema),
     defaultValues: { reason: '' },
@@ -538,7 +509,6 @@ export function PurchaseOrdersPage() {
 
   function resetDetail() {
     setDetailError(null)
-    setPaymentFormOpen(false)
     setResolveNotes({})
     setResolveChoice({})
     setFollowUpMessage('')
@@ -601,43 +571,6 @@ export function PurchaseOrdersPage() {
       }
     },
     [cancelTarget, detailTarget, refreshDetail, table],
-  )
-
-  function openRecordPayment() {
-    paymentForm.reset(emptyPaymentDefaults)
-    setPaymentFiles([])
-    setPaymentError(null)
-    setPaymentFormOpen(true)
-  }
-
-  const onPaymentSubmit = useCallback(
-    async (values: PaymentFormValues) => {
-      if (!detailTarget) return
-      setPaymentError(null)
-      try {
-        const fileIds: number[] = []
-        for (const file of paymentFiles) {
-          const form = new FormData()
-          form.append('upload', file)
-          const { data } = await apiClient.post<{ id: number }>('/api/files', form)
-          fileIds.push(data.id)
-        }
-        await apiClient.post(`/api/purchase-orders/${detailTarget.id}/payments`, {
-          payment_date: values.payment_date,
-          amount: values.amount,
-          payment_method: values.payment_method || null,
-          reference_number: values.reference_number || null,
-          notes: values.notes || null,
-          is_final: values.is_final,
-          file_ids: fileIds,
-        })
-        setPaymentFormOpen(false)
-        await refreshDetail(detailTarget.id)
-      } catch (err) {
-        setPaymentError(err instanceof ApiError ? err.message : 'Failed to record payment.')
-      }
-    },
-    [detailTarget, paymentFiles, refreshDetail],
   )
 
   function openCancelPayment(payment: PurchaseOrderPayment) {
@@ -1135,29 +1068,7 @@ export function PurchaseOrdersPage() {
                         </tbody>
                       </table>
                     )}
-                    {canManage && !paymentFormOpen && isOpen && (
-                      <Button type="button" variant="secondary" className="mt-2" onClick={openRecordPayment}>Record Payment</Button>
-                    )}
-                    {canManage && paymentFormOpen && (
-                      <form onSubmit={paymentForm.handleSubmit(onPaymentSubmit)} className="mt-2 flex flex-col gap-4 rounded-md border border-ink-700 p-4">
-                        <Alert variant="danger">{paymentError}</Alert>
-                        <DateField label="Payment Date" required {...paymentForm.register('payment_date')} error={paymentForm.formState.errors.payment_date?.message} />
-                        <TextField label="Amount" required {...paymentForm.register('amount')} error={paymentForm.formState.errors.amount?.message} />
-                        <TextField label="Payment Method" hint="e.g. Bank Transfer, Cheque, Cash." {...paymentForm.register('payment_method')} />
-                        <TextField label="Reference No." {...paymentForm.register('reference_number')} />
-                        <FileUploadField label="Attachment" multiple accept=".pdf,.png,.jpg,.jpeg" value={paymentFiles} onChange={setPaymentFiles} />
-                        <TextareaField label="Notes" {...paymentForm.register('notes')} />
-                        <CheckboxField
-                          label="Final payment — this settles the PO"
-                          hint="If the total paid then differs from the PO amount, it goes back to the PO creator."
-                          {...paymentForm.register('is_final')}
-                        />
-                        <div className="flex gap-2">
-                          <Button type="submit" isLoading={paymentForm.formState.isSubmitting}>Save Payment</Button>
-                          <Button type="button" variant="secondary" onClick={() => setPaymentFormOpen(false)}>Cancel</Button>
-                        </div>
-                      </form>
-                    )}
+                    {isOpen && <p className="mt-2 text-xs text-gold-100/60">Payments are recorded by Finance (Finance → Payments).</p>}
                   </div>
                 )}
 

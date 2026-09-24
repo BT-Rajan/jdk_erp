@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.payment_terms import normalise_payment_terms
 from app.models.purchase_order import CANCELLED, DRAFT
 from app.schemas.file import FileOut
 
@@ -217,10 +218,7 @@ class PurchaseOrderCreateRequest(BaseModel):
     @field_validator("payment_terms")
     @classmethod
     def _check_payment_terms(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Payment terms are required.")
-        return value
+        return normalise_payment_terms(value)
 
     @field_validator("supplier_reference", "delivery_instructions", "notes")
     @classmethod
@@ -243,7 +241,9 @@ class PurchaseOrderUpdateRequest(BaseModel):
     def _not_null(cls, value, info):
         if value is None or (isinstance(value, str) and not value.strip()):
             raise ValueError(f"{info.field_name} is required.")
-        return value.strip() if isinstance(value, str) else value
+        if info.field_name == "payment_terms":
+            return normalise_payment_terms(value)
+        return value
 
     @field_validator("supplier_reference", "delivery_instructions", "notes")
     @classmethod
@@ -508,3 +508,49 @@ class ReceivingOut(BaseModel):
     can_receive: bool
     lines: list[ReceivingLineOut]
     receipts: list[ReceivingReceiptOut]
+
+
+# --- Finance (payments) -- the PO read-only, plus what's been paid -------------
+
+
+class FinanceLineOut(BaseModel):
+    material_name: str
+    quantity: Decimal
+    unit_code: str
+    unit_price: Decimal
+    line_total: Decimal
+
+
+class FinancePaymentOut(BaseModel):
+    id: int
+    payment_number: str
+    payment_date: date
+    amount: Decimal
+    payment_method: str | None
+    notes: str | None
+    status: str
+
+
+class FinancePurchaseOrderOut(BaseModel):
+    """What Finance sees of a PO (docs/modules/purchase_orders.md
+    Revision 8): every field read-only; Finance only records payments
+    against it."""
+
+    id: int
+    po_number: str
+    supplier_name: str
+    order_date: date
+    expected_delivery_date: date | None
+    payment_terms: str | None
+    supplier_reference: str | None
+    rfq_number: str | None
+    notes: str | None
+    status: str
+    approved_at: datetime | None
+    currency: str
+    final_amount: Decimal
+    paid_amount: Decimal
+    outstanding_amount: Decimal
+    payment_status: str
+    lines: list[FinanceLineOut]
+    payments: list[FinancePaymentOut]

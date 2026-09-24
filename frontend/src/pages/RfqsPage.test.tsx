@@ -259,11 +259,14 @@ describe('RfqsPage', () => {
     const convert = await screen.findByRole('dialog', { name: 'Generate Purchase Order' })
     expect((within(convert).getByLabelText('Unit price for Cement') as HTMLInputElement).value).toBe('39.5')
     expect(within(convert).queryByLabelText(/Delivery Location/)).not.toBeInTheDocument()
+    // The quote's wording becomes Others with that text.
+    expect((within(convert).getByRole('combobox', { name: /^Payment Terms/ }) as HTMLSelectElement).value).toBe('Others')
+    expect((within(convert).getByLabelText(/Payment Terms Details/) as HTMLInputElement).value).toBe('30 days')
     await user.click(within(convert).getByLabelText('Include Sand'))
     await user.click(within(convert).getByRole('button', { name: 'Create Purchase Order' }))
     expect(postMock).toHaveBeenCalledWith('/api/rfqs/1/convert-to-po', {
       expected_delivery_date: '2099-09-30',
-      payment_terms: '30 days',
+      payment_terms: 'Others: 30 days',
       supplier_reference: 'BQ-9',
       notes: null,
       lines: [{ rfq_line_id: 100, unit_price: '39.5' }],

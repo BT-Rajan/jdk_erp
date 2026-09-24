@@ -85,7 +85,7 @@ def _reject(client, headers, rfq_id):
 
 
 def _convert(client, headers, rfq_id, warehouse_id, lines=None, **extra):
-    body = {"warehouse_id": warehouse_id, "expected_delivery_date": FUTURE, "payment_terms": "30 days", **extra}
+    body = {"warehouse_id": warehouse_id, "expected_delivery_date": FUTURE, "payment_terms": "Others: 30 days", **extra}
     if lines is not None:
         body["lines"] = lines
     return client.post(f"/api/rfqs/{rfq_id}/convert-to-po", json=body, headers=headers)

@@ -884,3 +884,27 @@ longer take `warehouse_id` or `currency`: the PO is received into the
 organisation's active warehouse (refused with a clear message if there
 is none) and its currency is always KWD. The columns stay for stock
 posting and existing data. No migration.
+
+## Revision 8 — payment terms and Finance
+
+**Payment terms** are one of: **Advance**, **Prepaid** (the PO is for
+record only — payment was already made), **On Delivery**, or **Others**
+with a description. Stored in `payment_terms` as `Advance`, `Prepaid`,
+`On Delivery` or `Others: <details>` (`app/core/payment_terms.py`); any
+other value is refused (422). Used by the PO form and the RFQ's Generate
+Purchase Order (a quote's own wording pre-fills as Others). A supplier's
+quote keeps its free-text terms.
+
+**Finance** (`/finance/payments`, `app/api/finance.py`): every approved PO
+comes to Finance / Accounts Manager whatever its terms — whether it is
+paid before or after delivery is decided case by case. The list shows
+approved POs with an amount still to pay. Opening one shows the PO
+read-only (supplier, terms, dates, items and prices, amount, paid,
+outstanding, earlier payments); Finance enters only **amount, date, mode
+(Bank Transfer / Cheque / Cash / KNET / Card) and notes**. For Prepaid,
+Finance records the payment already made so the PO can close. Gated by
+`purchase_payment:create` alone — no Procurement grant needed.
+
+Payments are no longer recorded from the Procurement PO page; it shows
+them read-only (cancelling a payment stays there, under
+`purchase_payment:cancel`). No migration.

@@ -8,8 +8,10 @@ import { DateField } from '@/components/forms/DateField'
 import { SearchSelectField } from '@/components/forms/SearchSelectField'
 import { TextField } from '@/components/forms/TextField'
 import { TextareaField } from '@/components/forms/TextareaField'
+import { PaymentTermsField } from '@/components/forms/PaymentTermsField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { formatDate } from '@/lib/format'
+import { composePaymentTerms, parsePaymentTerms, paymentTermsError, type PaymentTerms } from '@/lib/paymentTerms'
 import { isPositiveDecimal, todayIso, type LookupOption, type PaginatedResponse } from './rfqShared'
 
 /** The parts of backend/app/schemas/purchase_order.py this form uses. */
@@ -55,7 +57,7 @@ interface ItemDraft {
 interface PoFormState {
   supplier_id: string
   expected_delivery_date: string
-  payment_terms: string
+  payment_terms: PaymentTerms
   supplier_reference: string
   delivery_instructions: string
   notes: string
@@ -73,7 +75,7 @@ function formFromPo(po: Po | null): PoFormState {
     return {
       supplier_id: '',
       expected_delivery_date: '',
-      payment_terms: '',
+      payment_terms: parsePaymentTerms(''),
       supplier_reference: '',
       delivery_instructions: '',
       notes: '',
@@ -83,7 +85,7 @@ function formFromPo(po: Po | null): PoFormState {
   return {
     supplier_id: String(po.supplier_id),
     expected_delivery_date: po.expected_delivery_date ?? '',
-    payment_terms: po.payment_terms ?? '',
+    payment_terms: parsePaymentTerms(po.payment_terms),
     supplier_reference: po.supplier_reference ?? '',
     delivery_instructions: po.delivery_instructions ?? '',
     notes: po.notes ?? '',
@@ -105,7 +107,8 @@ function validateForm(form: PoFormState, submit: boolean): string | null {
   if (!form.supplier_id) return 'Supplier is required.'
   if (!form.expected_delivery_date) return 'Expected delivery date is required.'
   if (form.expected_delivery_date < todayIso()) return 'Expected delivery date cannot be in the past.'
-  if (!form.payment_terms.trim()) return 'Payment terms are required.'
+  const termsProblem = paymentTermsError(form.payment_terms)
+  if (termsProblem) return termsProblem
   if (submit && form.items.length === 0) return 'Add at least one item.'
   for (const [index, item] of form.items.entries()) {
     const n = index + 1
@@ -212,7 +215,7 @@ export function PurchaseOrderFormPage() {
   async function persist(): Promise<Po> {
     const header = {
       expected_delivery_date: form.expected_delivery_date,
-      payment_terms: form.payment_terms.trim(),
+      payment_terms: composePaymentTerms(form.payment_terms),
       supplier_reference: form.supplier_reference.trim() || null,
       delivery_instructions: form.delivery_instructions.trim() || null,
       notes: form.notes.trim() || null,
@@ -335,13 +338,7 @@ export function PurchaseOrderFormPage() {
               value={form.expected_delivery_date}
               onChange={(e) => setField('expected_delivery_date', e.target.value)}
             />
-            <TextField
-              label="Payment Terms"
-              required
-              hint="e.g. Advance, 30 days, Payment on delivery."
-              value={form.payment_terms}
-              onChange={(e) => setField('payment_terms', e.target.value)}
-            />
+            <PaymentTermsField value={form.payment_terms} onChange={(value) => setField('payment_terms', value)} />
             <TextField
               label="Supplier Reference"
               hint="Supplier's quotation / reference number."

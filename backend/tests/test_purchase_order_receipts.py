@@ -36,7 +36,7 @@ def _create_po(client, headers, supplier_id, warehouse_id):
         "/api/purchase-orders",
         json={
             "supplier_id": supplier_id, "warehouse_id": warehouse_id, "expected_delivery_date": FUTURE,
-            "payment_terms": "30 days",
+            "payment_terms": "Others: 30 days",
         },
         headers=headers,
     )

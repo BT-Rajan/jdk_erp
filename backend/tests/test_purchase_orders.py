@@ -29,7 +29,7 @@ def _login_headers(client, username="ada", password="Str0ng!Pass"):
 def _create_po(client, headers, supplier_id, warehouse_id, notes=None, **extra):
     body = {
         "supplier_id": supplier_id, "warehouse_id": warehouse_id, "expected_delivery_date": FUTURE,
-        "payment_terms": "30 days", "notes": notes, **extra,
+        "payment_terms": "Others: 30 days", "notes": notes, **extra,
     }
     return client.post("/api/purchase-orders", json=body, headers=headers)
 
@@ -152,7 +152,7 @@ def test_create_stamps_date_creator_and_currency(client, admin_headers, admin_us
 
 def test_create_uses_the_warehouse_and_kwd(client, admin_headers, acme_supplier, warehouse_1, db_session):
     # A posted warehouse_id / currency is ignored: one warehouse, always KWD.
-    body = {"supplier_id": acme_supplier.id, "expected_delivery_date": FUTURE, "payment_terms": "30 days", "currency": "USD", "warehouse_id": 999}
+    body = {"supplier_id": acme_supplier.id, "expected_delivery_date": FUTURE, "payment_terms": "Others: 30 days", "currency": "USD", "warehouse_id": 999}
     created = client.post("/api/purchase-orders", json=body, headers=admin_headers)
     assert created.status_code == 201
     assert created.json()["warehouse_id"] == warehouse_1.id
