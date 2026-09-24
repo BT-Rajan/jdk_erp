@@ -14,6 +14,7 @@ import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { ProductsPage } from '@/pages/ProductsPage'
 import { MachinesPage } from '@/pages/MachinesPage'
 import { ProductionLinesPage } from '@/pages/ProductionLinesPage'
+import { PurchaseOrderFormPage } from '@/pages/PurchaseOrderFormPage'
 import { PurchaseOrdersPage } from '@/pages/PurchaseOrdersPage'
 import { RawMaterialsPage } from '@/pages/RawMaterialsPage'
 import { RfqFormPage } from '@/pages/RfqFormPage'
@@ -56,6 +57,8 @@ export function App() {
           <Route path="/rfqs/new" element={<RfqFormPage />} />
           <Route path="/rfqs/:rfqId/edit" element={<RfqFormPage />} />
           <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
+          <Route path="/purchase-orders/new" element={<PurchaseOrderFormPage />} />
+          <Route path="/purchase-orders/:purchaseOrderId/edit" element={<PurchaseOrderFormPage />} />
           <Route path="/receiving" element={<GoodsReceivingPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />

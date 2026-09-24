@@ -856,3 +856,17 @@ manual close. A closed PO can't take payments, payment cancellations or
 receipt reversals.
 
 Migration `0035_purchase_order_reconciliation_and_follow_up.py`.
+
+## Revision 7 — PO form as a page
+
+New Purchase opens `/purchase-orders/new`; **Edit** on a draft PO opens
+`/purchase-orders/:id/edit`. The header and the items are entered together
+on one page (material, quantity, purchase UOM, unit price, line total,
+specification / remarks). Save Draft keeps it editable; Submit for
+Approval saves and submits. Either way the user returns to the list with
+that PO open. Supplier and delivery location are fixed once the draft
+exists.
+
+The per-item Required By is no longer asked: the header's Expected
+Delivery Date is the one date. The `required_by_date` column stays for
+existing data. No migration.

@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
-import { FormDialog } from '@/components/ui/FormDialog'
 import { Modal } from '@/components/ui/Modal'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
@@ -275,10 +274,6 @@ const PAYMENT_STATUS_TONES: Record<PaymentStatus, BadgeTone> = { unpaid: 'neutra
 
 const CANCELLABLE: PurchaseOrderStatus[] = ['draft', 'pending_approval', 'approved', 'sent', 'partially_received']
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
 function stamp(at: string | null, by: string | null): string | null {
   if (!at) return null
   return `${formatKuwaitTime(at)}${by ? ` by ${by}` : ''}`
@@ -299,59 +294,6 @@ const RECEIPT_STATUS_TONES: Record<PurchaseOrderReceiptStatus, BadgeTone> = {
 }
 
 const DECIMAL_RE = /^\d+(\.\d+)?$/
-
-const poSchema = z.object({
-  supplier_id: z.string().min(1, 'Supplier is required'),
-  warehouse_id: z.string().min(1, 'Delivery location is required'),
-  expected_delivery_date: z
-    .string()
-    .min(1, 'Expected delivery date is required')
-    .refine((v) => v >= todayIso(), 'Cannot be in the past'),
-  payment_terms: z.string().trim().min(1, 'Payment terms are required'),
-  currency: z.string().trim().regex(/^[A-Za-z]{3}$/, 'Enter a 3-letter currency code'),
-  supplier_reference: z.string(),
-  delivery_instructions: z.string(),
-  notes: z.string(),
-})
-
-type PoFormValues = z.infer<typeof poSchema>
-
-const emptyPoDefaults: PoFormValues = {
-  supplier_id: '',
-  warehouse_id: '',
-  expected_delivery_date: '',
-  payment_terms: '',
-  currency: 'KWD',
-  supplier_reference: '',
-  delivery_instructions: '',
-  notes: '',
-}
-
-const lineSchema = z.object({
-  raw_material_id: z.string().min(1, 'Raw material is required'),
-  quantity: z
-    .string()
-    .min(1, 'Quantity is required')
-    .refine((v) => DECIMAL_RE.test(v) && Number(v) > 0, 'Enter a positive number'),
-  unit_of_measure_id: z.string().min(1, 'Unit is required'),
-  unit_price: z
-    .string()
-    .min(1, 'Unit price is required')
-    .refine((v) => DECIMAL_RE.test(v) && Number(v) > 0, 'Enter a positive number'),
-  required_by_date: z.string(),
-  remarks: z.string(),
-})
-
-type LineFormValues = z.infer<typeof lineSchema>
-
-const emptyLineDefaults: LineFormValues = {
-  raw_material_id: '',
-  quantity: '',
-  unit_of_measure_id: '',
-  unit_price: '',
-  required_by_date: '',
-  remarks: '',
-}
 
 const cancelSchema = z.object({
   cancel_reason: z.string().min(1, 'A reason is required to cancel this purchase order.'),
@@ -446,18 +388,15 @@ export function PurchaseOrdersPage() {
   const [materials, setMaterials] = useState<LookupOption[]>([])
   const [units, setUnits] = useState<LookupOption[]>([])
   const [pageError, setPageError] = useState<string | undefined>(undefined)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
-
-  const [formOpen, setFormOpen] = useState(false)
-  const [formError, setFormError] = useState<string | null>(null)
 
   const [detailTarget, setDetailTarget] = useState<PurchaseOrder | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [expandedRevision, setExpandedRevision] = useState<number | null>(null)
 
-  const [lineFormOpen, setLineFormOpen] = useState(false)
 
   const [actionBusy, setActionBusy] = useState<string | null>(null)
 
@@ -490,15 +429,6 @@ export function PurchaseOrdersPage() {
   const [reverseReceiptTarget, setReverseReceiptTarget] = useState<PurchaseOrderReceipt | null>(null)
   const [reverseReceiptError, setReverseReceiptError] = useState<string | null>(null)
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setError: setFieldError,
-    formState: { errors, isSubmitting },
-  } = useForm<PoFormValues>({ resolver: zodResolver(poSchema), defaultValues: emptyPoDefaults })
-
-  const lineForm = useForm<LineFormValues>({ resolver: zodResolver(lineSchema), defaultValues: emptyLineDefaults })
   const cancelForm = useForm<CancelFormValues>({ resolver: zodResolver(cancelSchema), defaultValues: { cancel_reason: '' } })
   const paymentForm = useForm<PaymentFormValues>({ resolver: zodResolver(paymentSchema), defaultValues: emptyPaymentDefaults })
   const cancelPaymentForm = useForm<CancelPaymentFormValues>({
@@ -557,9 +487,11 @@ export function PurchaseOrdersPage() {
   // back-navigation doesn't reopen it.
   const location = useLocation()
   const navigate = useNavigate()
-  const openPurchaseOrderId = (location.state as { openPurchaseOrderId?: number } | null)?.openPurchaseOrderId
+  const navState = location.state as { openPurchaseOrderId?: number; notice?: string } | null
+  const openPurchaseOrderId = navState?.openPurchaseOrderId
   useEffect(() => {
     if (!openPurchaseOrderId) return
+    setNotice(navState?.notice ?? null)
     navigate(location.pathname, { replace: true, state: null })
     apiClient
       .get<PurchaseOrder>(`/api/purchase-orders/${openPurchaseOrderId}`)
@@ -568,43 +500,8 @@ export function PurchaseOrdersPage() {
   }, [openPurchaseOrderId])
 
   function openCreate() {
-    reset(emptyPoDefaults)
-    setFormError(null)
-    setFormOpen(true)
+    navigate('/purchase-orders/new')
   }
-
-  const onFormSubmit = useCallback(
-    async (values: PoFormValues) => {
-      setFormError(null)
-      try {
-        const { data } = await apiClient.post<PurchaseOrder>('/api/purchase-orders', {
-          supplier_id: Number(values.supplier_id),
-          warehouse_id: Number(values.warehouse_id),
-          expected_delivery_date: values.expected_delivery_date,
-          payment_terms: values.payment_terms.trim(),
-          currency: values.currency.trim().toUpperCase(),
-          supplier_reference: values.supplier_reference || null,
-          delivery_instructions: values.delivery_instructions || null,
-          notes: values.notes || null,
-        })
-        setFormOpen(false)
-        table.refetch()
-        openDetail(data)
-      } catch (err) {
-        if (err instanceof ApiError) {
-          if (err.fields) {
-            for (const [field, message] of Object.entries(err.fields)) {
-              if (field in emptyPoDefaults) setFieldError(field as keyof PoFormValues, { message })
-            }
-          }
-          setFormError(err.message)
-        } else {
-          setFormError('Something went wrong. Please try again.')
-        }
-      }
-    },
-    [setFieldError, table],
-  )
 
   const refreshDetail = useCallback(
     async (id: number) => {
@@ -619,7 +516,6 @@ export function PurchaseOrdersPage() {
   function openDetail(po: PurchaseOrder) {
     setDetailTarget(po)
     setDetailError(null)
-    setLineFormOpen(false)
     setPaymentFormOpen(false)
     setResolveNotes({})
     setResolveChoice({})
@@ -635,51 +531,7 @@ export function PurchaseOrdersPage() {
 
   function closeDetail() {
     setDetailTarget(null)
-  }
-
-  function openAddLine() {
-    lineForm.reset(emptyLineDefaults)
-    setLineFormOpen(true)
-  }
-
-  function onMaterialChosen(materialId: string) {
-    // Purchase UOM defaults from the item master; price from its reference cost.
-    const material = materialsById.get(Number(materialId))
-    lineForm.setValue('unit_of_measure_id', material?.unit_of_measure_id ? String(material.unit_of_measure_id) : '')
-    if (material?.reference_cost) lineForm.setValue('unit_price', String(Number(material.reference_cost)))
-  }
-
-  const onLineFormSubmit = useCallback(
-    async (values: LineFormValues) => {
-      if (!detailTarget) return
-      setDetailError(null)
-      try {
-        await apiClient.post(`/api/purchase-orders/${detailTarget.id}/lines`, {
-          raw_material_id: Number(values.raw_material_id),
-          quantity: values.quantity,
-          unit_of_measure_id: Number(values.unit_of_measure_id),
-          unit_price: values.unit_price,
-          required_by_date: values.required_by_date || null,
-          remarks: values.remarks || null,
-        })
-        setLineFormOpen(false)
-        await refreshDetail(detailTarget.id)
-      } catch (err) {
-        setDetailError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
-      }
-    },
-    [detailTarget, refreshDetail],
-  )
-
-  async function removeLine(line: PurchaseOrderLine) {
-    if (!detailTarget) return
-    setDetailError(null)
-    try {
-      await apiClient.delete(`/api/purchase-orders/${detailTarget.id}/lines/${line.id}`)
-      await refreshDetail(detailTarget.id)
-    } catch (err) {
-      setDetailError(err instanceof ApiError ? err.message : 'Failed to remove line.')
-    }
+    setNotice(null)
   }
 
   /** One lifecycle step: submit / approve / send back / revise / send. */
@@ -995,38 +847,6 @@ export function PurchaseOrdersPage() {
         }
       />
 
-      {canManage && (
-        <FormDialog
-          open={formOpen}
-          title="New Purchase"
-          onClose={() => setFormOpen(false)}
-          onSubmit={handleSubmit(onFormSubmit)}
-          submitting={isSubmitting}
-          submitLabel="Create Draft"
-        >
-          <Alert variant="danger">{formError}</Alert>
-          <p className="text-sm text-gold-100/60">PO number and PO date ({todayIso()}) are assigned automatically. Add items after creating the draft.</p>
-          <SelectField label="Supplier" required {...register('supplier_id')} error={errors.supplier_id?.message}>
-            <option value="">Select a supplier...</option>
-            {suppliers.filter((s) => s.is_active).map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </SelectField>
-          <SelectField label="Delivery Location" required {...register('warehouse_id')} error={errors.warehouse_id?.message}>
-            <option value="">Select a warehouse...</option>
-            {warehouses.filter((w) => w.is_active).map((w) => (
-              <option key={w.id} value={w.id}>{w.name}</option>
-            ))}
-          </SelectField>
-          <DateField label="Expected Delivery Date" required min={todayIso()} {...register('expected_delivery_date')} error={errors.expected_delivery_date?.message} />
-          <TextField label="Payment Terms" required hint="e.g. Advance, 30 days, Payment on delivery." {...register('payment_terms')} error={errors.payment_terms?.message} />
-          <TextField label="Currency" required {...register('currency')} error={errors.currency?.message} />
-          <TextField label="Supplier Reference" hint="Supplier's quotation / reference number." {...register('supplier_reference')} />
-          <TextareaField label="Delivery Instructions" {...register('delivery_instructions')} />
-          <TextareaField label="Notes" {...register('notes')} error={errors.notes?.message} />
-        </FormDialog>
-      )}
-
       <Modal
         open={!!detailTarget}
         title={detailTarget ? `Purchase Order ${detailTarget.po_number}` : ''}
@@ -1034,6 +854,9 @@ export function PurchaseOrdersPage() {
         onClose={closeDetail}
         footer={
           <>
+            {canManage && detailTarget?.status === 'draft' && (
+              <Button variant="secondary" onClick={() => navigate(`/purchase-orders/${detailTarget.id}/edit`)}>Edit</Button>
+            )}
             {canManage && detailTarget?.status === 'draft' && (
               <Button onClick={submitForApproval} isLoading={actionBusy === 'submit'} disabled={detailTarget.lines.length === 0}>
                 Submit for Approval
@@ -1066,6 +889,7 @@ export function PurchaseOrdersPage() {
       >
         {detailTarget && (
           <div className="flex flex-col gap-6">
+            <Alert variant="success">{notice}</Alert>
             <Alert variant="danger">{detailError}</Alert>
 
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
@@ -1108,7 +932,6 @@ export function PurchaseOrdersPage() {
                         <th className="py-2 pr-3">Line Total</th>
                         <th className="py-2 pr-3">Received</th>
                         <th className="py-2 pr-3">Remaining</th>
-                        {canManage && detailTarget.status === 'draft' && <th className="py-2"></th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -1119,7 +942,6 @@ export function PurchaseOrdersPage() {
                             <td className="py-2 pr-3">
                               {materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}
                               {line.remarks && <span className="block text-xs text-gold-100/50">{line.remarks}</span>}
-                              {line.required_by_date && <span className="block text-xs text-gold-100/50">Required by {formatDate(line.required_by_date)}</span>}
                             </td>
                             <td className="py-2 pr-3">{line.quantity}</td>
                             <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
@@ -1132,14 +954,6 @@ export function PurchaseOrdersPage() {
                                 <span className="block text-xs text-gold-100/50">{line.cancelled_quantity} cancelled</span>
                               )}
                             </td>
-                            {canManage && detailTarget.status === 'draft' && (
-                              <td className="py-2 text-right">
-                                <ActionMenu
-                                  label={`Actions for ${materialsById.get(line.raw_material_id)?.name ?? 'line'}`}
-                                  options={[{ key: 'remove', label: 'Remove', danger: true, onSelect: () => removeLine(line) }]}
-                                />
-                              </td>
-                            )}
                           </tr>
                         )
                       })}
@@ -1148,38 +962,6 @@ export function PurchaseOrdersPage() {
                 </div>
               )}
 
-              {canManage && detailTarget.status === 'draft' && !lineFormOpen && (
-                <Button type="button" variant="secondary" className="mt-2" onClick={openAddLine}>Add Item</Button>
-              )}
-              {canManage && detailTarget.status === 'draft' && lineFormOpen && (
-                <form onSubmit={lineForm.handleSubmit(onLineFormSubmit)} className="mt-2 flex flex-col gap-4 rounded-md border border-ink-700 p-4">
-                  <SelectField
-                    label="Product / Material"
-                    required
-                    {...lineForm.register('raw_material_id', { onChange: (e) => onMaterialChosen(e.target.value) })}
-                    error={lineForm.formState.errors.raw_material_id?.message}
-                  >
-                    <option value="">Select a raw material...</option>
-                    {materials.filter((m) => m.is_active).map((m) => (
-                      <option key={m.id} value={m.id}>{m.name} ({m.code})</option>
-                    ))}
-                  </SelectField>
-                  <TextField label="Quantity" required {...lineForm.register('quantity')} error={lineForm.formState.errors.quantity?.message} />
-                  <SelectField label="Purchase UOM" required {...lineForm.register('unit_of_measure_id')} error={lineForm.formState.errors.unit_of_measure_id?.message}>
-                    <option value="">Select a unit...</option>
-                    {units.filter((u) => u.is_active).map((u) => (
-                      <option key={u.id} value={u.id}>{u.code}</option>
-                    ))}
-                  </SelectField>
-                  <TextField label="Unit Price" required hint="Agreed supplier price per unit." {...lineForm.register('unit_price')} error={lineForm.formState.errors.unit_price?.message} />
-                  <DateField label="Required By" hint="Only if different from the expected delivery date." {...lineForm.register('required_by_date')} />
-                  <TextField label="Specification / Remarks" {...lineForm.register('remarks')} />
-                  <div className="flex gap-2">
-                    <Button type="submit" isLoading={lineForm.formState.isSubmitting}>Add item</Button>
-                    <Button type="button" variant="secondary" onClick={() => setLineFormOpen(false)}>Cancel</Button>
-                  </div>
-                </form>
-              )}
 
               {canReceive && (
                 <Button type="button" variant="secondary" className="mt-2" onClick={() => openToReceiving(detailTarget.id)}>
