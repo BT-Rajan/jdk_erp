@@ -760,6 +760,11 @@ export function RfqsPage() {
     void loadLookups()
   }, [loadLookups])
 
+  /** Lands on Purchase Orders with that PO open. */
+  function openPurchaseOrder(purchaseOrderId: number | null) {
+    navigate('/purchase-orders', { state: purchaseOrderId ? { openPurchaseOrderId: purchaseOrderId } : undefined })
+  }
+
   const refreshDetail = useCallback(
     async (id: number) => {
       const { data } = await apiClient.get<Rfq>(`/api/rfqs/${id}`)
@@ -1048,7 +1053,7 @@ export function RfqsPage() {
     setConvertBusy(true)
     setConvertError(null)
     try {
-      await apiClient.post(`/api/rfqs/${detailTarget.id}/convert-to-po`, {
+      const { data } = await apiClient.post<Rfq>(`/api/rfqs/${detailTarget.id}/convert-to-po`, {
         warehouse_id: Number(convertWarehouseId),
         expected_delivery_date: convertExpectedDate,
         payment_terms: convertPaymentTerms.trim(),
@@ -1059,7 +1064,7 @@ export function RfqsPage() {
       setConvertOpen(false)
       setDetailTarget(null)
       table.refetch()
-      navigate('/purchase-orders')
+      openPurchaseOrder(data.purchase_order_id)
     } catch (err) {
       setConvertError(err instanceof ApiError ? err.message : 'Failed to create purchase order.')
     } finally {
@@ -1096,7 +1101,7 @@ export function RfqsPage() {
           if (rfq.status === 'draft') options.push({ key: 'edit', label: 'Edit / Submit...', onSelect: () => openForm(rfq) })
           if (rfq.status === 'issued' && !hasQuotes(rfq)) options.push({ key: 'revise', label: 'Revise...', onSelect: () => openForm(rfq) })
           if (rfq.status === 'converted' && rfq.purchase_order_id)
-            options.push({ key: 'po', label: 'View Purchase Order', onSelect: () => navigate('/purchase-orders') })
+            options.push({ key: 'po', label: 'View Purchase Order', onSelect: () => openPurchaseOrder(rfq.purchase_order_id) })
           if (['draft', 'issued', 'response_received', 'selected'].includes(rfq.status))
             options.push({ key: 'cancel', label: 'Cancel', danger: true, onSelect: () => openCancel(rfq) })
         }
@@ -1179,7 +1184,7 @@ export function RfqsPage() {
             {canManage && detailTarget?.status === 'response_received' && <Button onClick={openDecision}>Approve / Reject...</Button>}
             {canManage && detailTarget?.status === 'selected' && <Button onClick={() => openConvert()}>Generate Purchase Order...</Button>}
             {detailTarget?.status === 'converted' && detailTarget.purchase_order_id && (
-              <Button variant="secondary" onClick={() => navigate('/purchase-orders')}>View Purchase Order</Button>
+              <Button variant="secondary" onClick={() => openPurchaseOrder(detailTarget.purchase_order_id)}>View Purchase Order</Button>
             )}
             <Button variant="secondary" onClick={() => setDetailTarget(null)}>Close</Button>
           </>

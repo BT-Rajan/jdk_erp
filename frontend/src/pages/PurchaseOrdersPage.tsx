@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 import { ActionMenu, type ActionMenuOption } from '@/components/ui/ActionMenu'
 import { Alert } from '@/components/ui/Alert'
@@ -486,6 +487,21 @@ export function PurchaseOrdersPage() {
   useEffect(() => {
     void loadLookups()
   }, [loadLookups])
+
+  // Arriving from an RFQ's PO generation (or "View Purchase Order"):
+  // open that PO straight away, then clear the state so a refresh or
+  // back-navigation doesn't reopen it.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const openPurchaseOrderId = (location.state as { openPurchaseOrderId?: number } | null)?.openPurchaseOrderId
+  useEffect(() => {
+    if (!openPurchaseOrderId) return
+    navigate(location.pathname, { replace: true, state: null })
+    apiClient
+      .get<PurchaseOrder>(`/api/purchase-orders/${openPurchaseOrderId}`)
+      .then(({ data }) => openDetail(data))
+      .catch((err) => setPageError(err instanceof ApiError ? err.message : 'Failed to open the purchase order.'))
+  }, [openPurchaseOrderId])
 
   function openCreate() {
     reset(emptyPoDefaults)
