@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 import { ActionMenu, type ActionMenuOption } from '@/components/ui/ActionMenu'
 import { Alert } from '@/components/ui/Alert'
@@ -14,7 +14,6 @@ import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { DateField } from '@/components/forms/DateField'
 import { FileUploadField } from '@/components/forms/FileUploadField'
-import { SearchSelectField } from '@/components/forms/SearchSelectField'
 import { SelectField } from '@/components/forms/SelectField'
 import { TextField } from '@/components/forms/TextField'
 import { TextareaField } from '@/components/forms/TextareaField'
@@ -25,96 +24,17 @@ import { formatDate, formatNumber } from '@/lib/format'
 import { formatKuwaitTime } from '@/lib/timezone'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
-
-/** Mirrors backend/app/schemas/rfq.py's RfqOut. */
-interface RfqFile {
-  id: number
-  original_filename: string
-  mime_type: string
-  size_bytes: number
-}
-
-interface RfqResponseLine {
-  id: number
-  rfq_line_id: number
-  unit_price: string
-  delivery_days: number | null
-  remarks: string | null
-}
-
-interface RfqResponse {
-  id: number
-  invitation_id: number
-  response_received_at: string
-  supplier_quotation_number: string | null
-  quotation_date: string | null
-  valid_until: string | null
-  payment_terms: string | null
-  delivery_terms: string | null
-  freight_terms: string | null
-  note: string | null
-  created_by_user_id: number | null
-  lines: RfqResponseLine[]
-  files: RfqFile[]
-}
-
-interface RfqInvitation {
-  id: number
-  supplier_id: number
-  status: 'sent' | 'quoted' | 'declined'
-  invited_at: string
-  last_emailed_at: string | null
-  pdf_file: RfqFile | null
-  responses: RfqResponse[]
-}
-
-interface RfqLine {
-  id: number
-  raw_material_id: number
-  quantity: string
-  unit_of_measure_id: number
-  required_by_date: string | null
-  remarks: string | null
-}
-
-interface Rfq {
-  id: number
-  organisation_id: number
-  rfq_number: string
-  status: 'draft' | 'issued' | 'response_received' | 'selected' | 'rejected' | 'cancelled' | 'converted'
-  revision_number: number
-  priority: 'normal' | 'urgent'
-  rfq_date: string
-  required_delivery_date: string | null
-  requested_by_user_id: number | null
-  requested_by_name: string | null
-  notes: string | null
-  cancel_reason: string | null
-  decided_by_user_id: number | null
-  decided_at: string | null
-  decision_note: string | null
-  selected_response_id: number | null
-  purchase_order_id: number | null
-  lines: RfqLine[]
-  invitations: RfqInvitation[]
-  acceptance_files: RfqFile[]
-}
-
-interface LookupOption {
-  id: number
-  name: string
-  code: string | null
-  is_active: boolean
-}
-
-interface MaterialOption extends LookupOption {
-  unit_of_measure_id: number
-}
-
-interface PaginatedResponse<T> {
-  data: T[]
-  pagination: { page: number; page_size: number; total: number; total_pages: number }
-}
+import {
+  isPositiveDecimal,
+  todayIso,
+  type LookupOption,
+  type MaterialOption,
+  type PaginatedResponse,
+  type Rfq,
+  type RfqFile,
+  type RfqInvitation,
+  type RfqResponse,
+} from './rfqShared'
 
 interface RfqsFilters {
   search: string
@@ -144,17 +64,8 @@ const STATUS_TONES: Record<Rfq['status'], BadgeTone> = {
 const INVITATION_LABELS: Record<RfqInvitation['status'], string> = { sent: 'Awaiting Quote', quoted: 'Quoted', declined: 'Declined' }
 const INVITATION_TONES: Record<RfqInvitation['status'], BadgeTone> = { sent: 'info', quoted: 'success', declined: 'neutral' }
 
-const DECIMAL_RE = /^\d+(\.\d+)?$/
 const INTEGER_RE = /^\d+$/
 const ACCEPTANCE_TYPES = '.pdf,.png,.jpg,.jpeg'
-
-function isPositiveDecimal(value: string): boolean {
-  return DECIMAL_RE.test(value) && Number(value) > 0
-}
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function formatPrice(value: string): string {
   return formatNumber(value, { minimumFractionDigits: 3, maximumFractionDigits: 4 })
@@ -186,339 +97,6 @@ async function uploadFiles(files: File[]): Promise<number[]> {
     ids.push(data.id)
   }
   return ids
-}
-
-// --- RFQ form (create / edit draft / revise) ------------------------------
-
-interface ItemDraft {
-  key: number
-  raw_material_id: string
-  quantity: string
-  unit_of_measure_id: string
-  required_by_date: string
-  remarks: string
-}
-
-interface RfqFormState {
-  required_delivery_date: string
-  priority: 'normal' | 'urgent'
-  items: ItemDraft[]
-  supplier_ids: number[]
-}
-
-let itemKey = 0
-function emptyItem(): ItemDraft {
-  itemKey += 1
-  return { key: itemKey, raw_material_id: '', quantity: '', unit_of_measure_id: '', required_by_date: '', remarks: '' }
-}
-
-function formFromRfq(rfq: Rfq | null): RfqFormState {
-  if (!rfq) {
-    return { required_delivery_date: '', priority: 'normal', items: [emptyItem()], supplier_ids: [] }
-  }
-  return {
-    required_delivery_date: rfq.required_delivery_date ?? '',
-    priority: rfq.priority,
-    items: rfq.lines.map((line) => ({
-      ...emptyItem(),
-      raw_material_id: String(line.raw_material_id),
-      quantity: String(Number(line.quantity)),
-      unit_of_measure_id: String(line.unit_of_measure_id),
-      required_by_date: line.required_by_date ?? '',
-      remarks: line.remarks ?? '',
-    })),
-    supplier_ids: rfq.invitations.map((i) => i.supplier_id),
-  }
-}
-
-/** Client-side mirror of the server's form rules -- the server enforces
- * all of them regardless (docs/modules/rfq.md #2-#4). */
-function validateForm(form: RfqFormState): string | null {
-  if (!form.required_delivery_date) return 'Required By date is required.'
-  if (form.required_delivery_date < todayIso()) return 'Required By date cannot be in the past.'
-  if (form.items.length === 0) return 'Add at least one item.'
-  for (const [index, item] of form.items.entries()) {
-    const n = index + 1
-    if (!item.raw_material_id) return `Item ${n}: select a product / material.`
-    if (!isPositiveDecimal(item.quantity.trim())) return `Item ${n}: quantity must be greater than zero.`
-    if (!item.unit_of_measure_id) return `Item ${n}: select a unit.`
-    if (item.required_by_date && item.required_by_date < todayIso()) return `Item ${n}: Required By date cannot be in the past.`
-  }
-  if (form.supplier_ids.length === 0) return 'Select at least one supplier.'
-  return null
-}
-
-function RfqFormModal({
-  open,
-  rfq,
-  requesterName,
-  materials,
-  units,
-  suppliers,
-  onClose,
-  onSaved,
-}: {
-  open: boolean
-  rfq: Rfq | null
-  requesterName: string
-  materials: MaterialOption[]
-  units: LookupOption[]
-  suppliers: LookupOption[]
-  onClose: () => void
-  onSaved: (rfq: Rfq) => void
-}) {
-  const [form, setForm] = useState<RfqFormState>(() => formFromRfq(rfq))
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<'draft' | 'submit' | null>(null)
-  const [supplierPick, setSupplierPick] = useState<string | null>(null)
-  const [nextNumber, setNextNumber] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (open) {
-      setForm(formFromRfq(rfq))
-      setError(null)
-      setSupplierPick(null)
-      setNextNumber(null)
-      if (!rfq) {
-        apiClient
-          .get<{ rfq_number: string }>('/api/rfqs/next-number')
-          .then(({ data }) => setNextNumber(data.rfq_number))
-          .catch(() => setNextNumber(null))
-      }
-    }
-  }, [open, rfq])
-
-  const materialsById = useMemo(() => new Map(materials.map((m) => [m.id, m])), [materials])
-  const suppliersById = useMemo(() => new Map(suppliers.map((s) => [s.id, s])), [suppliers])
-  const supplierOptions = useMemo(
-    () =>
-      suppliers
-        .filter((s) => s.is_active && !form.supplier_ids.includes(s.id))
-        .map((s) => ({ value: String(s.id), label: s.code ? `${s.name} (${s.code})` : s.name })),
-    [suppliers, form.supplier_ids],
-  )
-
-  const isIssued = rfq !== null && rfq.status !== 'draft'
-  const nextRevision = (rfq?.revision_number ?? 0) + 1
-
-  function updateItem(key: number, patch: Partial<ItemDraft>) {
-    setForm((prev) => ({ ...prev, items: prev.items.map((item) => (item.key === key ? { ...item, ...patch } : item)) }))
-  }
-
-  function selectMaterial(key: number, materialId: string) {
-    // UOM defaults from the item master; the user can pick another unit.
-    const material = materialsById.get(Number(materialId))
-    updateItem(key, { raw_material_id: materialId, unit_of_measure_id: material ? String(material.unit_of_measure_id) : '' })
-  }
-
-  async function save(submit: boolean) {
-    const problem = validateForm(form)
-    if (problem) {
-      setError(problem)
-      return
-    }
-    setError(null)
-    setBusy(submit ? 'submit' : 'draft')
-    const body = {
-      submit,
-      required_delivery_date: form.required_delivery_date,
-      priority: form.priority,
-      supplier_ids: form.supplier_ids,
-      lines: form.items.map((item) => ({
-        raw_material_id: Number(item.raw_material_id),
-        quantity: item.quantity.trim(),
-        unit_of_measure_id: Number(item.unit_of_measure_id),
-        required_by_date: item.required_by_date || null,
-        remarks: item.remarks.trim() || null,
-      })),
-    }
-    try {
-      const { data } = rfq ? await apiClient.put<Rfq>(`/api/rfqs/${rfq.id}`, body) : await apiClient.post<Rfq>('/api/rfqs', body)
-      onSaved(data)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      title={rfq ? `${isIssued ? 'Revise' : 'Edit'} RFQ ${rfq.rfq_number}` : 'New RFQ'}
-      size="wide"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          {!isIssued && (
-            <Button variant="secondary" onClick={() => save(false)} isLoading={busy === 'draft'} disabled={busy !== null}>
-              Save Draft
-            </Button>
-          )}
-          <Button onClick={() => save(true)} isLoading={busy === 'submit'} disabled={busy !== null}>
-            {isIssued ? `Submit Revision ${nextRevision}` : 'Submit & Generate PDF'}
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-4">
-        <Alert variant="danger">{error}</Alert>
-        {isIssued && (
-          <Alert variant="info">Submitting creates revision {nextRevision} and a new PDF for every supplier. Earlier PDFs are kept.</Alert>
-        )}
-
-        <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
-          <div><span className="text-gold-100/50">RFQ Number: </span>{rfq?.rfq_number ?? nextNumber ?? '—'}</div>
-          <div><span className="text-gold-100/50">RFQ Date: </span>{formatDate(rfq?.rfq_date ?? todayIso())}</div>
-          <div><span className="text-gold-100/50">Requested By: </span>{rfq?.requested_by_name ?? requesterName}</div>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <DateField
-            label="Required By"
-            required
-            min={todayIso()}
-            value={form.required_delivery_date}
-            onChange={(e) => setForm((prev) => ({ ...prev, required_delivery_date: e.target.value }))}
-          />
-          <SelectField
-            label="Priority"
-            value={form.priority}
-            onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value as RfqFormState['priority'] }))}
-          >
-            <option value="normal">Normal</option>
-            <option value="urgent">Urgent</option>
-          </SelectField>
-        </div>
-
-        <div>
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Items</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
-                  <th className="py-2 pr-2">Product / Material *</th>
-                  <th className="py-2 pr-2">Quantity *</th>
-                  <th className="py-2 pr-2">UOM *</th>
-                  <th className="py-2 pr-2">Required By</th>
-                  <th className="py-2 pr-2">Specification / Remarks</th>
-                  <th className="py-2"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {form.items.map((item, index) => (
-                  <tr key={item.key} className="border-t border-ink-700 align-top">
-                    <td className="py-2 pr-2">
-                      <select
-                        aria-label={`Item ${index + 1} product / material`}
-                        className="w-48 rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
-                        value={item.raw_material_id}
-                        onChange={(e) => selectMaterial(item.key, e.target.value)}
-                      >
-                        <option value="">Select...</option>
-                        {materials.filter((m) => m.is_active).map((m) => (
-                          <option key={m.id} value={m.id}>{m.name}{m.code ? ` (${m.code})` : ''}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="py-2 pr-2">
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        aria-label={`Item ${index + 1} quantity`}
-                        className="w-24 rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
-                        value={item.quantity}
-                        onChange={(e) => updateItem(item.key, { quantity: e.target.value })}
-                      />
-                    </td>
-                    <td className="py-2 pr-2">
-                      <select
-                        aria-label={`Item ${index + 1} unit`}
-                        className="w-24 rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
-                        value={item.unit_of_measure_id}
-                        onChange={(e) => updateItem(item.key, { unit_of_measure_id: e.target.value })}
-                      >
-                        <option value="">Unit...</option>
-                        {units.filter((u) => u.is_active).map((u) => (
-                          <option key={u.id} value={u.id}>{u.code}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="py-2 pr-2">
-                      <input
-                        type="date"
-                        min={todayIso()}
-                        aria-label={`Item ${index + 1} required by`}
-                        className="rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
-                        value={item.required_by_date}
-                        onChange={(e) => updateItem(item.key, { required_by_date: e.target.value })}
-                      />
-                    </td>
-                    <td className="py-2 pr-2">
-                      <input
-                        type="text"
-                        aria-label={`Item ${index + 1} remarks`}
-                        className="w-full rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
-                        value={item.remarks}
-                        onChange={(e) => updateItem(item.key, { remarks: e.target.value })}
-                      />
-                    </td>
-                    <td className="py-2 text-right">
-                      <Button
-                        variant="secondary"
-                        disabled={form.items.length === 1}
-                        onClick={() => setForm((prev) => ({ ...prev, items: prev.items.filter((i) => i.key !== item.key) }))}
-                      >
-                        Remove
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Button type="button" variant="secondary" className="mt-2" onClick={() => setForm((prev) => ({ ...prev, items: [...prev.items, emptyItem()] }))}>
-            Add Item
-          </Button>
-        </div>
-
-        <div>
-          <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Suppliers</h3>
-          <SearchSelectField
-            label="Add Supplier"
-            placeholder="Type 2 letters of the supplier name..."
-            minQueryLength={2}
-            options={supplierOptions}
-            value={supplierPick}
-            onChange={(value) => {
-              if (value) setForm((prev) => ({ ...prev, supplier_ids: [...prev.supplier_ids, Number(value)] }))
-              setSupplierPick(null)
-            }}
-          />
-          {form.supplier_ids.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {form.supplier_ids.map((id) => (
-                <span key={id} className="flex items-center gap-2 rounded border border-ink-700 px-2 py-1 text-sm">
-                  {suppliersById.get(id)?.name ?? `#${id}`}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${suppliersById.get(id)?.name ?? id}`}
-                    className="text-gold-100/60 hover:text-gold-100"
-                    onClick={() => setForm((prev) => ({ ...prev, supplier_ids: prev.supplier_ids.filter((s) => s !== id) }))}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-      </div>
-    </Modal>
-  )
 }
 
 // --- comparison ---------------------------------------------------------------
@@ -666,8 +244,6 @@ export function RfqsPage() {
   const [priorityFilter, setPriorityFilter] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
-  const [formRfq, setFormRfq] = useState<Rfq | null>(null)
 
   const [detailTarget, setDetailTarget] = useState<Rfq | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -749,6 +325,21 @@ export function RfqsPage() {
     navigate('/purchase-orders', { state: purchaseOrderId ? { openPurchaseOrderId: purchaseOrderId } : undefined })
   }
 
+  // Arriving back from the RFQ form page: open the saved RFQ.
+  const location = useLocation()
+  const arrival = location.state as { openRfqId?: number; notice?: string } | null
+  useEffect(() => {
+    if (!arrival?.openRfqId) return
+    navigate(location.pathname, { replace: true, state: null })
+    apiClient
+      .get<Rfq>(`/api/rfqs/${arrival.openRfqId}`)
+      .then(({ data }) => {
+        openDetail(data)
+        setDetailNotice(arrival.notice ?? null)
+      })
+      .catch((err) => setPageError(err instanceof ApiError ? err.message : 'Failed to open the RFQ.'))
+  }, [arrival?.openRfqId])
+
   const refreshDetail = useCallback(
     async (id: number) => {
       const { data } = await apiClient.get<Rfq>(`/api/rfqs/${id}`)
@@ -768,17 +359,12 @@ export function RfqsPage() {
     setConvertOpen(false)
   }
 
+  /** New / edit / revise happens on its own page (RfqFormPage.tsx). */
   function openForm(rfq: Rfq | null) {
-    setFormRfq(rfq)
-    setFormOpen(true)
+    navigate(rfq ? `/rfqs/${rfq.id}/edit` : '/rfqs/new')
   }
 
-  function onFormSaved(rfq: Rfq) {
-    setFormOpen(false)
-    table.refetch()
-    openDetail(rfq)
-    if (rfq.status !== 'draft') setDetailNotice(`Revision ${rfq.revision_number} submitted. Download or email the PDF for each supplier below.`)
-  }
+
 
   async function downloadFile(file: RfqFile) {
     try {
@@ -1139,18 +725,6 @@ export function RfqsPage() {
         }
       />
 
-      {canManage && (
-        <RfqFormModal
-          open={formOpen}
-          rfq={formRfq}
-          requesterName={currentUser?.full_name ?? ''}
-          materials={materials}
-          units={units}
-          suppliers={suppliers}
-          onClose={() => setFormOpen(false)}
-          onSaved={onFormSaved}
-        />
-      )}
 
       <Modal
         open={!!detailTarget}
@@ -1226,7 +800,6 @@ export function RfqsPage() {
                     <th className="py-2 pr-3">Product / Material</th>
                     <th className="py-2 pr-3">Quantity</th>
                     <th className="py-2 pr-3">UOM</th>
-                    <th className="py-2 pr-3">Required By</th>
                     <th className="py-2 pr-3">Specification / Remarks</th>
                   </tr>
                 </thead>
@@ -1236,7 +809,6 @@ export function RfqsPage() {
                       <td className="py-2 pr-3">{materialName(line.raw_material_id)}</td>
                       <td className="py-2 pr-3">{formatNumber(line.quantity)}</td>
                       <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
-                      <td className="py-2 pr-3">{formatDate(line.required_by_date)}</td>
                       <td className="py-2 pr-3">{line.remarks ?? '—'}</td>
                     </tr>
                   ))}

@@ -494,7 +494,6 @@ def _render_pdfs(db: Session, rfq: Rfq, resolved: dict) -> list[tuple[RfqSupplie
             material_name=materials[line.raw_material_id].name,
             quantity=line.quantity,
             unit_code=units[line.unit_of_measure_id].code,
-            required_by_date=line.required_by_date,
             remarks=line.remarks,
         )
         for line in lines
