@@ -150,6 +150,20 @@ def test_create_stamps_date_creator_and_currency(client, admin_headers, admin_us
     assert body["payment_status"] == "unpaid"
 
 
+def test_create_without_warehouse_uses_first_active_warehouse(client, admin_headers, acme_supplier, warehouse_1, db_session):
+    body = {"supplier_id": acme_supplier.id, "expected_delivery_date": FUTURE, "payment_terms": "30 days"}
+    created = client.post("/api/purchase-orders", json=body, headers=admin_headers)
+    assert created.status_code == 201
+    assert created.json()["warehouse_id"] == warehouse_1.id
+    assert created.json()["currency"] == "KWD"
+
+    warehouse_1.is_active = False
+    db_session.commit()
+    refused = client.post("/api/purchase-orders", json=body, headers=admin_headers)
+    assert refused.status_code == 422
+    assert "warehouse_id" in refused.json()["error"]["fields"]
+
+
 def test_add_line_requires_unit_price(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
     assert _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10").status_code == 422

@@ -215,7 +215,9 @@ class PurchaseOrderCreateRequest(BaseModel):
     `rfq_id` is only ever set by the RFQ's PO-generation step."""
 
     supplier_id: int
-    warehouse_id: int
+    # Omitted by the New Purchase Order page -> the organisation's first
+    # active warehouse (app/api/purchase_orders.py).
+    warehouse_id: int | None = None
     expected_delivery_date: date
     payment_terms: str = Field(min_length=1, max_length=200)
     currency: str = DEFAULT_CURRENCY

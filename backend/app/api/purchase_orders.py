@@ -197,6 +197,23 @@ def _resolve_active_warehouse(db: Session, warehouse_id: int, organisation_id: i
     return warehouse
 
 
+def _default_warehouse(db: Session, organisation_id: int) -> Warehouse:
+    """The PO form no longer asks for a delivery location: goods are
+    received into the organisation's first active warehouse."""
+    warehouse = (
+        db.query(Warehouse)
+        .filter(Warehouse.organisation_id == organisation_id, Warehouse.is_active.is_(True))
+        .order_by(Warehouse.id)
+        .first()
+    )
+    if warehouse is None:
+        raise ValidationError(
+            "No active warehouse to receive into. Add one under Master Data > Warehouses first.",
+            fields={"warehouse_id": "No active warehouse in your organisation."},
+        )
+    return warehouse
+
+
 def _resolve_active_raw_material(db: Session, raw_material_id: int, organisation_id: int) -> RawMaterial:
     material = (
         db.query(RawMaterial)
@@ -623,7 +640,10 @@ def create_purchase_order(
     today; `rfq_id` is only ever set by the RFQ's PO-generation step."""
     purchase_scope.require_permission(db, current_user, purchase_scope.CREATE)
     _resolve_active_supplier(db, payload.supplier_id, current_user.organisation_id)
-    _resolve_active_warehouse(db, payload.warehouse_id, current_user.organisation_id)
+    if payload.warehouse_id is None:
+        warehouse_id = _default_warehouse(db, current_user.organisation_id).id
+    else:
+        warehouse_id = _resolve_active_warehouse(db, payload.warehouse_id, current_user.organisation_id).id
     if payload.expected_delivery_date < date.today():
         raise ValidationError(
             "Expected delivery date cannot be in the past.", fields={"expected_delivery_date": "Cannot be in the past."}
@@ -633,7 +653,7 @@ def create_purchase_order(
         db,
         organisation_id=current_user.organisation_id,
         supplier_id=payload.supplier_id,
-        warehouse_id=payload.warehouse_id,
+        warehouse_id=warehouse_id,
         order_date=date.today(),
         expected_delivery_date=payload.expected_delivery_date,
         payment_terms=payload.payment_terms,

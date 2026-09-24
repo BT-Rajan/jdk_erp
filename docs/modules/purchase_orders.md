@@ -875,3 +875,9 @@ Viewing a PO is also a page (`/purchase-orders/:id`): header, items,
 lifecycle buttons, receipts, payments, reconciliation, follow-ups and
 documents. Saving the PO form, or generating a PO from an RFQ, lands
 there. Cancel, payment-cancel and receipt-reverse stay dialogs over it.
+
+The New Purchase Order page no longer asks for Delivery Location or
+Currency. `warehouse_id` is optional on `POST /api/purchase-orders`:
+omitted, the PO receives into the organisation's first active warehouse
+(refused with a clear message if there is none); `currency` defaults to
+KWD.
