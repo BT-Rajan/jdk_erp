@@ -13,6 +13,7 @@ import { FilterBar } from '@/components/ui/FilterBar'
 import { Modal } from '@/components/ui/Modal'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
+import { Spinner } from '@/components/ui/Spinner'
 import { CheckboxField } from '@/components/forms/CheckboxField'
 import { DateField } from '@/components/forms/DateField'
 import { FileUploadField } from '@/components/forms/FileUploadField'
@@ -482,22 +483,44 @@ export function PurchaseOrdersPage() {
     void loadLookups()
   }, [loadLookups])
 
-  // Arriving from an RFQ's PO generation (or "View Purchase Order"):
-  // open that PO straight away, then clear the state so a refresh or
-  // back-navigation doesn't reopen it.
+  // Viewing a PO is its own page: /purchase-orders/:id. Opening it from
+  // the list passes the row along; a direct visit, refresh, or arrival
+  // from the PO form or an RFQ's PO generation loads it.
   const location = useLocation()
   const navigate = useNavigate()
-  const navState = location.state as { openPurchaseOrderId?: number; notice?: string } | null
-  const openPurchaseOrderId = navState?.openPurchaseOrderId
+  const viewMatch = /^\/purchase-orders\/(\d+)$/.exec(location.pathname)
+  const viewId = viewMatch ? Number(viewMatch[1]) : null
+  const navState = location.state as { record?: PurchaseOrder; notice?: string } | null
+  const [viewLoading, setViewLoading] = useState(false)
   useEffect(() => {
-    if (!openPurchaseOrderId) return
+    if (viewId === null) {
+      setDetailTarget(null)
+      return
+    }
+    resetDetail()
     setNotice(navState?.notice ?? null)
-    navigate(location.pathname, { replace: true, state: null })
+    if (navState?.record && navState.record.id === viewId) {
+      setDetailTarget(navState.record)
+      return
+    }
+    let cancelled = false
+    setDetailTarget(null)
+    setViewLoading(true)
     apiClient
-      .get<PurchaseOrder>(`/api/purchase-orders/${openPurchaseOrderId}`)
-      .then(({ data }) => openDetail(data))
-      .catch((err) => setPageError(err instanceof ApiError ? err.message : 'Failed to open the purchase order.'))
-  }, [openPurchaseOrderId])
+      .get<PurchaseOrder>(`/api/purchase-orders/${viewId}`)
+      .then(({ data }) => {
+        if (!cancelled) setDetailTarget(data)
+      })
+      .catch((err) => {
+        if (!cancelled) setDetailError(err instanceof ApiError ? err.message : 'Failed to open the purchase order.')
+      })
+      .finally(() => {
+        if (!cancelled) setViewLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [viewId])
 
   function openCreate() {
     navigate('/purchase-orders/new')
@@ -514,7 +537,10 @@ export function PurchaseOrdersPage() {
   )
 
   function openDetail(po: PurchaseOrder) {
-    setDetailTarget(po)
+    navigate(`/purchase-orders/${po.id}`, { state: { record: po } })
+  }
+
+  function resetDetail() {
     setDetailError(null)
     setPaymentFormOpen(false)
     setResolveNotes({})
@@ -530,8 +556,7 @@ export function PurchaseOrdersPage() {
   }
 
   function closeDetail() {
-    setDetailTarget(null)
-    setNotice(null)
+    navigate('/purchase-orders')
   }
 
   /** One lifecycle step: submit / approve / send back / revise / send. */
@@ -806,566 +831,574 @@ export function PurchaseOrdersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Purchase Orders"
-        subtitle="Approval → Sent → Follow-up → Goods Receipt → Reconciliation → Payment → Closed."
-        actions={canManage ? <Button onClick={openCreate}>New Purchase</Button> : undefined}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by PO number..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={viewId !== null} className="space-y-6">
+        <PageHeader
+          title="Purchase Orders"
+          subtitle="Approval → Sent → Follow-up → Goods Receipt → Reconciliation → Payment → Closed."
+          actions={canManage ? <Button onClick={openCreate}>New Purchase</Button> : undefined}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(po) => po.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching purchase orders' : 'No purchase orders yet'}
-        emptyMessage={
-          debouncedSearch
-            ? 'Try a different search term.'
-            : canManage
-              ? 'Create the first purchase order with the New Purchase button above.'
-              : 'No purchase orders have been created yet.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
 
-      <Modal
-        open={!!detailTarget}
-        title={detailTarget ? `Purchase Order ${detailTarget.po_number}` : ''}
-        size="wide"
-        onClose={closeDetail}
-        footer={
-          <>
-            {canManage && detailTarget?.status === 'draft' && (
-              <Button variant="secondary" onClick={() => navigate(`/purchase-orders/${detailTarget.id}/edit`)}>Edit</Button>
-            )}
-            {canManage && detailTarget?.status === 'draft' && (
-              <Button onClick={submitForApproval} isLoading={actionBusy === 'submit'} disabled={detailTarget.lines.length === 0}>
-                Submit for Approval
-              </Button>
-            )}
-            {canManage && detailTarget?.status === 'pending_approval' && (
-              <>
-                <Button onClick={approvePurchaseOrder} isLoading={actionBusy === 'approve'}>Approve</Button>
-                <Button variant="secondary" onClick={backToDraft} isLoading={actionBusy === 'draft'}>Send Back to Draft</Button>
-              </>
-            )}
-            {canManage && detailTarget?.status === 'approved' && (
-              <>
-                <Button onClick={emailPurchaseOrder} isLoading={actionBusy === 'email'}>Email to Supplier</Button>
-                <Button variant="secondary" onClick={markSent} isLoading={actionBusy === 'mark-sent'}>Mark as Sent</Button>
-              </>
-            )}
-            {canManage && detailTarget?.status === 'sent' && (
-              <Button variant="secondary" onClick={emailPurchaseOrder} isLoading={actionBusy === 'email'}>Re-send Email</Button>
-            )}
-            {canManage && (detailTarget?.status === 'approved' || detailTarget?.status === 'sent') && (
-              <Button variant="secondary" onClick={backToDraft} isLoading={actionBusy === 'draft'}>Create Revision</Button>
-            )}
-            {canManage && canCancelStatus && (
-              <Button variant="danger" onClick={() => detailTarget && openCancel(detailTarget)}>Cancel...</Button>
-            )}
-            <Button variant="secondary" onClick={closeDetail}>Close</Button>
-          </>
-        }
-      >
-        {detailTarget && (
-          <div className="flex flex-col gap-6">
-            <Alert variant="success">{notice}</Alert>
-            <Alert variant="danger">{detailError}</Alert>
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by PO number..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
 
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-              <div><span className="text-gold-100/50">Supplier: </span>{suppliersById.get(detailTarget.supplier_id)?.name ?? `#${detailTarget.supplier_id}`}</div>
-              <div><span className="text-gold-100/50">Delivery Location: </span>{warehousesById.get(detailTarget.warehouse_id)?.name ?? `#${detailTarget.warehouse_id}`}</div>
-              <div><span className="text-gold-100/50">PO Date: </span>{formatDate(detailTarget.order_date)}</div>
-              <div><span className="text-gold-100/50">Expected Delivery: </span>{formatDate(detailTarget.expected_delivery_date)}</div>
-              <div><span className="text-gold-100/50">Payment Terms: </span>{detailTarget.payment_terms ?? '—'}</div>
-              <div><span className="text-gold-100/50">Currency: </span>{detailTarget.currency}</div>
-              <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
-              <div><span className="text-gold-100/50">Revision: </span>{detailTarget.revision_number || '—'}</div>
-              {detailTarget.supplier_reference && <div><span className="text-gold-100/50">Supplier Reference: </span>{detailTarget.supplier_reference}</div>}
-              {detailTarget.rfq_number && <div><span className="text-gold-100/50">RFQ: </span>{detailTarget.rfq_number}</div>}
-              {detailTarget.delivery_instructions && <div className="col-span-2"><span className="text-gold-100/50">Delivery Instructions: </span>{detailTarget.delivery_instructions}</div>}
-              {detailTarget.notes && <div className="col-span-2"><span className="text-gold-100/50">Notes: </span>{detailTarget.notes}</div>}
-              {detailTarget.cancel_reason && <div className="col-span-2"><span className="text-gold-100/50">Cancel Reason: </span>{detailTarget.cancel_reason}</div>}
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(po) => po.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching purchase orders' : 'No purchase orders yet'}
+          emptyMessage={
+            debouncedSearch
+              ? 'Try a different search term.'
+              : canManage
+                ? 'Create the first purchase order with the New Purchase button above.'
+                : 'No purchase orders have been created yet.'
+          }
+        />
+      </div>
+
+      {viewId !== null && (
+        <section aria-label={detailTarget ? `Purchase Order ${detailTarget.po_number}` : 'Purchase Order'} className="space-y-6">
+          <PageHeader title={detailTarget ? `Purchase Order ${detailTarget.po_number}` : 'Purchase Order'} />
+          {!detailTarget ? (
+            <div className="flex flex-col gap-4">
+              {viewLoading ? <Spinner /> : <Alert variant="danger">{detailError}</Alert>}
+              <div>
+                <Button variant="secondary" onClick={closeDetail}>Back to Purchase Orders</Button>
+              </div>
             </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-6">
+                <Alert variant="success">{notice}</Alert>
+                <Alert variant="danger">{detailError}</Alert>
 
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gold-100/70">
-              <div>Created: {stamp(detailTarget.created_at, detailTarget.created_by_name)}</div>
-              {detailTarget.approved_at && <div>Approved: {stamp(detailTarget.approved_at, detailTarget.approved_by_name)}</div>}
-              {detailTarget.sent_at && <div>Sent: {stamp(detailTarget.sent_at, detailTarget.sent_by_name)}</div>}
-              {detailTarget.cancelled_at && <div>Cancelled: {stamp(detailTarget.cancelled_at, detailTarget.cancelled_by_name)}</div>}
-            </div>
-
-            {/* Lines */}
-            <div>
-              <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Items</h3>
-              {detailTarget.lines.length === 0 ? (
-                <p className="text-sm text-gold-100/60">No items on this purchase order yet.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
-                        <th className="py-2 pr-3">Product / Material</th>
-                        <th className="py-2 pr-3">Ordered</th>
-                        <th className="py-2 pr-3">UOM</th>
-                        <th className="py-2 pr-3">Unit Price</th>
-                        <th className="py-2 pr-3">Line Total</th>
-                        <th className="py-2 pr-3">Received</th>
-                        <th className="py-2 pr-3">Remaining</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detailTarget.lines.map((line) => {
-                        const remaining = lineRemaining(line)
-                        return (
-                          <tr key={line.id} className="border-t border-ink-700">
-                            <td className="py-2 pr-3">
-                              {materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}
-                              {line.remarks && <span className="block text-xs text-gold-100/50">{line.remarks}</span>}
-                            </td>
-                            <td className="py-2 pr-3">{line.quantity}</td>
-                            <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
-                            <td className="py-2 pr-3">{line.unit_price}</td>
-                            <td className="py-2 pr-3">{line.line_total}</td>
-                            <td className="py-2 pr-3">{line.received_quantity}</td>
-                            <td className="py-2 pr-3">
-                              {remaining}
-                              {Number(line.cancelled_quantity) > 0 && (
-                                <span className="block text-xs text-gold-100/50">{line.cancelled_quantity} cancelled</span>
-                              )}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                  <div><span className="text-gold-100/50">Supplier: </span>{suppliersById.get(detailTarget.supplier_id)?.name ?? `#${detailTarget.supplier_id}`}</div>
+                  <div><span className="text-gold-100/50">Delivery Location: </span>{warehousesById.get(detailTarget.warehouse_id)?.name ?? `#${detailTarget.warehouse_id}`}</div>
+                  <div><span className="text-gold-100/50">PO Date: </span>{formatDate(detailTarget.order_date)}</div>
+                  <div><span className="text-gold-100/50">Expected Delivery: </span>{formatDate(detailTarget.expected_delivery_date)}</div>
+                  <div><span className="text-gold-100/50">Payment Terms: </span>{detailTarget.payment_terms ?? '—'}</div>
+                  <div><span className="text-gold-100/50">Currency: </span>{detailTarget.currency}</div>
+                  <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
+                  <div><span className="text-gold-100/50">Revision: </span>{detailTarget.revision_number || '—'}</div>
+                  {detailTarget.supplier_reference && <div><span className="text-gold-100/50">Supplier Reference: </span>{detailTarget.supplier_reference}</div>}
+                  {detailTarget.rfq_number && <div><span className="text-gold-100/50">RFQ: </span>{detailTarget.rfq_number}</div>}
+                  {detailTarget.delivery_instructions && <div className="col-span-2"><span className="text-gold-100/50">Delivery Instructions: </span>{detailTarget.delivery_instructions}</div>}
+                  {detailTarget.notes && <div className="col-span-2"><span className="text-gold-100/50">Notes: </span>{detailTarget.notes}</div>}
+                  {detailTarget.cancel_reason && <div className="col-span-2"><span className="text-gold-100/50">Cancel Reason: </span>{detailTarget.cancel_reason}</div>}
                 </div>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gold-100/70">
+                  <div>Created: {stamp(detailTarget.created_at, detailTarget.created_by_name)}</div>
+                  {detailTarget.approved_at && <div>Approved: {stamp(detailTarget.approved_at, detailTarget.approved_by_name)}</div>}
+                  {detailTarget.sent_at && <div>Sent: {stamp(detailTarget.sent_at, detailTarget.sent_by_name)}</div>}
+                  {detailTarget.cancelled_at && <div>Cancelled: {stamp(detailTarget.cancelled_at, detailTarget.cancelled_by_name)}</div>}
+                </div>
+
+                {/* Lines */}
+                <div>
+                  <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Items</h3>
+                  {detailTarget.lines.length === 0 ? (
+                    <p className="text-sm text-gold-100/60">No items on this purchase order yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
+                            <th className="py-2 pr-3">Product / Material</th>
+                            <th className="py-2 pr-3">Ordered</th>
+                            <th className="py-2 pr-3">UOM</th>
+                            <th className="py-2 pr-3">Unit Price</th>
+                            <th className="py-2 pr-3">Line Total</th>
+                            <th className="py-2 pr-3">Received</th>
+                            <th className="py-2 pr-3">Remaining</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detailTarget.lines.map((line) => {
+                            const remaining = lineRemaining(line)
+                            return (
+                              <tr key={line.id} className="border-t border-ink-700">
+                                <td className="py-2 pr-3">
+                                  {materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}
+                                  {line.remarks && <span className="block text-xs text-gold-100/50">{line.remarks}</span>}
+                                </td>
+                                <td className="py-2 pr-3">{line.quantity}</td>
+                                <td className="py-2 pr-3">{unitCode(line.unit_of_measure_id)}</td>
+                                <td className="py-2 pr-3">{line.unit_price}</td>
+                                <td className="py-2 pr-3">{line.line_total}</td>
+                                <td className="py-2 pr-3">{line.received_quantity}</td>
+                                <td className="py-2 pr-3">
+                                  {remaining}
+                                  {Number(line.cancelled_quantity) > 0 && (
+                                    <span className="block text-xs text-gold-100/50">{line.cancelled_quantity} cancelled</span>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+
+                  {canReceive && (
+                    <Button type="button" variant="secondary" className="mt-2" onClick={() => openToReceiving(detailTarget.id)}>
+                      Open in Goods Receiving
+                    </Button>
+                  )}
+                </div>
+
+                {/* Goods Receipts */}
+                {detailTarget.receipts.length > 0 && (
+                  <div>
+                    <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Goods Receipts</h3>
+                    <Alert variant="danger">{postReceiptError}</Alert>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
+                          <th className="py-2 pr-3">Receipt No.</th>
+                          <th className="py-2 pr-3">Date</th>
+                          <th className="py-2 pr-3">Delivery Ref.</th>
+                          <th className="py-2 pr-3">Status</th>
+                          <th className="py-2 pr-3">Documents</th>
+                          <th className="py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailTarget.receipts.map((receipt) => (
+                          <>
+                            <tr key={receipt.id} className="border-t border-ink-700 align-top">
+                              <td className="py-2 pr-3">{receipt.receipt_number}</td>
+                              <td className="py-2 pr-3">
+                                {formatDate(receipt.receipt_date)}
+                                {receipt.days_late > 0 && <span className="block text-xs text-warning-500">{receipt.days_late} day(s) late</span>}
+                                {receipt.received_by_name && <span className="block text-xs text-gold-100/50">by {receipt.received_by_name}</span>}
+                              </td>
+                              <td className="py-2 pr-3">{receipt.supplier_delivery_reference ?? '—'}</td>
+                              <td className="py-2 pr-3">
+                                <Badge tone={RECEIPT_STATUS_TONES[receipt.status]}>{RECEIPT_STATUS_LABELS[receipt.status]}</Badge>
+                                {receipt.status === 'reversed' && receipt.reversal_reason && (
+                                  <div className="mt-1 text-xs text-gold-100/50">{receipt.reversal_reason}</div>
+                                )}
+                              </td>
+                              <td className="py-2 pr-3">
+                                <div className="flex flex-wrap gap-1">
+                                  {receipt.documents.map((file) => (
+                                    <button
+                                      key={file.id}
+                                      type="button"
+                                      onClick={() => downloadFile(file)}
+                                      className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400"
+                                    >
+                                      {file.original_filename}
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="py-2 text-right">
+                                <div className="flex justify-end gap-2">
+                                  <Button
+                                    variant="secondary"
+                                    onClick={() => setExpandedReceipt(expandedReceipt === receipt.id ? null : receipt.id)}
+                                  >
+                                    {expandedReceipt === receipt.id ? 'Hide Lines' : 'View Lines'}
+                                  </Button>
+                                  {canManage && receipt.status === 'draft' && (
+                                    <>
+                                      <Button isLoading={postReceiptBusy} onClick={() => postReceipt(receipt)}>Post</Button>
+                                      <Button variant="secondary" onClick={() => setCancelReceiptTarget(receipt)}>Cancel</Button>
+                                    </>
+                                  )}
+                                  {canManage && receipt.status === 'posted' && (
+                                    <Button variant="danger" onClick={() => openReverseReceipt(receipt)}>Reverse...</Button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                            {expandedReceipt === receipt.id && (
+                              <tr key={`${receipt.id}-lines`} className="border-t border-ink-700 bg-ink-900/40">
+                                <td colSpan={6} className="py-2 pr-3">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-left uppercase tracking-wide text-gold-100/40">
+                                        <th className="py-1 pr-3">Raw Material</th>
+                                        <th className="py-1 pr-3">Quantity</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {receipt.lines.map((line) => (
+                                        <tr key={line.id}>
+                                          <td className="py-1 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
+                                          <td className="py-1 pr-3">
+                                            {line.quantity}{' '}
+                                            {unitCode(detailTarget.lines.find((l) => l.id === line.purchase_order_line_id)?.unit_of_measure_id ?? null)}
+                                            {line.remarks && <span className="block text-gold-100/50">{line.remarks}</span>}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Payments */}
+                {hasPayments && (
+                  <div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-xs uppercase tracking-wide text-gold-100/50">
+                        Payments{' '}
+                        <Badge tone={PAYMENT_STATUS_TONES[detailTarget.payment_status]}>{PAYMENT_STATUS_LABELS[detailTarget.payment_status]}</Badge>
+                      </h3>
+                      <div className="text-sm">
+                        <span className="text-gold-100/50">PO Amount </span>{detailTarget.final_amount} {detailTarget.currency}
+                        {detailTarget.final_amount !== detailTarget.total_amount && (
+                          <span className="text-gold-100/40"> (ordered {detailTarget.total_amount})</span>
+                        )}
+                        <span className="mx-2 text-gold-100/30">|</span>
+                        <span className="text-gold-100/50">Paid </span>{detailTarget.paid_amount}
+                        <span className="mx-2 text-gold-100/30">|</span>
+                        <span className="text-gold-100/50">Outstanding </span>{detailTarget.outstanding_amount}
+                      </div>
+                    </div>
+                    {detailTarget.payments.length === 0 ? (
+                      <p className="text-sm text-gold-100/60">No payments recorded yet.</p>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
+                            <th className="py-2 pr-3">Date</th>
+                            <th className="py-2 pr-3">Amount</th>
+                            <th className="py-2 pr-3">Method</th>
+                            <th className="py-2 pr-3">Reference</th>
+                            <th className="py-2 pr-3">Status</th>
+                            <th className="py-2 pr-3">Evidence</th>
+                            <th className="py-2"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detailTarget.payments.map((payment) => (
+                            <tr key={payment.id} className="border-t border-ink-700 align-top">
+                              <td className="py-2 pr-3">{formatDate(payment.payment_date)}</td>
+                              <td className="py-2 pr-3">
+                                {payment.amount}
+                                {payment.is_final && <span className="block text-xs text-gold-100/50">Final payment</span>}
+                              </td>
+                              <td className="py-2 pr-3">{payment.payment_method ?? '—'}</td>
+                              <td className="py-2 pr-3">{payment.reference_number ?? '—'}</td>
+                              <td className="py-2 pr-3">
+                                <Badge tone={payment.status === 'cancelled' ? 'danger' : 'success'}>
+                                  {payment.status === 'cancelled' ? 'Cancelled' : 'Recorded'}
+                                </Badge>
+                              </td>
+                              <td className="py-2 pr-3">
+                                <div className="flex flex-wrap gap-1">
+                                  {payment.files.map((file) => (
+                                    <button
+                                      key={file.id}
+                                      type="button"
+                                      onClick={() => downloadFile(file)}
+                                      className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400"
+                                    >
+                                      {file.original_filename}
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="py-2 text-right">
+                                {canManage && payment.status === 'recorded' && (
+                                  <Button variant="secondary" onClick={() => openCancelPayment(payment)}>Cancel</Button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {canManage && !paymentFormOpen && isOpen && (
+                      <Button type="button" variant="secondary" className="mt-2" onClick={openRecordPayment}>Record Payment</Button>
+                    )}
+                    {canManage && paymentFormOpen && (
+                      <form onSubmit={paymentForm.handleSubmit(onPaymentSubmit)} className="mt-2 flex flex-col gap-4 rounded-md border border-ink-700 p-4">
+                        <Alert variant="danger">{paymentError}</Alert>
+                        <DateField label="Payment Date" required {...paymentForm.register('payment_date')} error={paymentForm.formState.errors.payment_date?.message} />
+                        <TextField label="Amount" required {...paymentForm.register('amount')} error={paymentForm.formState.errors.amount?.message} />
+                        <TextField label="Payment Method" hint="e.g. Bank Transfer, Cheque, Cash." {...paymentForm.register('payment_method')} />
+                        <TextField label="Reference No." {...paymentForm.register('reference_number')} />
+                        <FileUploadField label="Attachment" multiple accept=".pdf,.png,.jpg,.jpeg" value={paymentFiles} onChange={setPaymentFiles} />
+                        <TextareaField label="Notes" {...paymentForm.register('notes')} />
+                        <CheckboxField
+                          label="Final payment — this settles the PO"
+                          hint="If the total paid then differs from the PO amount, it goes back to the PO creator."
+                          {...paymentForm.register('is_final')}
+                        />
+                        <div className="flex gap-2">
+                          <Button type="submit" isLoading={paymentForm.formState.isSubmitting}>Save Payment</Button>
+                          <Button type="button" variant="secondary" onClick={() => setPaymentFormOpen(false)}>Cancel</Button>
+                        </div>
+                      </form>
+                    )}
+                  </div>
+                )}
+
+                {/* Reconciliation */}
+                {detailTarget.reconciliations.length > 0 && (
+                  <div>
+                    <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Reconciliation</h3>
+                    <div className="flex flex-col gap-3">
+                      {detailTarget.reconciliations.map((rec) => (
+                        <div key={rec.id} className={`rounded-md border p-3 text-sm ${rec.status === 'open' ? 'border-danger-500' : 'border-ink-700'}`}>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span>
+                              <Badge tone={rec.status === 'open' ? 'danger' : 'success'}>
+                                {`${rec.kind === 'receipt' ? 'Receipt' : 'Payment'} — ${rec.status === 'open' ? 'Open' : 'Resolved'}`}
+                              </Badge>{' '}
+                              <span className="text-xs text-gold-100/50">{formatKuwaitTime(rec.created_at)}</span>
+                            </span>
+                          </div>
+                          <p className="mt-1">{rec.discrepancy}</p>
+                          {rec.status === 'resolved' ? (
+                            <p className="mt-1 text-gold-100/70">
+                              {RESOLUTION_LABELS[rec.resolution ?? ''] ?? rec.resolution}: {rec.resolution_note}
+                              <span className="block text-xs text-gold-100/50">{stamp(rec.resolved_at, rec.resolved_by_name)}</span>
+                            </p>
+                          ) : (
+                            canManage && (
+                              <div className="mt-2 flex flex-col gap-2">
+                                <SelectField
+                                  label="Resolution"
+                                  value={resolveChoice[rec.id] ?? RESOLUTIONS[rec.kind][0].value}
+                                  onChange={(e) => setResolveChoice((prev) => ({ ...prev, [rec.id]: e.target.value }))}
+                                >
+                                  {RESOLUTIONS[rec.kind].map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </SelectField>
+                                <TextareaField
+                                  label="Resolution note"
+                                  required
+                                  hint={rec.kind === 'receipt' ? 'e.g. supplier sends balance Friday; substitution accepted; material rejected (reverse the receipt).' : 'e.g. agreed discount; Finance to refund.'}
+                                  value={resolveNotes[rec.id] ?? ''}
+                                  onChange={(e) => setResolveNotes((prev) => ({ ...prev, [rec.id]: e.target.value }))}
+                                />
+                                <div>
+                                  <Button onClick={() => resolveReconciliation(rec)} isLoading={actionBusy === `resolve-${rec.id}`}>Resolve</Button>
+                                </div>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Supplier follow-up */}
+                {(detailTarget.communications.length > 0 || isOpen) && (
+                  <div>
+                    <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Supplier Follow-up</h3>
+                    {detailTarget.communications.length > 0 && (
+                      <ul className="flex flex-col gap-2 text-sm">
+                        {detailTarget.communications.map((entry) => (
+                          <li key={entry.id} className="rounded-md border border-ink-700 p-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs text-gold-100/50">{formatKuwaitTime(entry.created_at)}</span>
+                              <span>{COMMUNICATION_LABELS[entry.kind]}</span>
+                              {entry.status === 'failed' && <Badge tone="danger">Failed</Badge>}
+                              {entry.recipient && <span className="text-xs text-gold-100/50">to {entry.recipient}</span>}
+                              {entry.sent_by_name && <span className="text-xs text-gold-100/50">by {entry.sent_by_name}</span>}
+                            </div>
+                            {entry.subject && <div className="mt-1 font-medium">{entry.subject}</div>}
+                            {entry.message && <div className="mt-1 whitespace-pre-line text-gold-100/80">{entry.message}</div>}
+                            {entry.error && <div className="mt-1 text-xs text-danger-500">{entry.error}</div>}
+                            {entry.files.length > 0 && (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {entry.files.map((file) => (
+                                  <button key={file.id} type="button" onClick={() => downloadFile(file)} className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400">
+                                    {file.original_filename}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {canManage && isOpen && (
+                      <div className="mt-2 flex flex-col gap-3 rounded-md border border-ink-700 p-3">
+                        <Alert variant="danger">{followUpError}</Alert>
+                        <TextField label="Subject" placeholder={`Follow-up: Purchase Order ${detailTarget.po_number}`} value={followUpSubject} onChange={(e) => setFollowUpSubject(e.target.value)} />
+                        <TextareaField label="Message" required value={followUpMessage} onChange={(e) => setFollowUpMessage(e.target.value)} />
+                        <CheckboxField label="Attach the PO PDF" checked={followUpAttachPdf} onChange={(e) => setFollowUpAttachPdf(e.target.checked)} />
+                        <FileUploadField label="Attachment" multiple accept=".pdf,.png,.jpg,.jpeg" value={followUpFiles} onChange={setFollowUpFiles} />
+                        <div className="flex flex-wrap gap-2">
+                          <Button onClick={() => submitFollowUp(true)} isLoading={actionBusy === 'follow-up'}>Send Follow-up Email</Button>
+                          <Button variant="secondary" onClick={() => submitFollowUp(false)} isLoading={actionBusy === 'reply'}>Record Supplier Reply</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Revisions & documents */}
+                {detailTarget.revisions.length > 0 && (
+                  <div>
+                    <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Revisions</h3>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
+                          <th className="py-2 pr-3">Rev</th>
+                          <th className="py-2 pr-3">Approved</th>
+                          <th className="py-2 pr-3">Total</th>
+                          <th className="py-2 pr-3">Document</th>
+                          <th className="py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailTarget.revisions.map((revision) => (
+                          <>
+                            <tr key={revision.id} className="border-t border-ink-700">
+                              <td className="py-2 pr-3">{revision.revision_number}</td>
+                              <td className="py-2 pr-3">{formatKuwaitTime(revision.issued_at)}</td>
+                              <td className="py-2 pr-3">{revision.total_amount}</td>
+                              <td className="py-2 pr-3">
+                                {revision.pdf_file ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => downloadFile(revision.pdf_file!)}
+                                    className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400"
+                                  >
+                                    {revision.pdf_file.original_filename} ({formatBytes(revision.pdf_file.size_bytes)})
+                                  </button>
+                                ) : (
+                                  '—'
+                                )}
+                              </td>
+                              <td className="py-2 text-right">
+                                <Button
+                                  variant="secondary"
+                                  onClick={() => setExpandedRevision(expandedRevision === revision.id ? null : revision.id)}
+                                >
+                                  {expandedRevision === revision.id ? 'Hide Lines' : 'View Lines'}
+                                </Button>
+                              </td>
+                            </tr>
+                            {expandedRevision === revision.id && (
+                              <tr key={`${revision.id}-lines`} className="border-t border-ink-700 bg-ink-900/40">
+                                <td colSpan={5} className="py-2 pr-3">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-left uppercase tracking-wide text-gold-100/40">
+                                        <th className="py-1 pr-3">Raw Material</th>
+                                        <th className="py-1 pr-3">Qty</th>
+                                        <th className="py-1 pr-3">UOM</th>
+                                        <th className="py-1 pr-3">Unit Price</th>
+                                        <th className="py-1 pr-3">Line Total</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {revision.lines.map((line) => (
+                                        <tr key={line.id}>
+                                          <td className="py-1 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
+                                          <td className="py-1 pr-3">{line.quantity}</td>
+                                          <td className="py-1 pr-3">{unitCode(line.unit_of_measure_id)}</td>
+                                          <td className="py-1 pr-3">{line.unit_price}</td>
+                                          <td className="py-1 pr-3">{line.line_total}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {detailTarget.documents.length > 0 && (
+                  <div>
+                    <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Documents</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {detailTarget.documents.map((file) => (
+                        <button
+                          key={file.id}
+                          type="button"
+                          onClick={() => downloadFile(file)}
+                          className="rounded border border-ink-700 px-2 py-1 text-xs hover:border-gold-400"
+                        >
+                          {file.original_filename} ({formatBytes(file.size_bytes)})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-2 border-t border-ink-700 pt-4">
+              {canManage && detailTarget?.status === 'draft' && (
+                <Button variant="secondary" onClick={() => navigate(`/purchase-orders/${detailTarget.id}/edit`)}>Edit</Button>
               )}
-
-
-              {canReceive && (
-                <Button type="button" variant="secondary" className="mt-2" onClick={() => openToReceiving(detailTarget.id)}>
-                  Open in Goods Receiving
+              {canManage && detailTarget?.status === 'draft' && (
+                <Button onClick={submitForApproval} isLoading={actionBusy === 'submit'} disabled={detailTarget.lines.length === 0}>
+                  Submit for Approval
                 </Button>
               )}
-            </div>
-
-            {/* Goods Receipts */}
-            {detailTarget.receipts.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Goods Receipts</h3>
-                <Alert variant="danger">{postReceiptError}</Alert>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
-                      <th className="py-2 pr-3">Receipt No.</th>
-                      <th className="py-2 pr-3">Date</th>
-                      <th className="py-2 pr-3">Delivery Ref.</th>
-                      <th className="py-2 pr-3">Status</th>
-                      <th className="py-2 pr-3">Documents</th>
-                      <th className="py-2"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailTarget.receipts.map((receipt) => (
-                      <>
-                        <tr key={receipt.id} className="border-t border-ink-700 align-top">
-                          <td className="py-2 pr-3">{receipt.receipt_number}</td>
-                          <td className="py-2 pr-3">
-                            {formatDate(receipt.receipt_date)}
-                            {receipt.days_late > 0 && <span className="block text-xs text-warning-500">{receipt.days_late} day(s) late</span>}
-                            {receipt.received_by_name && <span className="block text-xs text-gold-100/50">by {receipt.received_by_name}</span>}
-                          </td>
-                          <td className="py-2 pr-3">{receipt.supplier_delivery_reference ?? '—'}</td>
-                          <td className="py-2 pr-3">
-                            <Badge tone={RECEIPT_STATUS_TONES[receipt.status]}>{RECEIPT_STATUS_LABELS[receipt.status]}</Badge>
-                            {receipt.status === 'reversed' && receipt.reversal_reason && (
-                              <div className="mt-1 text-xs text-gold-100/50">{receipt.reversal_reason}</div>
-                            )}
-                          </td>
-                          <td className="py-2 pr-3">
-                            <div className="flex flex-wrap gap-1">
-                              {receipt.documents.map((file) => (
-                                <button
-                                  key={file.id}
-                                  type="button"
-                                  onClick={() => downloadFile(file)}
-                                  className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400"
-                                >
-                                  {file.original_filename}
-                                </button>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="py-2 text-right">
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                variant="secondary"
-                                onClick={() => setExpandedReceipt(expandedReceipt === receipt.id ? null : receipt.id)}
-                              >
-                                {expandedReceipt === receipt.id ? 'Hide Lines' : 'View Lines'}
-                              </Button>
-                              {canManage && receipt.status === 'draft' && (
-                                <>
-                                  <Button isLoading={postReceiptBusy} onClick={() => postReceipt(receipt)}>Post</Button>
-                                  <Button variant="secondary" onClick={() => setCancelReceiptTarget(receipt)}>Cancel</Button>
-                                </>
-                              )}
-                              {canManage && receipt.status === 'posted' && (
-                                <Button variant="danger" onClick={() => openReverseReceipt(receipt)}>Reverse...</Button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                        {expandedReceipt === receipt.id && (
-                          <tr key={`${receipt.id}-lines`} className="border-t border-ink-700 bg-ink-900/40">
-                            <td colSpan={6} className="py-2 pr-3">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="text-left uppercase tracking-wide text-gold-100/40">
-                                    <th className="py-1 pr-3">Raw Material</th>
-                                    <th className="py-1 pr-3">Quantity</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {receipt.lines.map((line) => (
-                                    <tr key={line.id}>
-                                      <td className="py-1 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
-                                      <td className="py-1 pr-3">
-                                        {line.quantity}{' '}
-                                        {unitCode(detailTarget.lines.find((l) => l.id === line.purchase_order_line_id)?.unit_of_measure_id ?? null)}
-                                        {line.remarks && <span className="block text-gold-100/50">{line.remarks}</span>}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </td>
-                          </tr>
-                        )}
-                      </>
-                    ))}
-                  </tbody>
-                </table>
+              {canManage && detailTarget?.status === 'pending_approval' && (
+                <>
+                  <Button onClick={approvePurchaseOrder} isLoading={actionBusy === 'approve'}>Approve</Button>
+                  <Button variant="secondary" onClick={backToDraft} isLoading={actionBusy === 'draft'}>Send Back to Draft</Button>
+                </>
+              )}
+              {canManage && detailTarget?.status === 'approved' && (
+                <>
+                  <Button onClick={emailPurchaseOrder} isLoading={actionBusy === 'email'}>Email to Supplier</Button>
+                  <Button variant="secondary" onClick={markSent} isLoading={actionBusy === 'mark-sent'}>Mark as Sent</Button>
+                </>
+              )}
+              {canManage && detailTarget?.status === 'sent' && (
+                <Button variant="secondary" onClick={emailPurchaseOrder} isLoading={actionBusy === 'email'}>Re-send Email</Button>
+              )}
+              {canManage && (detailTarget?.status === 'approved' || detailTarget?.status === 'sent') && (
+                <Button variant="secondary" onClick={backToDraft} isLoading={actionBusy === 'draft'}>Create Revision</Button>
+              )}
+              {canManage && canCancelStatus && (
+                <Button variant="danger" onClick={() => detailTarget && openCancel(detailTarget)}>Cancel...</Button>
+              )}
+              <Button variant="secondary" onClick={closeDetail}>Back to Purchase Orders</Button>
               </div>
-            )}
-
-            {/* Payments */}
-            {hasPayments && (
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-xs uppercase tracking-wide text-gold-100/50">
-                    Payments{' '}
-                    <Badge tone={PAYMENT_STATUS_TONES[detailTarget.payment_status]}>{PAYMENT_STATUS_LABELS[detailTarget.payment_status]}</Badge>
-                  </h3>
-                  <div className="text-sm">
-                    <span className="text-gold-100/50">PO Amount </span>{detailTarget.final_amount} {detailTarget.currency}
-                    {detailTarget.final_amount !== detailTarget.total_amount && (
-                      <span className="text-gold-100/40"> (ordered {detailTarget.total_amount})</span>
-                    )}
-                    <span className="mx-2 text-gold-100/30">|</span>
-                    <span className="text-gold-100/50">Paid </span>{detailTarget.paid_amount}
-                    <span className="mx-2 text-gold-100/30">|</span>
-                    <span className="text-gold-100/50">Outstanding </span>{detailTarget.outstanding_amount}
-                  </div>
-                </div>
-                {detailTarget.payments.length === 0 ? (
-                  <p className="text-sm text-gold-100/60">No payments recorded yet.</p>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
-                        <th className="py-2 pr-3">Date</th>
-                        <th className="py-2 pr-3">Amount</th>
-                        <th className="py-2 pr-3">Method</th>
-                        <th className="py-2 pr-3">Reference</th>
-                        <th className="py-2 pr-3">Status</th>
-                        <th className="py-2 pr-3">Evidence</th>
-                        <th className="py-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detailTarget.payments.map((payment) => (
-                        <tr key={payment.id} className="border-t border-ink-700 align-top">
-                          <td className="py-2 pr-3">{formatDate(payment.payment_date)}</td>
-                          <td className="py-2 pr-3">
-                            {payment.amount}
-                            {payment.is_final && <span className="block text-xs text-gold-100/50">Final payment</span>}
-                          </td>
-                          <td className="py-2 pr-3">{payment.payment_method ?? '—'}</td>
-                          <td className="py-2 pr-3">{payment.reference_number ?? '—'}</td>
-                          <td className="py-2 pr-3">
-                            <Badge tone={payment.status === 'cancelled' ? 'danger' : 'success'}>
-                              {payment.status === 'cancelled' ? 'Cancelled' : 'Recorded'}
-                            </Badge>
-                          </td>
-                          <td className="py-2 pr-3">
-                            <div className="flex flex-wrap gap-1">
-                              {payment.files.map((file) => (
-                                <button
-                                  key={file.id}
-                                  type="button"
-                                  onClick={() => downloadFile(file)}
-                                  className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400"
-                                >
-                                  {file.original_filename}
-                                </button>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="py-2 text-right">
-                            {canManage && payment.status === 'recorded' && (
-                              <Button variant="secondary" onClick={() => openCancelPayment(payment)}>Cancel</Button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {canManage && !paymentFormOpen && isOpen && (
-                  <Button type="button" variant="secondary" className="mt-2" onClick={openRecordPayment}>Record Payment</Button>
-                )}
-                {canManage && paymentFormOpen && (
-                  <form onSubmit={paymentForm.handleSubmit(onPaymentSubmit)} className="mt-2 flex flex-col gap-4 rounded-md border border-ink-700 p-4">
-                    <Alert variant="danger">{paymentError}</Alert>
-                    <DateField label="Payment Date" required {...paymentForm.register('payment_date')} error={paymentForm.formState.errors.payment_date?.message} />
-                    <TextField label="Amount" required {...paymentForm.register('amount')} error={paymentForm.formState.errors.amount?.message} />
-                    <TextField label="Payment Method" hint="e.g. Bank Transfer, Cheque, Cash." {...paymentForm.register('payment_method')} />
-                    <TextField label="Reference No." {...paymentForm.register('reference_number')} />
-                    <FileUploadField label="Attachment" multiple accept=".pdf,.png,.jpg,.jpeg" value={paymentFiles} onChange={setPaymentFiles} />
-                    <TextareaField label="Notes" {...paymentForm.register('notes')} />
-                    <CheckboxField
-                      label="Final payment — this settles the PO"
-                      hint="If the total paid then differs from the PO amount, it goes back to the PO creator."
-                      {...paymentForm.register('is_final')}
-                    />
-                    <div className="flex gap-2">
-                      <Button type="submit" isLoading={paymentForm.formState.isSubmitting}>Save Payment</Button>
-                      <Button type="button" variant="secondary" onClick={() => setPaymentFormOpen(false)}>Cancel</Button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            )}
-
-            {/* Reconciliation */}
-            {detailTarget.reconciliations.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Reconciliation</h3>
-                <div className="flex flex-col gap-3">
-                  {detailTarget.reconciliations.map((rec) => (
-                    <div key={rec.id} className={`rounded-md border p-3 text-sm ${rec.status === 'open' ? 'border-danger-500' : 'border-ink-700'}`}>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span>
-                          <Badge tone={rec.status === 'open' ? 'danger' : 'success'}>
-                            {`${rec.kind === 'receipt' ? 'Receipt' : 'Payment'} — ${rec.status === 'open' ? 'Open' : 'Resolved'}`}
-                          </Badge>{' '}
-                          <span className="text-xs text-gold-100/50">{formatKuwaitTime(rec.created_at)}</span>
-                        </span>
-                      </div>
-                      <p className="mt-1">{rec.discrepancy}</p>
-                      {rec.status === 'resolved' ? (
-                        <p className="mt-1 text-gold-100/70">
-                          {RESOLUTION_LABELS[rec.resolution ?? ''] ?? rec.resolution}: {rec.resolution_note}
-                          <span className="block text-xs text-gold-100/50">{stamp(rec.resolved_at, rec.resolved_by_name)}</span>
-                        </p>
-                      ) : (
-                        canManage && (
-                          <div className="mt-2 flex flex-col gap-2">
-                            <SelectField
-                              label="Resolution"
-                              value={resolveChoice[rec.id] ?? RESOLUTIONS[rec.kind][0].value}
-                              onChange={(e) => setResolveChoice((prev) => ({ ...prev, [rec.id]: e.target.value }))}
-                            >
-                              {RESOLUTIONS[rec.kind].map((option) => (
-                                <option key={option.value} value={option.value}>{option.label}</option>
-                              ))}
-                            </SelectField>
-                            <TextareaField
-                              label="Resolution note"
-                              required
-                              hint={rec.kind === 'receipt' ? 'e.g. supplier sends balance Friday; substitution accepted; material rejected (reverse the receipt).' : 'e.g. agreed discount; Finance to refund.'}
-                              value={resolveNotes[rec.id] ?? ''}
-                              onChange={(e) => setResolveNotes((prev) => ({ ...prev, [rec.id]: e.target.value }))}
-                            />
-                            <div>
-                              <Button onClick={() => resolveReconciliation(rec)} isLoading={actionBusy === `resolve-${rec.id}`}>Resolve</Button>
-                            </div>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Supplier follow-up */}
-            {(detailTarget.communications.length > 0 || isOpen) && (
-              <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Supplier Follow-up</h3>
-                {detailTarget.communications.length > 0 && (
-                  <ul className="flex flex-col gap-2 text-sm">
-                    {detailTarget.communications.map((entry) => (
-                      <li key={entry.id} className="rounded-md border border-ink-700 p-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-gold-100/50">{formatKuwaitTime(entry.created_at)}</span>
-                          <span>{COMMUNICATION_LABELS[entry.kind]}</span>
-                          {entry.status === 'failed' && <Badge tone="danger">Failed</Badge>}
-                          {entry.recipient && <span className="text-xs text-gold-100/50">to {entry.recipient}</span>}
-                          {entry.sent_by_name && <span className="text-xs text-gold-100/50">by {entry.sent_by_name}</span>}
-                        </div>
-                        {entry.subject && <div className="mt-1 font-medium">{entry.subject}</div>}
-                        {entry.message && <div className="mt-1 whitespace-pre-line text-gold-100/80">{entry.message}</div>}
-                        {entry.error && <div className="mt-1 text-xs text-danger-500">{entry.error}</div>}
-                        {entry.files.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {entry.files.map((file) => (
-                              <button key={file.id} type="button" onClick={() => downloadFile(file)} className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400">
-                                {file.original_filename}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {canManage && isOpen && (
-                  <div className="mt-2 flex flex-col gap-3 rounded-md border border-ink-700 p-3">
-                    <Alert variant="danger">{followUpError}</Alert>
-                    <TextField label="Subject" placeholder={`Follow-up: Purchase Order ${detailTarget.po_number}`} value={followUpSubject} onChange={(e) => setFollowUpSubject(e.target.value)} />
-                    <TextareaField label="Message" required value={followUpMessage} onChange={(e) => setFollowUpMessage(e.target.value)} />
-                    <CheckboxField label="Attach the PO PDF" checked={followUpAttachPdf} onChange={(e) => setFollowUpAttachPdf(e.target.checked)} />
-                    <FileUploadField label="Attachment" multiple accept=".pdf,.png,.jpg,.jpeg" value={followUpFiles} onChange={setFollowUpFiles} />
-                    <div className="flex flex-wrap gap-2">
-                      <Button onClick={() => submitFollowUp(true)} isLoading={actionBusy === 'follow-up'}>Send Follow-up Email</Button>
-                      <Button variant="secondary" onClick={() => submitFollowUp(false)} isLoading={actionBusy === 'reply'}>Record Supplier Reply</Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Revisions & documents */}
-            {detailTarget.revisions.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Revisions</h3>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
-                      <th className="py-2 pr-3">Rev</th>
-                      <th className="py-2 pr-3">Approved</th>
-                      <th className="py-2 pr-3">Total</th>
-                      <th className="py-2 pr-3">Document</th>
-                      <th className="py-2"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailTarget.revisions.map((revision) => (
-                      <>
-                        <tr key={revision.id} className="border-t border-ink-700">
-                          <td className="py-2 pr-3">{revision.revision_number}</td>
-                          <td className="py-2 pr-3">{formatKuwaitTime(revision.issued_at)}</td>
-                          <td className="py-2 pr-3">{revision.total_amount}</td>
-                          <td className="py-2 pr-3">
-                            {revision.pdf_file ? (
-                              <button
-                                type="button"
-                                onClick={() => downloadFile(revision.pdf_file!)}
-                                className="rounded border border-ink-700 px-2 py-0.5 text-xs hover:border-gold-400"
-                              >
-                                {revision.pdf_file.original_filename} ({formatBytes(revision.pdf_file.size_bytes)})
-                              </button>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-                          <td className="py-2 text-right">
-                            <Button
-                              variant="secondary"
-                              onClick={() => setExpandedRevision(expandedRevision === revision.id ? null : revision.id)}
-                            >
-                              {expandedRevision === revision.id ? 'Hide Lines' : 'View Lines'}
-                            </Button>
-                          </td>
-                        </tr>
-                        {expandedRevision === revision.id && (
-                          <tr key={`${revision.id}-lines`} className="border-t border-ink-700 bg-ink-900/40">
-                            <td colSpan={5} className="py-2 pr-3">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="text-left uppercase tracking-wide text-gold-100/40">
-                                    <th className="py-1 pr-3">Raw Material</th>
-                                    <th className="py-1 pr-3">Qty</th>
-                                    <th className="py-1 pr-3">UOM</th>
-                                    <th className="py-1 pr-3">Unit Price</th>
-                                    <th className="py-1 pr-3">Line Total</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {revision.lines.map((line) => (
-                                    <tr key={line.id}>
-                                      <td className="py-1 pr-3">{materialsById.get(line.raw_material_id)?.name ?? `#${line.raw_material_id}`}</td>
-                                      <td className="py-1 pr-3">{line.quantity}</td>
-                                      <td className="py-1 pr-3">{unitCode(line.unit_of_measure_id)}</td>
-                                      <td className="py-1 pr-3">{line.unit_price}</td>
-                                      <td className="py-1 pr-3">{line.line_total}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </td>
-                          </tr>
-                        )}
-                      </>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {detailTarget.documents.length > 0 && (
-              <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Documents</h3>
-                <div className="flex flex-wrap gap-2">
-                  {detailTarget.documents.map((file) => (
-                    <button
-                      key={file.id}
-                      type="button"
-                      onClick={() => downloadFile(file)}
-                      className="rounded border border-ink-700 px-2 py-1 text-xs hover:border-gold-400"
-                    >
-                      {file.original_filename} ({formatBytes(file.size_bytes)})
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+            </>
+          )}
+        </section>
+      )}
 
       <Modal open={!!cancelPaymentTarget} title="Cancel Payment" onClose={() => setCancelPaymentTarget(null)} footer={
         <>

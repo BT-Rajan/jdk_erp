@@ -323,7 +323,7 @@ export function RfqsPage() {
 
   /** Lands on Purchase Orders with that PO open. */
   function openPurchaseOrder(purchaseOrderId: number | null) {
-    navigate('/purchase-orders', { state: purchaseOrderId ? { openPurchaseOrderId: purchaseOrderId } : undefined })
+    navigate(purchaseOrderId ? `/purchase-orders/${purchaseOrderId}` : '/purchase-orders')
   }
 
   // Viewing an RFQ is its own page: /rfqs/:rfqId. Opening it from the

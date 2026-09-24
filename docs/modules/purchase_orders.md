@@ -870,3 +870,8 @@ exists.
 The per-item Required By is no longer asked: the header's Expected
 Delivery Date is the one date. The `required_by_date` column stays for
 existing data. No migration.
+
+Viewing a PO is also a page (`/purchase-orders/:id`): header, items,
+lifecycle buttons, receipts, payments, reconciliation, follow-ups and
+documents. Saving the PO form, or generating a PO from an RFQ, lands
+there. Cancel, payment-cancel and receipt-reverse stay dialogs over it.
