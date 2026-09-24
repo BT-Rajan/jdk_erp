@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { RawMaterialsPage } from './RawMaterialsPage'
 
 const { useAuthMock, getMock, postMock, patchMock, deleteMock } = vi.hoisted(() => ({
@@ -94,7 +95,7 @@ beforeEach(() => {
 
 describe('RawMaterialsPage', () => {
   it('loads and renders raw materials on mount, with exactly one initial request', async () => {
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Cement')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/raw-materials')
@@ -102,14 +103,14 @@ describe('RawMaterialsPage', () => {
   })
 
   it('shows the category name and unit code resolved from the lookup lists', async () => {
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Electronics')).toBeInTheDocument()
     expect(await screen.findByText('KG')).toBeInTheDocument()
   })
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Cement')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Raw Material' })).not.toBeInTheDocument()
@@ -124,7 +125,7 @@ describe('RawMaterialsPage', () => {
       if (url === '/api/suppliers') return Promise.resolve({ data: SUPPLIERS_RESPONSE })
       return Promise.reject(new Error('Network down'))
     })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
@@ -135,7 +136,7 @@ describe('RawMaterialsPage', () => {
       if (url === '/api/suppliers') return Promise.resolve({ data: SUPPLIERS_RESPONSE })
       return Promise.resolve({ data: materialsResponse([]) })
     })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No raw materials yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -143,7 +144,7 @@ describe('RawMaterialsPage', () => {
   })
 
   it('debounces search: types quickly but only fires one request with the final term, resetting to page 1', async () => {
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
     getMock.mockClear()
 
@@ -160,7 +161,7 @@ describe('RawMaterialsPage', () => {
 
   it('creating a raw material posts the payload including category and unit, with no code field', async () => {
     postMock.mockResolvedValue({ data: makeMaterial({ id: 2, name: 'Sand', code: '100002' }) })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
     getMock.mockClear()
 
@@ -184,7 +185,7 @@ describe('RawMaterialsPage', () => {
   it('creating a raw material shows a server-side name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
     postMock.mockRejectedValue(new ApiError({ message: 'A raw material with this name already exists.', code: 'CONFLICT' }, 409))
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Raw Material' }))
@@ -200,7 +201,7 @@ describe('RawMaterialsPage', () => {
     postMock.mockResolvedValue({
       data: makeMaterial({ id: 2, name: 'Resin', code: '100002', unit_of_measure_id: 21, alternate_conversion_unit_of_measure_id: 20, alternate_conversion_factor: '1.25' }),
     })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Raw Material' }))
@@ -220,7 +221,7 @@ describe('RawMaterialsPage', () => {
   })
 
   it('rejects an alternate conversion factor entered without an alternate conversion unit before submitting', async () => {
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Raw Material' }))
@@ -240,7 +241,7 @@ describe('RawMaterialsPage', () => {
 
   it('editing a raw material pre-fills the form, disables the code field, and sends a PATCH without code', async () => {
     patchMock.mockResolvedValue({ data: makeMaterial({ name: 'Portland Cement' }) })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     const row = screen.getByText('Cement').closest('tr')!
@@ -261,7 +262,7 @@ describe('RawMaterialsPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeMaterial({ is_active: false }) })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     const row = screen.getByText('Cement').closest('tr')!
@@ -275,7 +276,7 @@ describe('RawMaterialsPage', () => {
   // --- Manage Suppliers dialog ---
 
   it('opens the Manage Suppliers dialog and shows an empty state when none are linked', async () => {
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     const row = screen.getByText('Cement').closest('tr')!
@@ -294,7 +295,7 @@ describe('RawMaterialsPage', () => {
       if (url === '/api/raw-materials/1/suppliers') return Promise.resolve({ data: [makeLink()] })
       return Promise.reject(new Error(`Unexpected GET ${url}`))
     })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     const row = screen.getByText('Cement').closest('tr')!
@@ -307,7 +308,7 @@ describe('RawMaterialsPage', () => {
 
   it('adding a supplier relationship posts the payload to the nested endpoint', async () => {
     postMock.mockResolvedValue({ data: makeLink() })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     const row = screen.getByText('Cement').closest('tr')!
@@ -338,7 +339,7 @@ describe('RawMaterialsPage', () => {
       return Promise.reject(new Error(`Unexpected GET ${url}`))
     })
     deleteMock.mockResolvedValue({ data: null })
-    render(<RawMaterialsPage />)
+    render(<RawMaterialsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Cement')
 
     const row = screen.getByText('Cement').closest('tr')!

@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { ProductsPage } from './ProductsPage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -67,7 +68,7 @@ beforeEach(() => {
 
 describe('ProductsPage', () => {
   it('loads and renders products on mount, with exactly one initial request', async () => {
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Widget')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/products')
@@ -75,14 +76,14 @@ describe('ProductsPage', () => {
   })
 
   it('shows the category name and unit code resolved from the lookup lists', async () => {
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Electronics')).toBeInTheDocument()
     expect(await screen.findByText('KG')).toBeInTheDocument()
   })
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Widget')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Product' })).not.toBeInTheDocument()
@@ -97,7 +98,7 @@ describe('ProductsPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.reject(new Error('Network down'))
     })
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
@@ -107,7 +108,7 @@ describe('ProductsPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.resolve({ data: productsResponse([]) })
     })
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No products yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -115,7 +116,7 @@ describe('ProductsPage', () => {
   })
 
   it('debounces search: types quickly but only fires one request with the final term, resetting to page 1', async () => {
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Widget')
     getMock.mockClear()
 
@@ -132,7 +133,7 @@ describe('ProductsPage', () => {
 
   it('creating a product posts the payload including category, unit and lead times, with no code field', async () => {
     postMock.mockResolvedValue({ data: makeProduct({ id: 2, name: 'Gizmo', code: '200002' }) })
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Widget')
     getMock.mockClear()
 
@@ -164,7 +165,7 @@ describe('ProductsPage', () => {
   })
 
   it('rejects a non-numeric selling price inline before submitting', async () => {
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Widget')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Product' }))
@@ -181,7 +182,7 @@ describe('ProductsPage', () => {
   it('creating a product shows a server-side name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
     postMock.mockRejectedValue(new ApiError({ message: 'A product with this name already exists.', code: 'CONFLICT' }, 409))
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Widget')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Product' }))
@@ -196,7 +197,7 @@ describe('ProductsPage', () => {
 
   it('editing a product pre-fills the form, disables the code field, and sends a PATCH without code', async () => {
     patchMock.mockResolvedValue({ data: makeProduct({ name: 'Super Widget' }) })
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Widget')
 
     const row = screen.getByText('Widget').closest('tr')!
@@ -222,7 +223,7 @@ describe('ProductsPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeProduct({ is_active: false }) })
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Widget')
 
     const row = screen.getByText('Widget').closest('tr')!
@@ -235,7 +236,7 @@ describe('ProductsPage', () => {
 
   it('shows an error message when changing status fails', async () => {
     patchMock.mockRejectedValue(new Error('Failed to change status.'))
-    render(<ProductsPage />)
+    render(<ProductsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Widget')
 
     const row = screen.getByText('Widget').closest('tr')!

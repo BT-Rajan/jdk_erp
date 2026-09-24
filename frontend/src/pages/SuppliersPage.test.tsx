@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { SuppliersPage } from './SuppliersPage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -51,7 +52,7 @@ beforeEach(() => {
 
 describe('SuppliersPage', () => {
   it('loads and renders suppliers on mount, with exactly one initial request', async () => {
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Acme Traders')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/suppliers')
@@ -60,7 +61,7 @@ describe('SuppliersPage', () => {
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Acme Traders')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Supplier' })).not.toBeInTheDocument()
@@ -69,13 +70,13 @@ describe('SuppliersPage', () => {
 
   it('shows an error state when the request fails', async () => {
     getMock.mockRejectedValue(new Error('Network down'))
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
   it('shows a distinct empty state for no suppliers at all vs. no search matches', async () => {
     getMock.mockResolvedValue({ data: suppliersResponse([]) })
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No suppliers yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -83,7 +84,7 @@ describe('SuppliersPage', () => {
   })
 
   it('debounces search: types quickly but only fires one request with the final term, resetting to page 1', async () => {
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Traders')
     getMock.mockClear()
 
@@ -100,7 +101,7 @@ describe('SuppliersPage', () => {
 
   it('creating a supplier posts the payload and refetches the list', async () => {
     postMock.mockResolvedValue({ data: makeSupplier({ id: 2, name: 'Beta Chemicals', code: 'SUP0002' }) })
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Traders')
     getMock.mockClear()
 
@@ -120,7 +121,7 @@ describe('SuppliersPage', () => {
   it('creating a supplier shows a server-side name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
     postMock.mockRejectedValue(new ApiError({ message: 'A supplier with this name already exists.', code: 'CONFLICT' }, 409))
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Traders')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Supplier' }))
@@ -132,7 +133,7 @@ describe('SuppliersPage', () => {
 
   it('editing a supplier pre-fills the form and sends a PATCH', async () => {
     patchMock.mockResolvedValue({ data: makeSupplier({ name: 'Acme Trading Co' }) })
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Traders')
 
     const row = screen.getByText('Acme Traders').closest('tr')!
@@ -155,7 +156,7 @@ describe('SuppliersPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeSupplier({ is_active: false }) })
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Traders')
 
     const row = screen.getByText('Acme Traders').closest('tr')!
@@ -168,7 +169,7 @@ describe('SuppliersPage', () => {
 
   it('shows an error message when changing status fails', async () => {
     patchMock.mockRejectedValue(new Error('Failed to change status.'))
-    render(<SuppliersPage />)
+    render(<SuppliersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Traders')
 
     const row = screen.getByText('Acme Traders').closest('tr')!

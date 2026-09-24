@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { ProductionLinesPage } from './ProductionLinesPage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -40,7 +41,7 @@ beforeEach(() => {
 
 describe('ProductionLinesPage', () => {
   it('loads and renders production lines on mount, with exactly one initial request', async () => {
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Production Line 1')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/production-lines')
@@ -49,7 +50,7 @@ describe('ProductionLinesPage', () => {
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Production Line 1')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Production Line' })).not.toBeInTheDocument()
@@ -58,13 +59,13 @@ describe('ProductionLinesPage', () => {
 
   it('shows an error state when the request fails', async () => {
     getMock.mockRejectedValue(new Error('Network down'))
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
   it('shows a distinct empty state for no production lines at all vs. no search matches', async () => {
     getMock.mockResolvedValue({ data: linesResponse([]) })
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No production lines yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -73,7 +74,7 @@ describe('ProductionLinesPage', () => {
 
   it('creating a production line posts the payload with no code field, and refetches the list', async () => {
     postMock.mockResolvedValue({ data: makeLine({ id: 2, code: '000012', name: 'Line 2' }) })
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Production Line 1')
     getMock.mockClear()
 
@@ -88,7 +89,7 @@ describe('ProductionLinesPage', () => {
   it('creating a production line shows a server-side name conflict as a form error', async () => {
     const { ApiError } = await import('@/lib/apiClient')
     postMock.mockRejectedValue(new ApiError({ message: 'A production line with this name already exists.', code: 'CONFLICT' }, 409))
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Production Line 1')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Production Line' }))
@@ -100,7 +101,7 @@ describe('ProductionLinesPage', () => {
 
   it('editing a production line disables the code field and sends a PATCH with only the name', async () => {
     patchMock.mockResolvedValue({ data: makeLine({ name: 'Main Line' }) })
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Production Line 1')
 
     const row = screen.getByText('Production Line 1').closest('tr')!
@@ -119,7 +120,7 @@ describe('ProductionLinesPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeLine({ is_active: false }) })
-    render(<ProductionLinesPage />)
+    render(<ProductionLinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Production Line 1')
 
     const row = screen.getByText('Production Line 1').closest('tr')!

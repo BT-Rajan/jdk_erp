@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
-import { FormDialog } from '@/components/ui/FormDialog'
+import { FormPage } from '@/components/ui/FormPage'
 import { Modal } from '@/components/ui/Modal'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
@@ -21,6 +21,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
+import { useFormRoute } from '@/lib/useFormRoute'
 
 /** Mirrors backend/app/schemas/bom.py's BomOut. */
 interface Bom {
@@ -157,7 +158,6 @@ export function BomsPage() {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
   const [editingBom, setEditingBom] = useState<Bom | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -245,19 +245,23 @@ export function BomsPage() {
     void loadLookups()
   }, [loadLookups])
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingBom(null)
     reset(emptyBomDefaults)
     setFormError(null)
-    setFormOpen(true)
   }
 
-  function openEdit(bom: Bom) {
+  function prepareEdit(bom: Bom) {
     setEditingBom(bom)
     reset(toBomFormValues(bom))
     setFormError(null)
-    setFormOpen(true)
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<Bom>(
+    '/boms',
+    '/api/boms',
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  )
 
   const onFormSubmit = useCallback(
     async (values: BomFormValues) => {
@@ -275,7 +279,7 @@ export function BomsPage() {
             notes: values.notes || null,
           })
         }
-        setFormOpen(false)
+        closeForm()
         table.refetch()
       } catch (err) {
         if (err instanceof ApiError) {
@@ -481,53 +485,57 @@ export function BomsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Bills of Materials"
-        subtitle="For a given quantity of a Product, exactly how much of each Raw Material is required."
-        actions={canManage ? <Button onClick={openCreate}>New BOM</Button> : undefined}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by product name or code..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Bills of Materials"
+          subtitle="For a given quantity of a Product, exactly how much of each Raw Material is required."
+          actions={canManage ? <Button onClick={openCreate}>New BOM</Button> : undefined}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(b) => b.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching BOMs' : 'No BOMs yet'}
-        emptyMessage={
-          debouncedSearch
-            ? 'Try a different search term.'
-            : canManage
-              ? 'Create the first BOM with the New BOM button above.'
-              : 'No BOMs have been created yet.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
+
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by product name or code..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(b) => b.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching BOMs' : 'No BOMs yet'}
+          emptyMessage={
+            debouncedSearch
+              ? 'Try a different search term.'
+              : canManage
+                ? 'Create the first BOM with the New BOM button above.'
+                : 'No BOMs have been created yet.'
+          }
+        />
+      </div>
 
       {canManage && (
         <>
-          <FormDialog
+          <FormPage
+            loading={formLoading}
+            loadError={formLoadError}
             open={formOpen}
             title={editingBom ? 'Edit BOM' : 'New BOM'}
-            onClose={() => setFormOpen(false)}
+            onClose={closeForm}
             onSubmit={handleSubmit(onFormSubmit)}
             submitting={isSubmitting}
             submitLabel={editingBom ? 'Save' : 'Create BOM'}
@@ -558,7 +566,7 @@ export function BomsPage() {
               error={errors.base_quantity?.message}
             />
             <TextareaField label="Notes" {...register('notes')} error={errors.notes?.message} />
-          </FormDialog>
+          </FormPage>
 
           <ConfirmDialog
             open={!!statusTarget}

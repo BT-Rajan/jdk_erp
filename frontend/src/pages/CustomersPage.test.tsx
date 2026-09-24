@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { CustomersPage } from './CustomersPage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -65,7 +66,7 @@ beforeEach(() => {
 
 describe('CustomersPage', () => {
   it('loads and renders customers on mount, with exactly one initial request', async () => {
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Acme Trading')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/customers')
@@ -73,7 +74,7 @@ describe('CustomersPage', () => {
   })
 
   it('shows the assignee name resolved from the users list', async () => {
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Salesman Sam')).toBeInTheDocument()
   })
 
@@ -82,13 +83,13 @@ describe('CustomersPage', () => {
       if (url === '/api/users') return Promise.resolve({ data: USERS_RESPONSE })
       return Promise.resolve({ data: customersResponse([makeCustomer({ assigned_to_user_id: null })]) })
     })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Unassigned')).toBeInTheDocument()
   })
 
   it('a team_member sees the list and can create, but has no Edit/Assign/Deactivate actions', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Acme Trading')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New Customer' })).toBeInTheDocument()
@@ -99,7 +100,7 @@ describe('CustomersPage', () => {
 
   it('a manager sees Assign but not Edit/Deactivate', async () => {
     useAuthMock.mockReturnValue({ user: MANAGER })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
 
     const row = screen.getByText('Acme Trading').closest('tr')!
@@ -111,7 +112,7 @@ describe('CustomersPage', () => {
   })
 
   it('an admin sees Edit, Assign, and Deactivate', async () => {
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
 
     const row = screen.getByText('Acme Trading').closest('tr')!
@@ -127,12 +128,12 @@ describe('CustomersPage', () => {
       if (url === '/api/users') return Promise.resolve({ data: USERS_RESPONSE })
       return Promise.reject(new Error('Network down'))
     })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
   it('debounces search: types quickly but only fires one request with the final term, resetting to page 1', async () => {
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
     getMock.mockClear()
 
@@ -149,7 +150,7 @@ describe('CustomersPage', () => {
 
   it('creating a customer posts the payload and refetches the list', async () => {
     postMock.mockResolvedValue({ data: makeCustomer({ id: 2, name: 'New Co' }) })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
     getMock.mockClear()
 
@@ -168,7 +169,7 @@ describe('CustomersPage', () => {
 
   it('editing a customer pre-fills the form and sends a PATCH', async () => {
     patchMock.mockResolvedValue({ data: makeCustomer({ name: 'Renamed Co' }) })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
 
     const row = screen.getByText('Acme Trading').closest('tr')!
@@ -187,7 +188,7 @@ describe('CustomersPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeCustomer({ is_active: false }) })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
 
     const row = screen.getByText('Acme Trading').closest('tr')!
@@ -200,7 +201,7 @@ describe('CustomersPage', () => {
 
   it('assigning a customer sends the selected user id to the assign endpoint', async () => {
     patchMock.mockResolvedValue({ data: makeCustomer({ assigned_to_user_id: 1 }) })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
     await screen.findByText('Salesman Sam')
 
@@ -218,7 +219,7 @@ describe('CustomersPage', () => {
 
   it('assigning to Unassigned sends null', async () => {
     patchMock.mockResolvedValue({ data: makeCustomer({ assigned_to_user_id: null }) })
-    render(<CustomersPage />)
+    render(<CustomersPage />, { wrapper: MemoryRouter })
     await screen.findByText('Acme Trading')
     await screen.findByText('Salesman Sam')
 

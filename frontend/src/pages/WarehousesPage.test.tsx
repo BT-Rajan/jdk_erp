@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { WarehousesPage } from './WarehousesPage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -58,7 +59,7 @@ beforeEach(() => {
 
 describe('WarehousesPage', () => {
   it('loads and renders warehouses on mount, with exactly one initial request', async () => {
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Factory Warehouse')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/warehouses')
@@ -66,13 +67,13 @@ describe('WarehousesPage', () => {
   })
 
   it('shows the formatted storage capacity resolved from the lookup list', async () => {
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('5000.00 SQM')).toBeInTheDocument()
   })
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Factory Warehouse')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Warehouse' })).not.toBeInTheDocument()
@@ -85,7 +86,7 @@ describe('WarehousesPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.reject(new Error('Network down'))
     })
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
@@ -94,7 +95,7 @@ describe('WarehousesPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.resolve({ data: warehousesResponse([]) })
     })
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No warehouses yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -103,7 +104,7 @@ describe('WarehousesPage', () => {
 
   it('creating a warehouse posts the payload including structured capacity, with no code field', async () => {
     postMock.mockResolvedValue({ data: makeWarehouse({ id: 2, name: 'Second Warehouse', code: '000031' }) })
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Factory Warehouse')
     getMock.mockClear()
 
@@ -127,7 +128,7 @@ describe('WarehousesPage', () => {
   })
 
   it('rejects a non-positive storage area inline before submitting', async () => {
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Factory Warehouse')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Warehouse' }))
@@ -142,7 +143,7 @@ describe('WarehousesPage', () => {
 
   it('editing a warehouse pre-fills the form, disables the code field, and reconfigures capacity without a code change', async () => {
     patchMock.mockResolvedValue({ data: makeWarehouse({ total_usable_storage_area: '6000.00' }) })
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Factory Warehouse')
 
     const row = screen.getByText('Factory Warehouse').closest('tr')!
@@ -168,7 +169,7 @@ describe('WarehousesPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeWarehouse({ is_active: false }) })
-    render(<WarehousesPage />)
+    render(<WarehousesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Factory Warehouse')
 
     const row = screen.getByText('Factory Warehouse').closest('tr')!

@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { BomsPage } from './BomsPage'
 
 const { useAuthMock, getMock, postMock, patchMock, deleteMock } = vi.hoisted(() => ({
@@ -74,20 +75,20 @@ beforeEach(() => {
 
 describe('BomsPage', () => {
   it('loads and renders BOMs on mount, resolving the product name/code', async () => {
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Product A (PRD-TON)')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/boms')
     expect(calls).toHaveLength(1)
   })
 
   it('shows the base quantity with the product\'s own unit', async () => {
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('1.0000 TON')).toBeInTheDocument()
   })
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Product A (PRD-TON)')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New BOM' })).not.toBeInTheDocument()
@@ -104,7 +105,7 @@ describe('BomsPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.reject(new Error('Network down'))
     })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
@@ -115,7 +116,7 @@ describe('BomsPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.resolve({ data: bomsResponse([]) })
     })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No BOMs yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -124,7 +125,7 @@ describe('BomsPage', () => {
 
   it('creating a BOM posts product_id, base_quantity, and notes', async () => {
     postMock.mockResolvedValue({ data: makeBom({ id: 2 }) })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
     getMock.mockClear()
 
@@ -143,7 +144,7 @@ describe('BomsPage', () => {
   })
 
   it('rejects a non-positive base quantity inline before submitting', async () => {
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     await userEvent.click(screen.getByRole('button', { name: 'New BOM' }))
@@ -157,7 +158,7 @@ describe('BomsPage', () => {
 
   it('editing a BOM disables the product field and patches only base_quantity/notes', async () => {
     patchMock.mockResolvedValue({ data: makeBom({ base_quantity: '2.0000' }) })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     const row = screen.getByText('Product A (PRD-TON)').closest('tr')!
@@ -177,7 +178,7 @@ describe('BomsPage', () => {
 
   it('activating a draft BOM calls the status endpoint with status: active', async () => {
     patchMock.mockResolvedValue({ data: makeBom({ status: 'active' }) })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     const row = screen.getByText('Product A (PRD-TON)').closest('tr')!
@@ -190,7 +191,7 @@ describe('BomsPage', () => {
 
   it('managing components: adding a component posts raw_material_id and quantity, then refetches the BOM', async () => {
     postMock.mockResolvedValue({ data: makeBom() })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     const row = screen.getByText('Product A (PRD-TON)').closest('tr')!
@@ -224,7 +225,7 @@ describe('BomsPage', () => {
       if (url === '/api/boms') return Promise.resolve({ data: bomsResponse([withComponent]) })
       return Promise.reject(new Error(`Unexpected GET ${url}`))
     })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     const row = screen.getByText('Product A (PRD-TON)').closest('tr')!
@@ -251,7 +252,7 @@ describe('BomsPage', () => {
       return Promise.reject(new Error(`Unexpected GET ${url}`))
     })
     deleteMock.mockResolvedValue({ data: null })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     const row = screen.getByText('Product A (PRD-TON)').closest('tr')!
@@ -281,7 +282,7 @@ describe('BomsPage', () => {
       if (url === '/api/boms') return Promise.resolve({ data: bomsResponse([makeBom({ status: 'active' })]) })
       return Promise.reject(new Error(`Unexpected GET ${url}`))
     })
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     const row = screen.getByText('Product A (PRD-TON)').closest('tr')!
@@ -299,7 +300,7 @@ describe('BomsPage', () => {
   })
 
   it('warns that only an active BOM can calculate requirements when the BOM is still draft', async () => {
-    render(<BomsPage />)
+    render(<BomsPage />, { wrapper: MemoryRouter })
     await screen.findByText('Product A (PRD-TON)')
 
     const row = screen.getByText('Product A (PRD-TON)').closest('tr')!

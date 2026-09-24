@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
-import { FormDialog } from '@/components/ui/FormDialog'
+import { FormPage } from '@/components/ui/FormPage'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { TextField } from '@/components/forms/TextField'
@@ -18,6 +18,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
+import { useFormRoute } from '@/lib/useFormRoute'
 
 /** Mirrors backend/app/schemas/production_line.py's ProductionLineOut. */
 interface ProductionLine {
@@ -90,7 +91,6 @@ export function ProductionLinesPage() {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
   const [editingLine, setEditingLine] = useState<ProductionLine | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -120,19 +120,23 @@ export function ProductionLinesPage() {
     table.setFilters({ search: debouncedSearch })
   }, [debouncedSearch])
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingLine(null)
     reset(emptyDefaults)
     setFormError(null)
-    setFormOpen(true)
   }
 
-  function openEdit(line: ProductionLine) {
+  function prepareEdit(line: ProductionLine) {
     setEditingLine(line)
     reset(toFormValues(line))
     setFormError(null)
-    setFormOpen(true)
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<ProductionLine>(
+    '/production-lines',
+    '/api/production-lines',
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  )
 
   const onFormSubmit = useCallback(
     async (values: LineFormValues) => {
@@ -143,7 +147,7 @@ export function ProductionLinesPage() {
         } else {
           await apiClient.post('/api/production-lines', values)
         }
-        setFormOpen(false)
+        closeForm()
         table.refetch()
       } catch (err) {
         if (err instanceof ApiError) {
@@ -207,53 +211,57 @@ export function ProductionLinesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Production Lines"
-        subtitle="The production flow/resource each Machine runs on."
-        actions={canManage ? <Button onClick={openCreate}>New Production Line</Button> : undefined}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by name or code..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Production Lines"
+          subtitle="The production flow/resource each Machine runs on."
+          actions={canManage ? <Button onClick={openCreate}>New Production Line</Button> : undefined}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(l) => l.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching production lines' : 'No production lines yet'}
-        emptyMessage={
-          debouncedSearch
-            ? 'Try a different search term.'
-            : canManage
-              ? 'Create the first production line with the New Production Line button above.'
-              : 'No production lines have been created yet.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
+
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by name or code..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(l) => l.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching production lines' : 'No production lines yet'}
+          emptyMessage={
+            debouncedSearch
+              ? 'Try a different search term.'
+              : canManage
+                ? 'Create the first production line with the New Production Line button above.'
+                : 'No production lines have been created yet.'
+          }
+        />
+      </div>
 
       {canManage && (
         <>
-          <FormDialog
+          <FormPage
+            loading={formLoading}
+            loadError={formLoadError}
             open={formOpen}
             title={editingLine ? 'Edit Production Line' : 'New Production Line'}
-            onClose={() => setFormOpen(false)}
+            onClose={closeForm}
             onSubmit={handleSubmit(onFormSubmit)}
             submitting={isSubmitting}
             submitLabel={editingLine ? 'Save' : 'Create production line'}
@@ -263,7 +271,7 @@ export function ProductionLinesPage() {
               <TextField label="Code" disabled readOnly hint="System-generated. Cannot be changed." value={editingLine.code} />
             )}
             <TextField label="Name" required {...register('name')} error={errors.name?.message} />
-          </FormDialog>
+          </FormPage>
 
           <ConfirmDialog
             open={!!statusTarget}

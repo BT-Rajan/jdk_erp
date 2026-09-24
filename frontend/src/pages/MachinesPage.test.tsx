@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { MachinesPage } from './MachinesPage'
 
 const { useAuthMock, getMock, postMock, patchMock } = vi.hoisted(() => ({
@@ -65,7 +66,7 @@ beforeEach(() => {
 
 describe('MachinesPage', () => {
   it('loads and renders machines on mount, with exactly one initial request', async () => {
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Machine 1')).toBeInTheDocument()
     const calls = getMock.mock.calls.filter(([url]) => url === '/api/machines')
@@ -73,14 +74,14 @@ describe('MachinesPage', () => {
   })
 
   it('shows the production line name and formatted capacity resolved from the lookup lists', async () => {
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Production Line 1')).toBeInTheDocument()
     expect(await screen.findByText('2.0000 TON / hour')).toBeInTheDocument()
   })
 
   it('shows the read-only view for a non-admin: list loads but no mutating controls appear', async () => {
     useAuthMock.mockReturnValue({ user: TEAM_MEMBER })
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
 
     expect(await screen.findByText('Machine 1')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'New Machine' })).not.toBeInTheDocument()
@@ -94,7 +95,7 @@ describe('MachinesPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.reject(new Error('Network down'))
     })
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('Network down')).toBeInTheDocument()
   })
 
@@ -104,7 +105,7 @@ describe('MachinesPage', () => {
       if (url === '/api/units-of-measure') return Promise.resolve({ data: UNITS_RESPONSE })
       return Promise.resolve({ data: machinesResponse([]) })
     })
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
     expect(await screen.findByText('No machines yet')).toBeInTheDocument()
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz')
@@ -113,7 +114,7 @@ describe('MachinesPage', () => {
 
   it('creating a machine posts the payload including production line and structured capacity, with no code field', async () => {
     postMock.mockResolvedValue({ data: makeMachine({ id: 2, name: 'Machine 2', code: '000021' }) })
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Machine 1')
     getMock.mockClear()
 
@@ -140,7 +141,7 @@ describe('MachinesPage', () => {
   })
 
   it('rejects a non-positive capacity inline before submitting', async () => {
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Machine 1')
 
     await userEvent.click(screen.getByRole('button', { name: 'New Machine' }))
@@ -157,7 +158,7 @@ describe('MachinesPage', () => {
 
   it('editing a machine pre-fills the form, disables the code field, and reconfigures capacity without a code change', async () => {
     patchMock.mockResolvedValue({ data: makeMachine({ capacity_quantity: '2.5000' }) })
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Machine 1')
 
     const row = screen.getByText('Machine 1').closest('tr')!
@@ -183,7 +184,7 @@ describe('MachinesPage', () => {
 
   it('deactivating asks for confirmation, then calls the status endpoint and refetches', async () => {
     patchMock.mockResolvedValue({ data: makeMachine({ is_active: false }) })
-    render(<MachinesPage />)
+    render(<MachinesPage />, { wrapper: MemoryRouter })
     await screen.findByText('Machine 1')
 
     const row = screen.getByText('Machine 1').closest('tr')!

@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
-import { FormDialog } from '@/components/ui/FormDialog'
+import { FormPage } from '@/components/ui/FormPage'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { SelectField } from '@/components/forms/SelectField'
@@ -19,6 +19,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
+import { useFormRoute } from '@/lib/useFormRoute'
 
 /** Mirrors backend/app/schemas/machine.py's MachineOut. */
 interface Machine {
@@ -139,7 +140,6 @@ export function MachinesPage() {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
   const [editingMachine, setEditingMachine] = useState<Machine | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -189,19 +189,23 @@ export function MachinesPage() {
     if (canManage) void loadLookups()
   }, [canManage, loadLookups])
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingMachine(null)
     reset(emptyDefaults)
     setFormError(null)
-    setFormOpen(true)
   }
 
-  function openEdit(machine: Machine) {
+  function prepareEdit(machine: Machine) {
     setEditingMachine(machine)
     reset(toFormValues(machine))
     setFormError(null)
-    setFormOpen(true)
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<Machine>(
+    '/machines',
+    '/api/machines',
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  )
 
   const onFormSubmit = useCallback(
     async (values: MachineFormValues) => {
@@ -219,7 +223,7 @@ export function MachinesPage() {
         } else {
           await apiClient.post('/api/machines', payload)
         }
-        setFormOpen(false)
+        closeForm()
         table.refetch()
       } catch (err) {
         if (err instanceof ApiError) {
@@ -295,53 +299,57 @@ export function MachinesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Machines"
-        subtitle="The physical production resource and its configured production rate."
-        actions={canManage ? <Button onClick={openCreate}>New Machine</Button> : undefined}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by name or code..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Machines"
+          subtitle="The physical production resource and its configured production rate."
+          actions={canManage ? <Button onClick={openCreate}>New Machine</Button> : undefined}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(m) => m.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching machines' : 'No machines yet'}
-        emptyMessage={
-          debouncedSearch
-            ? 'Try a different search term.'
-            : canManage
-              ? 'Create the first machine with the New Machine button above.'
-              : 'No machines have been created yet.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
+
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by name or code..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(m) => m.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching machines' : 'No machines yet'}
+          emptyMessage={
+            debouncedSearch
+              ? 'Try a different search term.'
+              : canManage
+                ? 'Create the first machine with the New Machine button above.'
+                : 'No machines have been created yet.'
+          }
+        />
+      </div>
 
       {canManage && (
         <>
-          <FormDialog
+          <FormPage
+            loading={formLoading}
+            loadError={formLoadError}
             open={formOpen}
             title={editingMachine ? 'Edit Machine' : 'New Machine'}
-            onClose={() => setFormOpen(false)}
+            onClose={closeForm}
             onSubmit={handleSubmit(onFormSubmit)}
             submitting={isSubmitting}
             submitLabel={editingMachine ? 'Save' : 'Create machine'}
@@ -395,7 +403,7 @@ export function MachinesPage() {
               {...register('capacity_period_hours')}
               error={errors.capacity_period_hours?.message}
             />
-          </FormDialog>
+          </FormPage>
 
           <ConfirmDialog
             open={!!statusTarget}

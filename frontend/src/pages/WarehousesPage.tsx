@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
-import { FormDialog } from '@/components/ui/FormDialog'
+import { FormPage } from '@/components/ui/FormPage'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { SelectField } from '@/components/forms/SelectField'
@@ -19,6 +19,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
+import { useFormRoute } from '@/lib/useFormRoute'
 
 /** Mirrors backend/app/schemas/warehouse.py's WarehouseOut. */
 interface Warehouse {
@@ -120,7 +121,6 @@ export function WarehousesPage() {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
   const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -167,19 +167,23 @@ export function WarehousesPage() {
     if (canManage) void loadLookups()
   }, [canManage, loadLookups])
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingWarehouse(null)
     reset(emptyDefaults)
     setFormError(null)
-    setFormOpen(true)
   }
 
-  function openEdit(warehouse: Warehouse) {
+  function prepareEdit(warehouse: Warehouse) {
     setEditingWarehouse(warehouse)
     reset(toFormValues(warehouse))
     setFormError(null)
-    setFormOpen(true)
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<Warehouse>(
+    '/warehouses',
+    '/api/warehouses',
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  )
 
   const onFormSubmit = useCallback(
     async (values: WarehouseFormValues) => {
@@ -195,7 +199,7 @@ export function WarehousesPage() {
         } else {
           await apiClient.post('/api/warehouses', payload)
         }
-        setFormOpen(false)
+        closeForm()
         table.refetch()
       } catch (err) {
         if (err instanceof ApiError) {
@@ -265,53 +269,57 @@ export function WarehousesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Warehouses"
-        subtitle="The physical storage location inside the factory and its configured storage capacity."
-        actions={canManage ? <Button onClick={openCreate}>New Warehouse</Button> : undefined}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by name or code..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Warehouses"
+          subtitle="The physical storage location inside the factory and its configured storage capacity."
+          actions={canManage ? <Button onClick={openCreate}>New Warehouse</Button> : undefined}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(w) => w.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching warehouses' : 'No warehouses yet'}
-        emptyMessage={
-          debouncedSearch
-            ? 'Try a different search term.'
-            : canManage
-              ? 'Create the first warehouse with the New Warehouse button above.'
-              : 'No warehouses have been created yet.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
+
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by name or code..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(w) => w.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching warehouses' : 'No warehouses yet'}
+          emptyMessage={
+            debouncedSearch
+              ? 'Try a different search term.'
+              : canManage
+                ? 'Create the first warehouse with the New Warehouse button above.'
+                : 'No warehouses have been created yet.'
+          }
+        />
+      </div>
 
       {canManage && (
         <>
-          <FormDialog
+          <FormPage
+            loading={formLoading}
+            loadError={formLoadError}
             open={formOpen}
             title={editingWarehouse ? 'Edit Warehouse' : 'New Warehouse'}
-            onClose={() => setFormOpen(false)}
+            onClose={closeForm}
             onSubmit={handleSubmit(onFormSubmit)}
             submitting={isSubmitting}
             submitLabel={editingWarehouse ? 'Save' : 'Create warehouse'}
@@ -343,7 +351,7 @@ export function WarehousesPage() {
                   </option>
                 ))}
             </SelectField>
-          </FormDialog>
+          </FormPage>
 
           <ConfirmDialog
             open={!!statusTarget}

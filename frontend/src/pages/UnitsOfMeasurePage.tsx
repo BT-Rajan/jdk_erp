@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
-import { FormDialog } from '@/components/ui/FormDialog'
+import { FormPage } from '@/components/ui/FormPage'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { SortState } from '@/components/ui/sort'
 import { TextField } from '@/components/forms/TextField'
@@ -19,6 +19,7 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
+import { useFormRoute } from '@/lib/useFormRoute'
 
 /** Mirrors backend/app/schemas/unit.py's UnitOfMeasureOut. `dimension`/
  * `conversion_factor_to_base` are the universal-conversion half of BOM's
@@ -127,7 +128,6 @@ export function UnitsOfMeasurePage() {
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
 
-  const [formOpen, setFormOpen] = useState(false)
   const [editingUnit, setEditingUnit] = useState<UnitOfMeasure | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -160,19 +160,23 @@ export function UnitsOfMeasurePage() {
     table.setFilters({ search: debouncedSearch })
   }, [debouncedSearch])
 
-  function openCreate() {
+  function prepareCreate() {
     setEditingUnit(null)
     reset(emptyDefaults)
     setFormError(null)
-    setFormOpen(true)
   }
 
-  function openEdit(unit: UnitOfMeasure) {
+  function prepareEdit(unit: UnitOfMeasure) {
     setEditingUnit(unit)
     reset(toFormValues(unit))
     setFormError(null)
-    setFormOpen(true)
   }
+
+  const { formOpen, loading: formLoading, loadError: formLoadError, openCreate, openEdit, closeForm } = useFormRoute<UnitOfMeasure>(
+    '/units-of-measure',
+    '/api/units-of-measure',
+    { onCreate: prepareCreate, onEdit: prepareEdit },
+  )
 
   const onFormSubmit = useCallback(
     async (values: UnitFormValues) => {
@@ -190,7 +194,7 @@ export function UnitsOfMeasurePage() {
         } else {
           await apiClient.post('/api/units-of-measure', payload)
         }
-        setFormOpen(false)
+        closeForm()
         table.refetch()
       } catch (err) {
         if (err instanceof ApiError) {
@@ -266,53 +270,57 @@ export function UnitsOfMeasurePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Units of Measure"
-        subtitle="The unit definitions used to express quantities for Products and Raw Materials."
-        actions={canManage ? <Button onClick={openCreate}>New Unit</Button> : undefined}
-      />
-
-      <Alert variant="danger">{pageError}</Alert>
-
-      <FilterBar>
-        <TextField
-          label="Search"
-          placeholder="Search by name or code..."
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
+      <div hidden={formOpen} className="space-y-6">
+        <PageHeader
+          title="Units of Measure"
+          subtitle="The unit definitions used to express quantities for Products and Raw Materials."
+          actions={canManage ? <Button onClick={openCreate}>New Unit</Button> : undefined}
         />
-      </FilterBar>
 
-      <DataTable
-        columns={columns}
-        rows={table.rows}
-        rowKey={(u) => u.id}
-        loading={table.loading}
-        error={table.error}
-        sort={table.sort}
-        onSortChange={table.setSort}
-        page={table.page}
-        totalPages={table.totalPages}
-        total={table.total}
-        onPageChange={table.setPage}
-        pageSize={table.pageSize}
-        onPageSizeChange={table.setPageSize}
-        emptyTitle={debouncedSearch ? 'No matching units' : 'No units yet'}
-        emptyMessage={
-          debouncedSearch
-            ? 'Try a different search term.'
-            : canManage
-              ? 'Create the first unit with the New Unit button above.'
-              : 'No units have been created yet.'
-        }
-      />
+        <Alert variant="danger">{pageError}</Alert>
+
+        <FilterBar>
+          <TextField
+            label="Search"
+            placeholder="Search by name or code..."
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+        </FilterBar>
+
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          rowKey={(u) => u.id}
+          loading={table.loading}
+          error={table.error}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          page={table.page}
+          totalPages={table.totalPages}
+          total={table.total}
+          onPageChange={table.setPage}
+          pageSize={table.pageSize}
+          onPageSizeChange={table.setPageSize}
+          emptyTitle={debouncedSearch ? 'No matching units' : 'No units yet'}
+          emptyMessage={
+            debouncedSearch
+              ? 'Try a different search term.'
+              : canManage
+                ? 'Create the first unit with the New Unit button above.'
+                : 'No units have been created yet.'
+          }
+        />
+      </div>
 
       {canManage && (
         <>
-          <FormDialog
+          <FormPage
+            loading={formLoading}
+            loadError={formLoadError}
             open={formOpen}
             title={editingUnit ? 'Edit Unit' : 'New Unit'}
-            onClose={() => setFormOpen(false)}
+            onClose={closeForm}
             onSubmit={handleSubmit(onFormSubmit)}
             submitting={isSubmitting}
             submitLabel={editingUnit ? 'Save' : 'Create unit'}
@@ -339,7 +347,7 @@ export function UnitsOfMeasurePage() {
               {...register('conversion_factor_to_base')}
               error={errors.conversion_factor_to_base?.message}
             />
-          </FormDialog>
+          </FormPage>
 
           <ConfirmDialog
             open={!!statusTarget}
