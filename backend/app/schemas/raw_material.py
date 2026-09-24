@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.core.validation import check_max_length
 
 
 def _check_alternate_conversion_pair(unit_id: int | None, factor: Decimal | None) -> None:
@@ -46,9 +48,9 @@ class RawMaterialCreateRequest(BaseModel):
     category_id: int
     unit_of_measure_id: int
     description: str | None = None
-    reference_cost: Decimal | None = None
+    reference_cost: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     alternate_conversion_unit_of_measure_id: int | None = None
-    alternate_conversion_factor: Decimal | None = None
+    alternate_conversion_factor: Decimal | None = Field(default=None, max_digits=18, decimal_places=6)
 
     @field_validator("name")
     @classmethod
@@ -56,7 +58,7 @@ class RawMaterialCreateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("reference_cost")
     @classmethod
@@ -82,9 +84,9 @@ class RawMaterialUpdateRequest(BaseModel):
     category_id: int | None = None
     unit_of_measure_id: int | None = None
     description: str | None = None
-    reference_cost: Decimal | None = None
+    reference_cost: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     alternate_conversion_unit_of_measure_id: int | None = None
-    alternate_conversion_factor: Decimal | None = None
+    alternate_conversion_factor: Decimal | None = Field(default=None, max_digits=18, decimal_places=6)
 
     @field_validator("name")
     @classmethod
@@ -94,7 +96,7 @@ class RawMaterialUpdateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("reference_cost")
     @classmethod
@@ -129,11 +131,19 @@ class SupplierMaterialCreateRequest(BaseModel):
 
     supplier_id: int
     supplier_material_code: str | None = None
-    purchase_price: Decimal | None = None
+    purchase_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     lead_time_days: int | None = None
-    moq: Decimal | None = None
-    max_supply_quantity: Decimal | None = None
+    moq: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
+    max_supply_quantity: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     is_preferred: bool = False
+
+    @field_validator("supplier_material_code")
+    @classmethod
+    def _check_supplier_material_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return check_max_length(value, 60, "Supplier material code") if value else None
 
     @field_validator("purchase_price", "moq", "max_supply_quantity")
     @classmethod
@@ -156,12 +166,20 @@ class SupplierMaterialUpdateRequest(BaseModel):
     repointing an existing row."""
 
     supplier_material_code: str | None = None
-    purchase_price: Decimal | None = None
+    purchase_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     lead_time_days: int | None = None
-    moq: Decimal | None = None
-    max_supply_quantity: Decimal | None = None
+    moq: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
+    max_supply_quantity: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     is_preferred: bool | None = None
     is_active: bool | None = None
+
+    @field_validator("supplier_material_code")
+    @classmethod
+    def _check_supplier_material_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return check_max_length(value, 60, "Supplier material code") if value else None
 
     @field_validator("purchase_price", "moq", "max_supply_quantity")
     @classmethod
