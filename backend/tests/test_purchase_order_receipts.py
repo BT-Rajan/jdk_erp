@@ -6,7 +6,7 @@ partial receipts across multiple receipt documents, over-receipt
 rejection, reversal creating an offsetting movement while leaving the
 original receipt visible and unchanged, traceability from a
 StockMovement back to its receipt, and organisation isolation."""
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -23,15 +23,21 @@ from app.models.role_permission import RolePermission
 from app.services import purchase_order_service
 
 
+FUTURE = (date.today() + timedelta(days=30)).isoformat()
+
+
 def _login_headers(client, username="ada", password="Str0ng!Pass"):
     login = client.post("/api/auth/login", json={"username": username, "password": password})
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def _create_po(client, headers, supplier_id, warehouse_id, order_date="2026-01-10"):
+def _create_po(client, headers, supplier_id, warehouse_id):
     return client.post(
         "/api/purchase-orders",
-        json={"supplier_id": supplier_id, "warehouse_id": warehouse_id, "order_date": order_date},
+        json={
+            "supplier_id": supplier_id, "warehouse_id": warehouse_id, "expected_delivery_date": FUTURE,
+            "payment_terms": "30 days",
+        },
         headers=headers,
     )
 
@@ -45,8 +51,10 @@ def _add_line(client, headers, po_id, raw_material_id, quantity, unit_price):
 
 
 def _issue_and_confirm(client, headers, po_id):
-    client.post(f"/api/purchase-orders/{po_id}/issue", headers=headers)
-    return client.post(f"/api/purchase-orders/{po_id}/confirm-supplier", json={"note": None, "file_ids": []}, headers=headers)
+    """Submit -> approve -> mark sent: the PO is now receivable."""
+    client.post(f"/api/purchase-orders/{po_id}/submit", headers=headers)
+    client.post(f"/api/purchase-orders/{po_id}/approve", headers=headers)
+    return client.post(f"/api/purchase-orders/{po_id}/send", json={"email": False}, headers=headers)
 
 
 def _create_receipt(client, headers, po_id, lines, receipt_date="2026-01-20", supplier_delivery_reference=None):
@@ -113,7 +121,7 @@ def test_draft_receipt_has_zero_inventory_effect(client, admin_headers, acme_sup
     assert response.status_code == 201
     body = response.json()
     assert body["receipts"][0]["status"] == "draft"
-    assert body["status"] == "supplier_confirmed"  # unchanged -- draft never touches the PO's own status
+    assert body["status"] == "sent"  # unchanged -- draft never touches the PO's own status
     assert body["lines"][0]["received_quantity"] == "0.0000"
     assert db_session.query(StockMovement).count() == 0
     assert db_session.query(RawMaterialInventory).count() == 0
@@ -158,7 +166,7 @@ def test_second_receipt_completes_the_po(client, admin_headers, acme_supplier, w
     response = _post_receipt(client, admin_headers, po["id"], second_receipt["id"])
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "fully_received"
+    assert body["status"] == "received"
     assert body["lines"][0]["received_quantity"] == "1000.0000"
 
     db_session.expire_all()
@@ -272,7 +280,7 @@ def test_reverse_posted_receipt_keeps_it_visible_and_reverts_inventory(
     response = _reverse_receipt(client, admin_headers, po["id"], receipt["id"])
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "supplier_confirmed"  # back to before any receipt, not partially_received
+    assert body["status"] == "sent"  # back to before any receipt, not partially_received
     assert body["lines"][0]["received_quantity"] == "0.0000"
 
     reversed_receipt = body["receipts"][0]
@@ -339,7 +347,8 @@ def test_reversal_allows_a_fresh_correct_receipt(client, admin_headers, acme_sup
 def test_cannot_create_a_receipt_against_an_unconfirmed_po(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
     po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
     line = _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", "5").json()["lines"][0]
-    client.post(f"/api/purchase-orders/{po['id']}/issue", headers=admin_headers)
+    client.post(f"/api/purchase-orders/{po['id']}/submit", headers=admin_headers)
+    client.post(f"/api/purchase-orders/{po['id']}/approve", headers=admin_headers)  # approved, not yet sent
 
     response = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "10"}])
     assert response.status_code == 400
@@ -405,3 +414,30 @@ def test_cross_organisation_receipt_404s(
 
     response = _post_receipt(client, other_headers, po["id"], receipt["id"])
     assert response.status_code == 404
+
+
+def test_receipt_in_purchase_unit_posts_stock_in_material_unit(
+    client, admin_headers, db_session, organisation, electronics_category, mass_kilogram_unit, acme_supplier, warehouse_1
+):
+    from app.models.raw_material import RawMaterial
+    from app.models.unit import UnitOfMeasure
+
+    tonne = UnitOfMeasure(organisation_id=organisation.id, name="Tonne", code="MT", dimension="mass", conversion_factor_to_base=1000, is_active=True)
+    gravel = RawMaterial(organisation_id=organisation.id, code="RM9", name="Gravel", category_id=electronics_category.id, unit_of_measure_id=mass_kilogram_unit.id, is_active=True)
+    db_session.add_all([tonne, gravel])
+    db_session.commit()
+
+    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
+    line = client.post(
+        f"/api/purchase-orders/{po['id']}/lines",
+        json={"raw_material_id": gravel.id, "quantity": "2", "unit_price": "85", "unit_of_measure_id": tonne.id},
+        headers=admin_headers,
+    ).json()["lines"][0]
+    _issue_and_confirm(client, admin_headers, po["id"])
+    receipt = _create_receipt(client, admin_headers, po["id"], [{"purchase_order_line_id": line["id"], "quantity": "2"}]).json()["receipts"][0]
+    posted = _post_receipt(client, admin_headers, po["id"], receipt["id"])
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["status"] == "received"
+
+    stock = db_session.query(RawMaterialInventory).filter(RawMaterialInventory.raw_material_id == gravel.id).one()
+    assert stock.quantity_on_hand == Decimal("2000.0000")

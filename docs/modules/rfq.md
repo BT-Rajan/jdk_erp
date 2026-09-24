@@ -133,9 +133,9 @@ unit_price?}]}`. Only from `selected` with the supplier document on file.
 - Unit prices pre-filled from the approved quotation, editable; a line
   without a price is rejected. The PO keeps these final agreed values as
   its own — never re-read from the quotation.
-- PO lines are in the item's own unit: an item requested in another unit
-  is converted through the ratio it was validated on (2 MT at 85.000/MT
-  → 2000 KG at 0.0850/KG).
+- PO lines keep the RFQ's unit, quantity and agreed price (2 MT at
+  85.000/MT stays 2 MT at 85.000). The unit's ratio to the item's own
+  unit is stored on the line so receiving posts stock correctly.
 - Built by `purchase_order_service.create_purchase_order_with_lines`,
   stamps `Rfq.purchase_order_id`, `status → converted`, one transaction;
   the transition guard blocks a second PO. The user lands on Purchase

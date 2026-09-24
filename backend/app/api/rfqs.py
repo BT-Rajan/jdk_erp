@@ -1043,9 +1043,9 @@ def convert_rfq_to_purchase_order(
         overrides = {entry.rfq_line_id: entry.unit_price for entry in payload.lines}
     priced_lines = rfq_service.resolve_conversion_prices(db, rfq=rfq, overrides=overrides)
 
-    # PO lines are always in the material's own unit
-    # (docs/modules/purchase_orders.md #5): re-express each RFQ-unit
-    # quantity/price through the same ratio the RFQ line was validated on.
+    # PO lines keep the RFQ line's unit, quantity and price exactly as
+    # agreed; the unit's ratio to the material's own unit is stored on the
+    # line so receiving posts stock correctly.
     conversion_lines = []
     for rfq_line, unit_price in priced_lines:
         material = _resolve_active_raw_material(db, rfq_line.raw_material_id, current_user.organisation_id)
@@ -1065,8 +1065,17 @@ def convert_rfq_to_purchase_order(
                 raise BusinessRuleError(
                     f"{material.name}: the requested unit no longer converts to its unit. Update the unit setup first."
                 )
-        quantity, price = rfq_service.to_material_unit(rfq_line.quantity, unit_price, ratio)
-        conversion_lines.append(rfq_service.RfqConversionLine(raw_material=material, quantity=quantity, unit_price=price))
+        conversion_lines.append(
+            rfq_service.RfqConversionLine(
+                raw_material=material,
+                quantity=rfq_line.quantity,
+                unit_price=unit_price,
+                unit_of_measure_id=rfq_line.unit_of_measure_id,
+                conversion_factor=ratio,
+                required_by_date=rfq_line.required_by_date,
+                remarks=rfq_line.remarks,
+            )
+        )
 
     purchase_order = rfq_service.convert_to_purchase_order(
         db,
@@ -1078,6 +1087,8 @@ def convert_rfq_to_purchase_order(
         supplier_reference=payload.supplier_reference,
         notes=payload.notes,
         lines=conversion_lines,
+        rfq_response_id=rfq.selected_response_id,
+        created_by_user_id=current_user.id,
     )
 
     _log(

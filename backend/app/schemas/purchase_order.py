@@ -1,10 +1,24 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models.purchase_order import CANCELLED, DRAFT
+from app.models.purchase_order import CANCELLED, DEFAULT_CURRENCY, DRAFT
 from app.schemas.file import FileOut
+
+
+def _strip_or_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _check_currency(value: str) -> str:
+    value = value.strip().upper()
+    if len(value) != 3 or not value.isalpha():
+        raise ValueError("Currency must be a 3-letter code, e.g. KWD.")
+    return value
 
 
 class PurchaseOrderLineOut(BaseModel):
@@ -13,8 +27,12 @@ class PurchaseOrderLineOut(BaseModel):
     id: int
     raw_material_id: int
     quantity: Decimal
+    unit_of_measure_id: int
+    conversion_factor: Decimal
     unit_price: Decimal
     line_total: Decimal
+    required_by_date: date | None
+    remarks: str | None
     received_quantity: Decimal
 
 
@@ -24,8 +42,11 @@ class PurchaseOrderRevisionLineOut(BaseModel):
     id: int
     raw_material_id: int
     quantity: Decimal
+    unit_of_measure_id: int | None
     unit_price: Decimal
     line_total: Decimal
+    required_by_date: date | None
+    remarks: str | None
 
 
 class PurchaseOrderRevisionOut(BaseModel):
@@ -110,20 +131,34 @@ class PurchaseOrderOut(BaseModel):
     supplier_id: int
     warehouse_id: int
     rfq_id: int | None
+    rfq_number: str | None = None
+    rfq_response_id: int | None
     status: str
     revision_number: int
     order_date: date
     expected_delivery_date: date | None
     supplier_reference: str | None
     payment_terms: str | None
+    currency: str
+    delivery_instructions: str | None
     notes: str | None
     cancel_reason: str | None
-    supplier_confirmed_at: datetime | None
-    supplier_confirmed_by_user_id: int | None
-    supplier_confirmation_note: str | None
+    created_at: datetime
+    created_by_user_id: int | None
+    approved_at: datetime | None
+    approved_by_user_id: int | None
+    sent_at: datetime | None
+    sent_by_user_id: int | None
+    cancelled_at: datetime | None
+    cancelled_by_user_id: int | None
+    created_by_name: str | None = None
+    approved_by_name: str | None = None
+    sent_by_name: str | None = None
+    cancelled_by_name: str | None = None
     total_amount: Decimal
     paid_amount: Decimal
     outstanding_amount: Decimal
+    payment_status: str
     lines: list[PurchaseOrderLineOut]
     revisions: list[PurchaseOrderRevisionOut]
     documents: list[FileOut]
@@ -132,46 +167,78 @@ class PurchaseOrderOut(BaseModel):
 
 
 class PurchaseOrderCreateRequest(BaseModel):
-    """organisation_id and po_number are never part of this payload --
-    po_number is system-generated (docs/modules/purchase_orders.md #21).
-    Always starts `draft` and empty -- lines are added afterward via
-    POST .../lines, the same add-relationship-after-creating-the-header
-    pattern Bom/Machine already use. `rfq_id` is never client-supplied
-    here either -- only app/api/rfqs.py's convert-to-PO action sets it
-    (docs/modules/purchase_orders.md #22)."""
+    """PO header (docs/modules/purchase_orders.md #2). `po_number` and
+    `order_date` (today) are server-stamped. Items are added afterward
+    via POST .../lines; at least one is required to submit for approval.
+    `rfq_id` is only ever set by the RFQ's PO-generation step."""
 
     supplier_id: int
     warehouse_id: int
-    order_date: date
-    expected_delivery_date: date | None = None
-    supplier_reference: str | None = None
-    payment_terms: str | None = None
-    notes: str | None = None
+    expected_delivery_date: date
+    payment_terms: str = Field(min_length=1, max_length=200)
+    currency: str = DEFAULT_CURRENCY
+    supplier_reference: str | None = Field(default=None, max_length=100)
+    delivery_instructions: str | None = Field(default=None, max_length=2000)
+    notes: str | None = Field(default=None, max_length=4000)
 
-    @model_validator(mode="after")
-    def _check_dates(self) -> "PurchaseOrderCreateRequest":
-        if self.expected_delivery_date is not None and self.expected_delivery_date < self.order_date:
-            raise ValueError("Expected delivery date cannot be before the order date.")
-        return self
+    @field_validator("payment_terms")
+    @classmethod
+    def _check_payment_terms(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Payment terms are required.")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def _validate_currency(cls, value: str) -> str:
+        return _check_currency(value)
+
+    @field_validator("supplier_reference", "delivery_instructions", "notes")
+    @classmethod
+    def _strip(cls, value: str | None) -> str | None:
+        return _strip_or_none(value)
 
 
 class PurchaseOrderUpdateRequest(BaseModel):
-    """`supplier_id`/`warehouse_id`/`rfq_id` are immutable -- sever and
-    create a new PO instead of repointing one (docs/modules/purchase_orders.md
-    #2). Only meaningful while the PO is still `draft` -- enforced in
-    app/api/purchase_orders.py, not here."""
+    """Draft-only (enforced in app/api/purchase_orders.py).
+    `supplier_id`/`warehouse_id`/`rfq_id` are immutable."""
 
-    order_date: date | None = None
     expected_delivery_date: date | None = None
-    supplier_reference: str | None = None
-    payment_terms: str | None = None
-    notes: str | None = None
+    payment_terms: str | None = Field(default=None, max_length=200)
+    currency: str | None = None
+    supplier_reference: str | None = Field(default=None, max_length=100)
+    delivery_instructions: str | None = Field(default=None, max_length=2000)
+    notes: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("expected_delivery_date", "payment_terms", "currency")
+    @classmethod
+    def _not_null(cls, value, info):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise ValueError(f"{info.field_name} is required.")
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("currency")
+    @classmethod
+    def _validate_currency(cls, value: str) -> str:
+        return _check_currency(value)
+
+    @field_validator("supplier_reference", "delivery_instructions", "notes")
+    @classmethod
+    def _strip(cls, value: str | None) -> str | None:
+        return _strip_or_none(value)
 
 
 class PurchaseOrderLineCreateRequest(BaseModel):
+    """`unit_of_measure_id` omitted -> the material's own unit; otherwise
+    it must convert to that unit (app/services/uom_conversion.py)."""
+
     raw_material_id: int
-    quantity: Decimal
-    unit_price: Decimal | None = None
+    quantity: Decimal = Field(max_digits=14, decimal_places=4)
+    unit_price: Decimal = Field(max_digits=14, decimal_places=4)
+    unit_of_measure_id: int | None = None
+    required_by_date: date | None = None
+    remarks: str | None = Field(default=None, max_length=2000)
 
     @field_validator("quantity")
     @classmethod
@@ -182,42 +249,47 @@ class PurchaseOrderLineCreateRequest(BaseModel):
 
     @field_validator("unit_price")
     @classmethod
-    def _check_positive_price(cls, value: Decimal | None) -> Decimal | None:
-        if value is not None and value <= 0:
+    def _check_positive_price(cls, value: Decimal) -> Decimal:
+        if value <= 0:
             raise ValueError("Unit price must be greater than zero.")
         return value
+
+    @field_validator("remarks")
+    @classmethod
+    def _strip(cls, value: str | None) -> str | None:
+        return _strip_or_none(value)
 
 
 class PurchaseOrderLineUpdateRequest(BaseModel):
     """`raw_material_id` is immutable -- remove and re-add the line
     instead of repointing it to a different material."""
 
-    quantity: Decimal | None = None
-    unit_price: Decimal | None = None
+    quantity: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
+    unit_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
+    unit_of_measure_id: int | None = None
+    required_by_date: date | None = None
+    remarks: str | None = Field(default=None, max_length=2000)
 
-    @field_validator("quantity")
+    @field_validator("quantity", "unit_price", "unit_of_measure_id")
     @classmethod
-    def _check_positive_quantity(cls, value: Decimal | None) -> Decimal | None:
-        if value is not None and value <= 0:
-            raise ValueError("Quantity must be greater than zero.")
+    def _check_positive(cls, value, info):
+        if value is None:
+            raise ValueError(f"{info.field_name} cannot be null.")
+        if value <= 0:
+            raise ValueError(f"{info.field_name} must be greater than zero.")
         return value
 
-    @field_validator("unit_price")
+    @field_validator("remarks")
     @classmethod
-    def _check_positive_price(cls, value: Decimal | None) -> Decimal | None:
-        if value is not None and value <= 0:
-            raise ValueError("Unit price must be greater than zero.")
-        return value
+    def _strip(cls, value: str | None) -> str | None:
+        return _strip_or_none(value)
 
 
 class PurchaseOrderStatusChangeRequest(BaseModel):
-    """`status` must be `draft` (reopen an issued PO for a new revision,
-    "Create Revision" -- docs/modules/purchase_orders.md #23) or
-    `cancelled`. Issuing has its own endpoint (POST .../issue) since it
-    has real side effects (a revision snapshot) beyond a plain status
-    flip; `supplier_confirmed`/`partially_received`/`fully_received` are
-    never a direct target here either -- each is its own dedicated action.
-    `cancel_reason` is required when cancelling, ignored otherwise."""
+    """`status` must be `draft` (send a pending PO back, or reopen an
+    approved/sent PO as a new revision -- docs/modules/purchase_orders.md
+    #23) or `cancelled` (reason required). Submit, approve and send are
+    their own actions; received statuses are only ever side effects."""
 
     status: str
     cancel_reason: str | None = None
@@ -238,9 +310,11 @@ class PurchaseOrderStatusChangeRequest(BaseModel):
         return self
 
 
-class ConfirmSupplierRequest(BaseModel):
-    note: str | None = None
-    file_ids: list[int] = []
+class SendPurchaseOrderRequest(BaseModel):
+    """`email=true` emails the approved PDF to the supplier; `false`
+    records that it was sent another way (hand delivery, WhatsApp)."""
+
+    email: bool = True
 
 
 class CreateReceiptLineRequest(BaseModel):

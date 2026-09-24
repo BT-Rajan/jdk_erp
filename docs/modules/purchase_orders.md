@@ -750,3 +750,57 @@ templating engine (a second narrow PDF service, not a first generic one);
 no separate global "Goods Receipts" navigation menu — receipts live on
 the PO detail Modal, the same reachable-in-2-navigations discipline
 every other PO sub-record already follows.
+
+## Revision 5 — approval flow, purchase UOM, currency, history
+
+Supersedes the earlier `issued` / `supplier_confirmed` / `fully_received`
+lifecycle wherever it conflicts.
+
+**Lifecycle**
+
+```text
+draft --submit--> pending_approval --approve--> approved --email / mark sent--> sent
+  ^                    |                           |                              |
+  '----- send back ----'                           '---- Create Revision ---------'   (back to draft, approve again)
+sent --receipts--> partially_received --> received        (side effects of posting receipts)
+cancelled <- draft / pending_approval / approved / sent / partially_received   (reason required)
+```
+
+- `POST .../submit` (`create` permission): needs at least one item,
+  expected delivery date, payment terms and currency.
+- `POST .../approve` (new `approve` permission): snapshots the immutable
+  revision and renders its PDF (UOM, currency, delivery location and
+  instructions, RFQ reference, approver).
+- `POST .../send` `{email: true|false}`: emails the approved PDF, or
+  records it was sent another way. A sent PO can be re-emailed.
+- `PATCH .../status` `{status: "draft" | "cancelled"}`: send back, create
+  a revision, or cancel.
+- The old confirm-supplier step is removed; goods are received against a
+  `sent` PO. Payments can be recorded once approved.
+
+**Header**: PO number and PO date are automatic. Supplier, delivery
+location (warehouse), expected delivery date (not in the past), payment
+terms and currency (default KWD) are required. Optional: supplier
+reference, delivery instructions, notes. `rfq_id` / `rfq_response_id`
+keep the RFQ → supplier quotation → PO trail; the PO's own items hold the
+final agreed quantities and prices.
+
+**Items**: product/material, quantity > 0, purchase UOM (defaults to the
+item's unit; any unit that converts to it), unit price (required — no
+longer defaulted server-side), line total (computed), optional required-by
+date and specification/remarks. `conversion_factor` (1 purchase unit =
+factor item units) is fixed on the line; receipts are counted in the
+purchase unit and stock is posted in the item's own unit.
+
+**Payment**: `payment_status` (`unpaid` / `partially_paid` / `paid`) is
+derived from recorded payments vs the total; each payment stays its own
+record (date, amount, method, reference).
+
+**History**: created / approved / sent / cancelled by and at, plus the
+audit trail for every change.
+
+Migration `0034_purchase_order_approval_and_units.py` maps existing
+statuses (`issued → approved`, `supplier_confirmed → sent`,
+`fully_received → received`), fills approval/sent stamps from existing
+history, currency from the organisation, and each existing line's unit
+from its item (factor 1).

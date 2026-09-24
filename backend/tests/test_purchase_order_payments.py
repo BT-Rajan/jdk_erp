@@ -6,7 +6,7 @@ a payment (never a hard delete, stays visible with its original amount),
 the separate purchase_payment permission grant (so Finance can be
 granted independently of Procurement), evidence attachment, and the
 inventory-independence guarantee (payment never touches stock)."""
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -18,15 +18,21 @@ from app.models.role_permission import RolePermission
 from app.services import purchase_order_service
 
 
+FUTURE = (date.today() + timedelta(days=30)).isoformat()
+
+
 def _login_headers(client, username="ada", password="Str0ng!Pass"):
     login = client.post("/api/auth/login", json={"username": username, "password": password})
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def _create_po(client, headers, supplier_id, warehouse_id, order_date="2026-01-10"):
+def _create_po(client, headers, supplier_id, warehouse_id):
     return client.post(
         "/api/purchase-orders",
-        json={"supplier_id": supplier_id, "warehouse_id": warehouse_id, "order_date": order_date},
+        json={
+            "supplier_id": supplier_id, "warehouse_id": warehouse_id, "expected_delivery_date": FUTURE,
+            "payment_terms": "30 days",
+        },
         headers=headers,
     )
 
@@ -40,7 +46,11 @@ def _add_line(client, headers, po_id, raw_material_id, quantity, unit_price):
 
 
 def _issue(client, headers, po_id):
-    return client.post(f"/api/purchase-orders/{po_id}/issue", headers=headers)
+    """Submit for approval, then approve (the old single "issue" step)."""
+    submitted = client.post(f"/api/purchase-orders/{po_id}/submit", headers=headers)
+    if submitted.status_code != 200:
+        return submitted
+    return client.post(f"/api/purchase-orders/{po_id}/approve", headers=headers)
 
 
 def _record_payment(client, headers, po_id, amount, payment_date="2026-01-15", method="Bank Transfer", reference="TXN1"):

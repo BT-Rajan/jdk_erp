@@ -585,7 +585,7 @@ def test_full_flow_to_purchase_order(
     assert db_session.query(PurchaseOrder).count() == 1
 
 
-def test_po_is_in_the_material_unit(
+def test_po_keeps_the_agreed_unit_and_price(
     client, admin_headers, production_team, acme_supplier, gravel_raw_material, tonne_unit, warehouse_1, db_session
 ):
     rfq = _create(client, admin_headers, _form(production_team.id, [acme_supplier.id], [_line(gravel_raw_material, tonne_unit.id, "2")])).json()
@@ -593,7 +593,11 @@ def test_po_is_in_the_material_unit(
     converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
     assert converted.status_code == 200, converted.text
     line = db_session.query(PurchaseOrderLine).one()
-    assert (line.quantity, line.unit_price) == (Decimal("2000.0000"), Decimal("0.0850"))
+    assert (line.quantity, line.unit_of_measure_id, line.unit_price, line.conversion_factor) == (
+        Decimal("2.0000"), tonne_unit.id, Decimal("85.0000"), Decimal("1000.000000"),
+    )
+    po = db_session.query(PurchaseOrder).one()
+    assert po.rfq_response_id == converted.json()["selected_response_id"]
 
 
 def test_convert_override_and_unquoted_lines(client, admin_headers, issued_rfq, acme_supplier, warehouse_1, cement_raw_material, db_session):

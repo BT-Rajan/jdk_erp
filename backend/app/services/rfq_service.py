@@ -7,7 +7,7 @@ with the same change."""
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -33,7 +33,6 @@ from app.models.rfq import (
 from app.services import purchase_order_service, uom_conversion
 
 _MAX_YEARLY_SEQUENCE = 9999
-_FOUR_DP = Decimal("0.0001")
 
 
 def generate_rfq_number(db: Session, organisation_id: int, today: date | None = None) -> str:
@@ -67,18 +66,6 @@ def line_unit_ratio(
     material's own unit (docs/modules/purchase_orders.md #5) -- can
     always be derived."""
     return uom_conversion.resolve_conversion_ratio(unit, material_unit, material, material_alternate_unit)
-
-
-def to_material_unit(quantity: Decimal, unit_price: Decimal, ratio: Decimal) -> tuple[Decimal, Decimal]:
-    """Re-expresses an RFQ-unit quantity/price in the material's own unit
-    for the PO: quantity scales up by the ratio, price per unit scales
-    down by it (2 MT at 85.000/MT -> 2000 KG at 0.0850/KG)."""
-    if ratio == 1:
-        return quantity, unit_price
-    return (
-        (quantity * ratio).quantize(_FOUR_DP, rounding=ROUND_HALF_UP),
-        (unit_price / ratio).quantize(_FOUR_DP, rounding=ROUND_HALF_UP),
-    )
 
 
 @dataclass
@@ -285,9 +272,16 @@ def resolve_conversion_prices(
 
 @dataclass
 class RfqConversionLine:
+    """Kept in the RFQ line's own unit; `conversion_factor` is
+    `1 unit = factor material units` for receiving."""
+
     raw_material: RawMaterial
     quantity: Decimal
     unit_price: Decimal
+    unit_of_measure_id: int
+    conversion_factor: Decimal
+    required_by_date: date | None
+    remarks: str | None
 
 
 def convert_to_purchase_order(
@@ -301,6 +295,8 @@ def convert_to_purchase_order(
     supplier_reference: str | None,
     notes: str | None,
     lines: list[RfqConversionLine],
+    rfq_response_id: int | None,
+    created_by_user_id: int | None,
 ) -> PurchaseOrder:
     """docs/modules/rfq.md #8/#14 -- only valid from `selected`. Supplier
     comes from the selected response's invitation; each line's material
@@ -321,19 +317,25 @@ def convert_to_purchase_order(
         expected_delivery_date=expected_delivery_date,
         notes=notes or f"Converted from RFQ {rfq.rfq_number}.",
         rfq_id=rfq.id,
+        rfq_response_id=rfq_response_id,
+        # The PO keeps the final agreed terms as its own values -- never
+        # read back from the quotation later.
+        payment_terms=payment_terms,
+        supplier_reference=supplier_reference,
+        created_by_user_id=created_by_user_id,
         lines=[
             purchase_order_service.PurchaseOrderLineInput(
-                raw_material=line.raw_material, quantity=line.quantity, unit_price=line.unit_price
+                raw_material=line.raw_material,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                unit_of_measure_id=line.unit_of_measure_id,
+                conversion_factor=line.conversion_factor,
+                required_by_date=line.required_by_date,
+                remarks=line.remarks,
             )
             for line in lines
         ],
     )
-
-    # The PO keeps the final agreed terms as its own values -- never read
-    # back from the quotation later.
-    purchase_order.payment_terms = payment_terms
-    purchase_order.supplier_reference = supplier_reference
-    db.add(purchase_order)
 
     rfq.purchase_order_id = purchase_order.id
     rfq.status = CONVERTED

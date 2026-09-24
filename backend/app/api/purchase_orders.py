@@ -1,4 +1,5 @@
 import io
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -14,8 +15,8 @@ from app.core.search import apply_keyword_filter
 from app.core.storage import default_storage
 from app.models.audit_event import (
     PROCUREMENT_MODULE,
+    PURCHASE_ORDER_APPROVED,
     PURCHASE_ORDER_CREATED,
-    PURCHASE_ORDER_ISSUED,
     PURCHASE_ORDER_LINE_ADDED,
     PURCHASE_ORDER_LINE_REMOVED,
     PURCHASE_ORDER_LINE_UPDATED,
@@ -28,15 +29,16 @@ from app.models.audit_event import (
     PURCHASE_ORDER_SEND_FAILED,
     PURCHASE_ORDER_SENT,
     PURCHASE_ORDER_STATUS_CHANGED,
-    PURCHASE_ORDER_SUPPLIER_CONFIRMED,
+    PURCHASE_ORDER_SUBMITTED,
     PURCHASE_ORDER_UPDATED,
 )
 from app.models.file import FileRecord
 from app.models.organisation import Organisation
 from app.models.purchase_order import (
+    APPROVED,
     CANCELLED,
     DRAFT,
-    ISSUED,
+    SENT,
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseOrderPayment,
@@ -46,6 +48,7 @@ from app.models.purchase_order import (
     PurchaseOrderRevisionLine,
 )
 from app.models.raw_material import RawMaterial
+from app.models.rfq import Rfq
 from app.models.supplier import Supplier
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
@@ -53,7 +56,6 @@ from app.models.warehouse import Warehouse
 from app.schemas.file import FileOut
 from app.schemas.purchase_order import (
     CancelPaymentRequest,
-    ConfirmSupplierRequest,
     CreateReceiptRequest,
     PurchaseOrderCreateRequest,
     PurchaseOrderLineCreateRequest,
@@ -69,9 +71,18 @@ from app.schemas.purchase_order import (
     PurchaseOrderUpdateRequest,
     RecordPaymentRequest,
     ReverseReceiptRequest,
+    SendPurchaseOrderRequest,
 )
 from app.schemas.pagination import PaginatedResponse
-from app.services import audit_service, email_service, file_service, purchase_order_service, purchase_payment_scope, purchase_scope
+from app.services import (
+    audit_service,
+    email_service,
+    file_service,
+    purchase_order_service,
+    purchase_payment_scope,
+    purchase_scope,
+    uom_conversion,
+)
 from app.services.purchase_order_pdf_service import PurchaseOrderPdfData, PurchaseOrderPdfLine, generate_purchase_order_pdf
 from app.services.purchase_order_receipt_pdf_service import (
     PurchaseOrderReceiptPdfData,
@@ -192,6 +203,38 @@ def _require_draft(purchase_order: PurchaseOrder) -> None:
         raise BusinessRuleError("Only a draft purchase order can be edited.")
 
 
+def _resolve_purchase_unit(db: Session, material: RawMaterial, unit_id: int | None, organisation_id: int) -> tuple[int, Decimal]:
+    """(unit_of_measure_id, conversion_factor) for a PO line. No unit ->
+    the material's own unit. Another unit must be active, in this
+    organisation, and convert to the material's unit -- so receiving can
+    always post stock in the material's unit."""
+    if unit_id is None or unit_id == material.unit_of_measure_id:
+        return material.unit_of_measure_id, Decimal(1)
+    ids = [unit_id, material.unit_of_measure_id]
+    if material.alternate_conversion_unit_of_measure_id:
+        ids.append(material.alternate_conversion_unit_of_measure_id)
+    units = {
+        u.id: u
+        for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(ids), UnitOfMeasure.organisation_id == organisation_id)
+    }
+    unit = units.get(unit_id)
+    if unit is None or not unit.is_active:
+        raise ValidationError(
+            "unit_of_measure_id must be an active unit in your organisation.",
+            fields={"unit_of_measure_id": "Not a valid active unit."},
+        )
+    ratio = uom_conversion.resolve_conversion_ratio(
+        unit, units[material.unit_of_measure_id], material, units.get(material.alternate_conversion_unit_of_measure_id)
+    )
+    if ratio is None:
+        raise ValidationError(
+            f"{material.name} cannot be ordered in {unit.code} -- there is no conversion to its unit "
+            f"{units[material.unit_of_measure_id].code}.",
+            fields={"unit_of_measure_id": "No conversion to the material's unit."},
+        )
+    return unit.id, ratio
+
+
 def _build_revision_out(db: Session, revision: PurchaseOrderRevision) -> PurchaseOrderRevisionOut:
     lines = (
         db.query(PurchaseOrderRevisionLine)
@@ -298,6 +341,22 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
         .order_by(FileRecord.id)
         .all()
     )
+    total = purchase_order_service.total_amount(lines)
+    paid = purchase_order_service.paid_amount(payments)
+    stamp_ids = {
+        user_id
+        for user_id in (
+            purchase_order.created_by_user_id,
+            purchase_order.approved_by_user_id,
+            purchase_order.sent_by_user_id,
+            purchase_order.cancelled_by_user_id,
+        )
+        if user_id
+    }
+    names = dict(db.query(User.id, User.full_name).filter(User.id.in_(stamp_ids)).all()) if stamp_ids else {}
+    rfq_number = (
+        db.query(Rfq.rfq_number).filter(Rfq.id == purchase_order.rfq_id).scalar() if purchase_order.rfq_id else None
+    )
     return PurchaseOrderOut(
         id=purchase_order.id,
         organisation_id=purchase_order.organisation_id,
@@ -305,20 +364,34 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
         supplier_id=purchase_order.supplier_id,
         warehouse_id=purchase_order.warehouse_id,
         rfq_id=purchase_order.rfq_id,
+        rfq_number=rfq_number,
+        rfq_response_id=purchase_order.rfq_response_id,
         status=purchase_order.status,
         revision_number=purchase_order.revision_number,
         order_date=purchase_order.order_date,
         expected_delivery_date=purchase_order.expected_delivery_date,
         supplier_reference=purchase_order.supplier_reference,
         payment_terms=purchase_order.payment_terms,
+        currency=purchase_order.currency,
+        delivery_instructions=purchase_order.delivery_instructions,
         notes=purchase_order.notes,
         cancel_reason=purchase_order.cancel_reason,
-        supplier_confirmed_at=purchase_order.supplier_confirmed_at,
-        supplier_confirmed_by_user_id=purchase_order.supplier_confirmed_by_user_id,
-        supplier_confirmation_note=purchase_order.supplier_confirmation_note,
-        total_amount=purchase_order_service.total_amount(lines),
-        paid_amount=purchase_order_service.paid_amount(payments),
-        outstanding_amount=purchase_order_service.total_amount(lines) - purchase_order_service.paid_amount(payments),
+        created_at=purchase_order.created_at,
+        created_by_user_id=purchase_order.created_by_user_id,
+        approved_at=purchase_order.approved_at,
+        approved_by_user_id=purchase_order.approved_by_user_id,
+        sent_at=purchase_order.sent_at,
+        sent_by_user_id=purchase_order.sent_by_user_id,
+        cancelled_at=purchase_order.cancelled_at,
+        cancelled_by_user_id=purchase_order.cancelled_by_user_id,
+        created_by_name=names.get(purchase_order.created_by_user_id),
+        approved_by_name=names.get(purchase_order.approved_by_user_id),
+        sent_by_name=names.get(purchase_order.sent_by_user_id),
+        cancelled_by_name=names.get(purchase_order.cancelled_by_user_id),
+        total_amount=total,
+        paid_amount=paid,
+        outstanding_amount=total - paid,
+        payment_status=purchase_order_service.payment_status(total, paid),
         lines=[PurchaseOrderLineOut.model_validate(line) for line in lines],
         revisions=[_build_revision_out(db, revision) for revision in revisions],
         documents=[FileOut.model_validate(f) for f in documents],
@@ -372,28 +445,32 @@ def create_purchase_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
-    """Always starts `draft` and empty -- lines are added afterward via
-    POST .../lines (docs/modules/purchase_orders.md #2/#3). `rfq_id` is
-    never set here -- only app/api/rfqs.py's convert-to-PO action sets it
-    (docs/modules/purchase_orders.md #22)."""
+    """Always starts `draft` with no items -- items are added via
+    POST .../lines (docs/modules/purchase_orders.md #2/#3). PO date is
+    today; `rfq_id` is only ever set by the RFQ's PO-generation step."""
     purchase_scope.require_permission(db, current_user, purchase_scope.CREATE)
     _resolve_active_supplier(db, payload.supplier_id, current_user.organisation_id)
     _resolve_active_warehouse(db, payload.warehouse_id, current_user.organisation_id)
+    if payload.expected_delivery_date < date.today():
+        raise ValidationError(
+            "Expected delivery date cannot be in the past.", fields={"expected_delivery_date": "Cannot be in the past."}
+        )
 
     purchase_order = purchase_order_service.create_purchase_order_with_lines(
         db,
         organisation_id=current_user.organisation_id,
         supplier_id=payload.supplier_id,
         warehouse_id=payload.warehouse_id,
-        order_date=payload.order_date,
+        order_date=date.today(),
         expected_delivery_date=payload.expected_delivery_date,
+        payment_terms=payload.payment_terms,
+        supplier_reference=payload.supplier_reference,
+        currency=payload.currency,
+        delivery_instructions=payload.delivery_instructions,
         notes=payload.notes,
+        created_by_user_id=current_user.id,
         lines=[],
     )
-    purchase_order.supplier_reference = payload.supplier_reference
-    purchase_order.payment_terms = payload.payment_terms
-    db.add(purchase_order)
-    db.flush()
 
     audit_service.log_event(
         db,
@@ -461,24 +538,25 @@ def add_purchase_order_line(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
-    """Draft-only. `unit_price` defaults from RawMaterial.reference_cost
-    when omitted (docs/modules/purchase_orders.md #3);
-    `line_total`/`unit_price` are snapshotted onto the line, never read
-    live afterward."""
+    """Draft-only. Material, quantity, purchase unit (default: the
+    material's own) and agreed unit price are required; `line_total` is
+    computed and snapshotted (docs/modules/purchase_orders.md #3)."""
     purchase_scope.require_permission(db, current_user, purchase_scope.CREATE)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     _require_draft(purchase_order)
     material = _resolve_active_raw_material(db, payload.raw_material_id, current_user.organisation_id)
-
-    unit_price = purchase_order_service.resolve_unit_price(material, payload.unit_price)
-    line_total = purchase_order_service.compute_line_total(payload.quantity, unit_price)
+    unit_id, factor = _resolve_purchase_unit(db, material, payload.unit_of_measure_id, current_user.organisation_id)
 
     line = PurchaseOrderLine(
         purchase_order_id=purchase_order.id,
         raw_material_id=payload.raw_material_id,
         quantity=payload.quantity,
-        unit_price=unit_price,
-        line_total=line_total,
+        unit_of_measure_id=unit_id,
+        conversion_factor=factor,
+        unit_price=payload.unit_price,
+        line_total=purchase_order_service.compute_line_total(payload.quantity, payload.unit_price),
+        required_by_date=payload.required_by_date,
+        remarks=payload.remarks,
     )
     db.add(line)
     db.flush()
@@ -517,6 +595,14 @@ def update_purchase_order_line(
     line = _get_line_in_po(db, purchase_order.id, line_id)
 
     updates = payload.model_dump(exclude_unset=True)
+    if "unit_of_measure_id" in updates:
+        material = _resolve_active_raw_material(db, line.raw_material_id, current_user.organisation_id)
+        line.unit_of_measure_id, line.conversion_factor = _resolve_purchase_unit(
+            db, material, updates["unit_of_measure_id"], current_user.organisation_id
+        )
+    for field in ("required_by_date", "remarks"):
+        if field in updates:
+            setattr(line, field, updates[field])
     quantity = updates.get("quantity", line.quantity)
     unit_price = updates.get("unit_price", line.unit_price)
     line.quantity = quantity
@@ -582,10 +668,9 @@ def change_purchase_order_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
-    """Reopen for a new revision (`draft`, "Create Revision") or cancel
-    (docs/modules/purchase_orders.md #23) -- gated by the "issue"
-    purchase permission, which covers every PO-lifecycle decision that
-    isn't its own dedicated action (issue/confirm-supplier/receive)."""
+    """Back to `draft` (send a pending PO back, or "Create Revision" of an
+    approved/sent PO -- it must then be approved again) or cancel
+    (docs/modules/purchase_orders.md #23)."""
     purchase_scope.require_permission(db, current_user, purchase_scope.ISSUE)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     purchase_order_service.assert_transition_allowed(purchase_order.status, payload.status)
@@ -594,6 +679,8 @@ def change_purchase_order_status(
     purchase_order.status = payload.status
     if payload.status == CANCELLED:
         purchase_order.cancel_reason = payload.cancel_reason
+        purchase_order.cancelled_at = datetime.utcnow()
+        purchase_order.cancelled_by_user_id = current_user.id
     db.add(purchase_order)
 
     audit_service.log_event(
@@ -614,22 +701,50 @@ def change_purchase_order_status(
     return _build_po_out(db, purchase_order)
 
 
-@router.post("/{purchase_order_id}/issue", response_model=PurchaseOrderOut)
-def issue_purchase_order(
+@router.post("/{purchase_order_id}/submit", response_model=PurchaseOrderOut)
+def submit_purchase_order(
     purchase_order_id: int,
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
-    """`draft -> issued` (docs/modules/purchase_orders.md #23/#24/#27):
-    snapshots the current header/lines into a new immutable revision, then
-    renders and stores that revision's official PDF -- never regenerated
-    later even if the organisation's letterhead details change."""
-    purchase_scope.require_permission(db, current_user, purchase_scope.ISSUE)
+    """`draft -> pending_approval` (docs/modules/purchase_orders.md #23)."""
+    purchase_scope.require_permission(db, current_user, purchase_scope.CREATE)
+    purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
+    purchase_order_service.submit_for_approval(db, purchase_order=purchase_order)
+    audit_service.log_event(
+        db,
+        action=PURCHASE_ORDER_SUBMITTED,
+        module=PROCUREMENT_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type=_PURCHASE_ORDER_ENTITY,
+        entity_id=purchase_order.id,
+        result="success",
+        details="status: draft -> pending_approval",
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.refresh(purchase_order)
+    return _build_po_out(db, purchase_order)
+
+
+@router.post("/{purchase_order_id}/approve", response_model=PurchaseOrderOut)
+def approve_purchase_order(
+    purchase_order_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderOut:
+    """`pending_approval -> approved` (docs/modules/purchase_orders.md
+    #23/#24/#27): snapshots the current header/items into a new immutable
+    revision and renders its official PDF -- never regenerated later.
+    One commit for all of it."""
+    purchase_scope.require_permission(db, current_user, purchase_scope.APPROVE)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     supplier = _resolve_active_supplier(db, purchase_order.supplier_id, current_user.organisation_id)
 
-    revision = purchase_order_service.issue_purchase_order(db, purchase_order=purchase_order, issued_by_user_id=current_user.id)
+    revision = purchase_order_service.approve_purchase_order(db, purchase_order=purchase_order, approved_by_user_id=current_user.id)
 
     revision_lines = (
         db.query(PurchaseOrderRevisionLine).filter(PurchaseOrderRevisionLine.revision_id == revision.id).order_by(PurchaseOrderRevisionLine.id).all()
@@ -638,7 +753,13 @@ def issue_purchase_order(
         m.id: m
         for m in db.query(RawMaterial).filter(RawMaterial.id.in_([line.raw_material_id for line in revision_lines])).all()
     }
+    units_by_id = {
+        u.id: u
+        for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_([line.unit_of_measure_id for line in revision_lines])).all()
+    }
     organisation = db.query(Organisation).filter(Organisation.id == current_user.organisation_id).first()
+    warehouse = db.query(Warehouse).filter(Warehouse.id == purchase_order.warehouse_id).first()
+    rfq_number = db.query(Rfq.rfq_number).filter(Rfq.id == purchase_order.rfq_id).scalar() if purchase_order.rfq_id else None
 
     pdf_bytes = generate_purchase_order_pdf(
         PurchaseOrderPdfData(
@@ -664,17 +785,34 @@ def issue_purchase_order(
                     quantity=line.quantity,
                     unit_price=line.unit_price,
                     line_total=line.line_total,
+                    unit_code=units_by_id[line.unit_of_measure_id].code if line.unit_of_measure_id in units_by_id else "",
+                    remarks=line.remarks,
                 )
                 for line in revision_lines
             ],
             total_amount=revision.total_amount,
             issued_at=revision.issued_at,
+            currency=purchase_order.currency,
+            delivery_location=warehouse.name if warehouse else None,
+            delivery_instructions=purchase_order.delivery_instructions,
+            rfq_reference=rfq_number,
+            approved_by=current_user.full_name,
         )
     )
-    # upload_file commits internally (app/services/file_service.py) --
-    # this is the one commit point for the revision snapshot, its lines,
-    # the status flip, and the PDF file record together (docs/modules/
-    # purchase_orders.md #23's "Issue Revision" transaction boundary).
+    audit_service.log_event(
+        db,
+        action=PURCHASE_ORDER_APPROVED,
+        module=PROCUREMENT_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type=_PURCHASE_ORDER_ENTITY,
+        entity_id=purchase_order.id,
+        result="success",
+        details=f"revision: {revision.revision_number}, total_amount: {revision.total_amount} {purchase_order.currency}",
+        ip_address=request.client.host if request.client else None,
+    )
+    # upload_file commits -- the single commit point for the revision,
+    # its lines, the status flip, the audit event and the PDF record.
     file_service.upload_file(
         db,
         organisation_id=current_user.organisation_id,
@@ -684,64 +822,6 @@ def issue_purchase_order(
         entity_type=_PURCHASE_ORDER_REVISION_ENTITY,
         entity_id=revision.id,
     )
-
-    audit_service.log_event(
-        db,
-        action=PURCHASE_ORDER_ISSUED,
-        module=PROCUREMENT_MODULE,
-        organisation_id=current_user.organisation_id,
-        actor_user_id=current_user.id,
-        entity_type=_PURCHASE_ORDER_ENTITY,
-        entity_id=purchase_order.id,
-        result="success",
-        details=f"revision: {revision.revision_number}, total_amount: {revision.total_amount}",
-        ip_address=request.client.host if request.client else None,
-    )
-    db.commit()
-    db.refresh(purchase_order)
-    return _build_po_out(db, purchase_order)
-
-
-@router.post("/{purchase_order_id}/confirm-supplier", response_model=PurchaseOrderOut)
-def confirm_supplier(
-    purchase_order_id: int,
-    payload: ConfirmSupplierRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> PurchaseOrderOut:
-    """`issued -> supplier_confirmed` (docs/modules/purchase_orders.md
-    #25) -- a distinct event from issuing/sending. Evidence attachment
-    reuses the same file_service.attach_files flow RFQ response capture
-    already established (docs/modules/rfq.md #5/#17)."""
-    purchase_scope.require_permission(db, current_user, purchase_scope.CONFIRM_SUPPLIER)
-    purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
-
-    purchase_order_service.confirm_supplier(
-        db, purchase_order=purchase_order, note=payload.note, confirmed_by_user_id=current_user.id
-    )
-    if payload.file_ids:
-        file_service.attach_files(
-            db,
-            file_ids=payload.file_ids,
-            entity_type=_PURCHASE_ORDER_ENTITY,
-            entity_id=purchase_order.id,
-            organisation_id=current_user.organisation_id,
-        )
-
-    audit_service.log_event(
-        db,
-        action=PURCHASE_ORDER_SUPPLIER_CONFIRMED,
-        module=PROCUREMENT_MODULE,
-        organisation_id=current_user.organisation_id,
-        actor_user_id=current_user.id,
-        entity_type=_PURCHASE_ORDER_ENTITY,
-        entity_id=purchase_order.id,
-        result="success",
-        details=f"note: {payload.note}, files: {len(payload.file_ids)}",
-        ip_address=request.client.host if request.client else None,
-    )
-    db.commit()
     db.refresh(purchase_order)
     return _build_po_out(db, purchase_order)
 
@@ -749,13 +829,15 @@ def confirm_supplier(
 @router.post("/{purchase_order_id}/send", response_model=PurchaseOrderOut)
 def send_purchase_order(
     purchase_order_id: int,
+    payload: SendPurchaseOrderRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
-    """Emails the current revision's already-generated, immutable PDF to
-    the supplier via the existing native email integration
-    (docs/modules/purchase_orders.md #27) -- never regenerates it. A
+    """`approved -> sent`. `email=true` emails the approved revision's
+    immutable PDF to the supplier (also re-sends an already-sent PO);
+    `email=false` records it was sent another way
+    (docs/modules/purchase_orders.md #27). A
     failed send is recorded and re-raised before anything is marked
     successfully sent (the same immediate-commit-on-failure pattern
     app/services/auth_service.py's login lockout counter already
@@ -763,8 +845,29 @@ def send_purchase_order(
     case)."""
     purchase_scope.require_permission(db, current_user, purchase_scope.SEND)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
-    if purchase_order.status != ISSUED:
-        raise BusinessRuleError("Only an issued purchase order can be sent.")
+    if purchase_order.status not in (APPROVED, SENT):
+        raise BusinessRuleError("Only an approved purchase order can be sent.")
+    if purchase_order.status == SENT and not payload.email:
+        raise BusinessRuleError("This purchase order is already marked as sent.")
+
+    if not payload.email:
+        purchase_order_service.mark_sent(purchase_order, sent_by_user_id=current_user.id)
+        db.add(purchase_order)
+        audit_service.log_event(
+            db,
+            action=PURCHASE_ORDER_SENT,
+            module=PROCUREMENT_MODULE,
+            organisation_id=current_user.organisation_id,
+            actor_user_id=current_user.id,
+            entity_type=_PURCHASE_ORDER_ENTITY,
+            entity_id=purchase_order.id,
+            result="success",
+            details=f"revision: {purchase_order.revision_number}, marked sent (not emailed)",
+            ip_address=request.client.host if request.client else None,
+        )
+        db.commit()
+        db.refresh(purchase_order)
+        return _build_po_out(db, purchase_order)
 
     revision = (
         db.query(PurchaseOrderRevision)
@@ -819,6 +922,9 @@ def send_purchase_order(
         db.commit()
         raise
 
+    if purchase_order.status == APPROVED:
+        purchase_order_service.mark_sent(purchase_order, sent_by_user_id=current_user.id)
+        db.add(purchase_order)
     audit_service.log_event(
         db,
         action=PURCHASE_ORDER_SENT,
@@ -920,7 +1026,8 @@ def post_receipt(
         m.id: m
         for m in db.query(RawMaterial).filter(RawMaterial.id.in_([rl.raw_material_id for rl in receipt_lines])).all()
     }
-    unit_ids = [m.unit_of_measure_id for m in materials_by_id.values()]
+    # Receipts are counted in the PO line's purchase unit.
+    unit_ids = [line.unit_of_measure_id for line in po_lines_by_id.values()]
     units_by_id = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids)).all()}
     supplier = db.query(Supplier).filter(Supplier.id == purchase_order.supplier_id).first()
     warehouse = db.query(Warehouse).filter(Warehouse.id == receipt.warehouse_id).first()
@@ -950,8 +1057,9 @@ def post_receipt(
                         else Decimal("0")
                     ),
                     received_quantity=rl.quantity,
-                    unit_code=units_by_id[materials_by_id[rl.raw_material_id].unit_of_measure_id].code
-                    if rl.raw_material_id in materials_by_id and materials_by_id[rl.raw_material_id].unit_of_measure_id in units_by_id
+                    unit_code=units_by_id[po_lines_by_id[rl.purchase_order_line_id].unit_of_measure_id].code
+                    if rl.purchase_order_line_id in po_lines_by_id
+                    and po_lines_by_id[rl.purchase_order_line_id].unit_of_measure_id in units_by_id
                     else None,
                 )
                 for rl in receipt_lines

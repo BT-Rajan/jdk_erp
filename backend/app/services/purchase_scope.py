@@ -23,7 +23,7 @@ MODULE_KEY = "purchase"
 VIEW = "view"
 CREATE = "create"
 ISSUE = "issue"
-CONFIRM_SUPPLIER = "confirm_supplier"
+APPROVE = "approve"
 SEND = "send"
 RECEIVE = "receive"
 
