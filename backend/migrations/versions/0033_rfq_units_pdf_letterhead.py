@@ -80,15 +80,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_document_templates_organisation_id", table_name="document_templates")
+    # Dropping the table drops its indexes; dropping an FK-backing index
+    # first fails on MySQL.
     op.drop_table("document_templates")
 
     with op.batch_alter_table("rfq_supplier_invitations") as batch_op:
         batch_op.drop_column("last_emailed_at")
 
     with op.batch_alter_table("rfq_lines") as batch_op:
-        batch_op.drop_index("ix_rfq_lines_unit_of_measure_id")
         batch_op.drop_constraint("fk_rfq_lines_unit_of_measure_id_units_of_measure", type_="foreignkey")
+        batch_op.drop_index("ix_rfq_lines_unit_of_measure_id")
         batch_op.drop_column("required_by_date")
         batch_op.drop_column("unit_of_measure_id")
 

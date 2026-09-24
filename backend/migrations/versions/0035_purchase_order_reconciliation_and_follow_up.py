@@ -92,9 +92,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_purchase_order_communications_purchase_order_id", table_name="purchase_order_communications")
+    # Dropping a table drops its indexes; dropping an FK-backing index
+    # first fails on MySQL.
     op.drop_table("purchase_order_communications")
-    op.drop_index("ix_purchase_order_reconciliations_purchase_order_id", table_name="purchase_order_reconciliations")
     op.drop_table("purchase_order_reconciliations")
 
     # Map the new derived statuses back to their nearest earlier ones.

@@ -169,8 +169,8 @@ def downgrade() -> None:
             "which v1's single rfqs.supplier_id cannot represent."
         )
 
-    op.drop_index("ix_rfq_response_lines_rfq_line_id", table_name="rfq_response_lines")
-    op.drop_index("ix_rfq_response_lines_response_id", table_name="rfq_response_lines")
+    # Dropping a table drops its indexes (an FK-backing index can't be
+    # dropped first on MySQL).
     op.drop_table("rfq_response_lines")
 
     with op.batch_alter_table("rfqs") as batch_op:
@@ -213,17 +213,15 @@ def downgrade() -> None:
         ):
             batch_op.drop_column(column)
 
-    op.drop_index("ix_rfq_supplier_invitations_supplier_id", table_name="rfq_supplier_invitations")
-    op.drop_index("ix_rfq_supplier_invitations_rfq_id", table_name="rfq_supplier_invitations")
     op.drop_table("rfq_supplier_invitations")
 
     with op.batch_alter_table("rfq_lines") as batch_op:
         batch_op.drop_column("remarks")
 
     with op.batch_alter_table("rfqs") as batch_op:
-        batch_op.drop_index("ix_rfqs_team_id")
         batch_op.drop_constraint("fk_rfqs_requested_by_user_id_users", type_="foreignkey")
         batch_op.drop_constraint("fk_rfqs_team_id_teams", type_="foreignkey")
+        batch_op.drop_index("ix_rfqs_team_id")
         batch_op.drop_column("requested_by_user_id")
         batch_op.drop_column("team_id")
         batch_op.drop_column("priority")
