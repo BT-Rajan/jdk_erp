@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.bom import BOM_STATUSES
 
@@ -44,7 +44,7 @@ class BomCreateRequest(BaseModel):
     and `draft` (docs/modules/boms.md #10)."""
 
     product_id: int
-    base_quantity: Decimal
+    base_quantity: Decimal = Field(max_digits=14, decimal_places=4)
     notes: str | None = None
 
     @field_validator("base_quantity")
@@ -60,7 +60,7 @@ class BomUpdateRequest(BaseModel):
     see docs/modules/boms.md #10) and create a new BOM instead of
     repointing an existing one to a different Product."""
 
-    base_quantity: Decimal | None = None
+    base_quantity: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     notes: str | None = None
 
     @field_validator("base_quantity")
@@ -73,7 +73,7 @@ class BomUpdateRequest(BaseModel):
 
 class BomComponentCreateRequest(BaseModel):
     raw_material_id: int
-    quantity: Decimal
+    quantity: Decimal = Field(max_digits=14, decimal_places=4)
 
     @field_validator("quantity")
     @classmethod
@@ -98,7 +98,7 @@ class BomComponentUpdateRequest(BaseModel):
     """`raw_material_id` is immutable -- remove and re-add the component
     instead of repointing an existing line to a different material."""
 
-    quantity: Decimal
+    quantity: Decimal = Field(max_digits=14, decimal_places=4)
 
     @field_validator("quantity")
     @classmethod
