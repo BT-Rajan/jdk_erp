@@ -23,6 +23,7 @@ from app.api.rfqs import router as rfqs_router
 from app.api.document_templates import router as document_templates_router
 from app.api.goods_receiving import router as goods_receiving_router
 from app.api.finance import router as finance_router
+from app.api.finished_goods_inventory import router as finished_goods_inventory_router
 from app.api.inventory import router as inventory_router
 from app.api.raw_material_suppliers import router as raw_material_suppliers_router
 from app.api.raw_materials import router as raw_materials_router
@@ -89,6 +90,7 @@ app.include_router(rfqs_router)
 app.include_router(document_templates_router)
 app.include_router(goods_receiving_router)
 app.include_router(finance_router)
+app.include_router(finished_goods_inventory_router)
 app.include_router(inventory_router)
 app.include_router(raw_material_suppliers_router)
 app.include_router(raw_materials_router)

@@ -102,6 +102,11 @@ RFQ_SEND_FAILED = "rfq_send_failed"
 DOCUMENT_TEMPLATE_UPDATED = "document_template_updated"
 INVENTORY_ADJUSTMENT_CREATED = "inventory_adjustment_created"
 INVENTORY_OPENING_STOCK_RECORDED = "inventory_opening_stock_recorded"
+# Finished Goods Inventory's own write event -- reuses INVENTORY_MODULE
+# below rather than a new module constant, the same "one Inventory
+# domain" reasoning app/services/inventory_scope.py's module_key reuse
+# already documents for Finished Goods Inventory's authorization.
+FINISHED_GOODS_ADJUSTMENT_CREATED = "finished_goods_adjustment_created"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"
