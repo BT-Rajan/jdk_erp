@@ -2,21 +2,34 @@
 (docs/modules/purchase_orders.md #9) -- never insert a StockMovement row
 or touch RawMaterialInventory.quantity_on_hand anywhere else. Purchase's
 post_receipt/reverse_receipt (docs/modules/purchase_orders.md #38,
-Revision 4) are the callers; a future Production/Sales module issuing
-stock reuses this same service rather than maintaining a second, parallel
-ledger (docs/ENGINEERING_PRINCIPLES.md #2).
+Revision 4) are the callers for RECEIPT/RECEIPT_REVERSAL; app/api/inventory.py's
+create_adjustment is the one caller for ADJUSTMENT (Controlled Stock
+Adjustments -- a verified physical/system stock difference, corrected by
+a new movement, never a direct edit of the snapshot or an existing
+movement). A future Production/Sales module issuing stock reuses this
+same service rather than maintaining a second, parallel ledger
+(docs/ENGINEERING_PRINCIPLES.md #2).
 
 Does not commit -- same convention as audit_service.log_event: the
-caller (app/services/purchase_order_service.post_receipt/reverse_receipt)
-commits this alongside the PurchaseOrderLine.received_quantity update it
-belongs with, so the two succeed or fail together (task's own "receipt +
-inventory movement must be atomic" requirement)."""
+caller commits this alongside whatever else belongs in the same
+transaction (a PurchaseOrderLine.received_quantity update for a receipt;
+nothing else for an adjustment), so the two succeed or fail together
+(task's own "receipt + inventory movement must be atomic" requirement,
+extended identically to adjustments)."""
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import BusinessRuleError, ConflictError
-from app.models.inventory import RECEIPT, RECEIPT_REVERSAL, RawMaterialInventory, StockMovement
+from app.models.inventory import (
+    ADJUSTMENT,
+    ADJUSTMENT_REFERENCE,
+    RECEIPT,
+    RECEIPT_REVERSAL,
+    InventoryAdjustment,
+    RawMaterialInventory,
+    StockMovement,
+)
 
 
 def _insert_movement(db: Session, movement: StockMovement) -> None:
@@ -160,6 +173,64 @@ def reverse_stock(
         raw_material_id=original.raw_material_id,
         warehouse_id=original.warehouse_id,
         quantity=-quantity,
+    )
+    return movement
+
+
+def adjust_stock(
+    db: Session,
+    *,
+    organisation_id: int,
+    raw_material_id: int,
+    warehouse_id: int,
+    quantity,
+    unit_of_measure_id: int,
+    reason: str,
+    created_by_user_id: int | None,
+) -> StockMovement:
+    """Controlled Stock Adjustment (docs/modules/purchase_orders.md's own
+    "reversal, never edit" correction model, extended here to a verified
+    physical/system stock difference that has no prior movement to
+    reverse) -- the one explicit, manual way to correct
+    quantity_on_hand: a new ADJUSTMENT ledger row, atomically applied to
+    the snapshot through the exact same `_increment_inventory`
+    conditional-UPDATE every other movement type already uses, never a
+    direct write to quantity_on_hand and never an edit of any existing
+    StockMovement. `quantity`'s own sign is the adjustment's direction --
+    positive is stock in, negative is stock out -- movement_type alone
+    (ADJUSTMENT) already distinguishes this from a RECEIPT/RECEIPT_REVERSAL,
+    so there is no separate direction column, the same reasoning
+    RECEIPT_REVERSAL's own negative quantity already established.
+    `unit_of_measure_id` is the raw material's own current stock unit,
+    resolved and validated by the caller -- never accepted as arbitrary
+    input (gap-fix: Controlled Stock Adjustments -- UOM). `reason` must
+    already be validated non-blank by the caller (the API schema's own
+    field validator, the same layer ReverseReceiptRequest's own reason
+    already is) -- this service doesn't re-validate business rules, only
+    records the movement and keeps the snapshot consistent with it."""
+    adjustment = InventoryAdjustment(organisation_id=organisation_id, reason=reason)
+    db.add(adjustment)
+    db.flush()
+
+    movement = StockMovement(
+        organisation_id=organisation_id,
+        raw_material_id=raw_material_id,
+        warehouse_id=warehouse_id,
+        movement_type=ADJUSTMENT,
+        quantity=quantity,
+        unit_of_measure_id=unit_of_measure_id,
+        reference_type=ADJUSTMENT_REFERENCE,
+        reference_id=adjustment.id,
+        created_by_user_id=created_by_user_id,
+    )
+    _insert_movement(db, movement)
+
+    _increment_inventory(
+        db,
+        organisation_id=organisation_id,
+        raw_material_id=raw_material_id,
+        warehouse_id=warehouse_id,
+        quantity=quantity,
     )
     return movement
 

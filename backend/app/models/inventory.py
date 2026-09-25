@@ -8,15 +8,21 @@ from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
 # A small, explicitly-validated set rather than a fixed DB enum, so a
-# future Issue/Adjustment/Production movement type is a Python constant
-# addition, not a migration. Mirrors BOM_STATUSES/PURCHASE_ORDER_STATUSES'
-# own "validated tuple, not a DB-level enum" convention. `RECEIPT_REVERSAL`
+# future Issue/Production movement type is a Python constant addition,
+# not a migration. Mirrors BOM_STATUSES/PURCHASE_ORDER_STATUSES' own
+# "validated tuple, not a DB-level enum" convention. `RECEIPT_REVERSAL`
 # is added in Revision 4 (docs/modules/purchase_orders.md #38) for
 # reversing a posted Goods Receipt -- a second, negative-quantity ledger
-# row, never an edit of the original `RECEIPT` row.
+# row, never an edit of the original `RECEIPT` row. `ADJUSTMENT` (Controlled
+# Stock Adjustments) is the explicit, manual correction mechanism for a
+# verified physical/system stock difference -- its own quantity's sign is
+# the adjustment's direction (positive = stock in, negative = stock out),
+# so there is no separate direction column, the same reasoning
+# RECEIPT_REVERSAL's own negative quantity already established.
 RECEIPT = "receipt"
 RECEIPT_REVERSAL = "receipt_reversal"
-MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL)
+ADJUSTMENT = "adjustment"
+MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL, ADJUSTMENT)
 
 # Generic (reference_type, reference_id), not a hard FK, so a future
 # Production/Sales movement can point at its own source document the same
@@ -29,8 +35,13 @@ MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL)
 # (Revision 4) is what every receipt-posting/reversal movement writes now,
 # tracing a stock quantity to the receipt line -> receipt -> PO that
 # produced it (docs/audit/PROCUREMENT_AUDIT.md Revision 4 #6).
+# `ADJUSTMENT_REFERENCE` is what every Controlled Stock Adjustment writes,
+# pointing at its own InventoryAdjustment row (below) -- the one place
+# its mandatory reason lives, the same "a movement's reference points at
+# whatever row explains it" shape the receipt reference already uses.
 PURCHASE_ORDER_LINE_REFERENCE = "purchase_order_line"
 PURCHASE_ORDER_RECEIPT_LINE_REFERENCE = "purchase_order_receipt_line"
+ADJUSTMENT_REFERENCE = "inventory_adjustment"
 
 
 class StockMovement(Base, OrganisationScopedMixin):
@@ -115,3 +126,23 @@ class RawMaterialInventory(Base, TimestampMixin, OrganisationScopedMixin):
         ForeignKey("warehouses.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     quantity_on_hand: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0, server_default="0")
+
+
+class InventoryAdjustment(Base, OrganisationScopedMixin):
+    """Why a Controlled Stock Adjustment was made -- everything else it
+    needs (material, warehouse, quantity, unit, direction via the
+    quantity's own sign, who, when) already lives on its own StockMovement
+    row (movement_type=ADJUSTMENT, reference_type=ADJUSTMENT_REFERENCE,
+    reference_id=this row's id); this table exists only to give that
+    movement a reference target and hold the one required fact it
+    doesn't already carry -- the mandatory reason -- the same shape a
+    PurchaseOrderReceiptLine already is for a RECEIPT movement's
+    reference. Never edited or deleted, same as StockMovement itself: a
+    wrong adjustment is corrected by a new, opposite adjustment, never by
+    changing this row (docs/modules/purchase_orders.md #38's "reversal,
+    never edit" rule, applied here too)."""
+
+    __tablename__ = "inventory_adjustments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)

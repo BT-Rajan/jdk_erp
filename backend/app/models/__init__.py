@@ -5,7 +5,7 @@ from app.models.document_template import DocumentTemplate
 from app.models.customer import Customer
 from app.models.email_account import EmailAccount
 from app.models.file import FileRecord
-from app.models.inventory import RawMaterialInventory, StockMovement
+from app.models.inventory import InventoryAdjustment, RawMaterialInventory, StockMovement
 from app.models.job import Job
 from app.models.machine import Machine
 from app.models.notification import Notification
@@ -73,6 +73,7 @@ __all__ = [
     "PurchaseOrderReceiptLine",
     "StockMovement",
     "RawMaterialInventory",
+    "InventoryAdjustment",
     "Rfq",
     "RfqLine",
     "RfqResponse",

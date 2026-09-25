@@ -16,7 +16,15 @@ from sqlalchemy import func
 
 from app.core.database import SessionLocal
 from app.core.errors import BusinessRuleError, ConflictError
-from app.models.inventory import RECEIPT, RECEIPT_REVERSAL, RawMaterialInventory, StockMovement
+from app.models.inventory import (
+    ADJUSTMENT,
+    ADJUSTMENT_REFERENCE,
+    RECEIPT,
+    RECEIPT_REVERSAL,
+    InventoryAdjustment,
+    RawMaterialInventory,
+    StockMovement,
+)
 from app.services import inventory_service
 
 REFERENCE_TYPE = "test_reference"
@@ -43,6 +51,19 @@ def _reverse(db_session, organisation, cement_raw_material, warehouse_1, quantit
         quantity=Decimal(quantity),
         reference_type=REFERENCE_TYPE,
         reference_id=reference_id,
+        created_by_user_id=None,
+    )
+
+
+def _adjust(db_session, organisation, cement_raw_material, warehouse_1, quantity, reason="Cycle count correction"):
+    return inventory_service.adjust_stock(
+        db_session,
+        organisation_id=organisation.id,
+        raw_material_id=cement_raw_material.id,
+        warehouse_id=warehouse_1.id,
+        quantity=Decimal(quantity),
+        unit_of_measure_id=cement_raw_material.unit_of_measure_id,
+        reason=reason,
         created_by_user_id=None,
     )
 
@@ -440,3 +461,126 @@ def test_two_sequential_movements_for_the_same_pair_do_not_lose_either_update(
         second.close()
 
     assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("50.0000")
+
+
+# --- Controlled Stock Adjustments ------------------------------------------------------------------
+
+
+def test_positive_adjustment_increases_balance(db_session, organisation, cement_raw_material, warehouse_1):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100")
+    db_session.commit()
+
+    _adjust(db_session, organisation, cement_raw_material, warehouse_1, "5")
+    db_session.commit()
+
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("105.0000")
+
+
+def test_negative_adjustment_decreases_balance(db_session, organisation, cement_raw_material, warehouse_1):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100")
+    db_session.commit()
+
+    _adjust(db_session, organisation, cement_raw_material, warehouse_1, "-15")
+    db_session.commit()
+
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("85.0000")
+
+
+def test_negative_adjustment_that_would_create_negative_stock_is_rejected(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "10")
+    db_session.commit()
+
+    with pytest.raises(BusinessRuleError, match="negative"):
+        _adjust(db_session, organisation, cement_raw_material, warehouse_1, "-11")
+    db_session.rollback()
+
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("10.0000")
+
+
+def test_adjustment_creates_an_append_only_ledger_entry_distinct_from_a_receipt(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    """Traceability: an adjustment must be clearly identifiable as an
+    adjustment, never confusable with a receipt or reversal."""
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "50")
+    db_session.commit()
+    movement = _adjust(db_session, organisation, cement_raw_material, warehouse_1, "7")
+    db_session.commit()
+
+    assert movement.movement_type == ADJUSTMENT
+    assert movement.reference_type == ADJUSTMENT_REFERENCE
+    assert movement.quantity == Decimal("7.0000")
+    assert movement.unit_of_measure_id == cement_raw_material.unit_of_measure_id
+
+    stored = db_session.query(StockMovement).filter(StockMovement.id == movement.id).one()
+    assert stored.movement_type == ADJUSTMENT
+    all_types = {
+        m.movement_type
+        for m in db_session.query(StockMovement).filter(StockMovement.raw_material_id == cement_raw_material.id)
+    }
+    assert all_types == {RECEIPT, ADJUSTMENT}
+
+
+def test_adjustment_records_user_time_and_reason_correctly(db_session, organisation, active_user, cement_raw_material, warehouse_1):
+    movement = inventory_service.adjust_stock(
+        db_session,
+        organisation_id=organisation.id,
+        raw_material_id=cement_raw_material.id,
+        warehouse_id=warehouse_1.id,
+        quantity=Decimal("12"),
+        unit_of_measure_id=cement_raw_material.unit_of_measure_id,
+        reason="Physical count found 12 more bags than the system showed",
+        created_by_user_id=active_user.id,
+    )
+    db_session.commit()
+
+    assert movement.created_by_user_id == active_user.id
+    assert movement.created_at is not None
+
+    adjustment = db_session.query(InventoryAdjustment).filter(InventoryAdjustment.id == movement.reference_id).one()
+    assert adjustment.reason == "Physical count found 12 more bags than the system showed"
+    assert adjustment.organisation_id == organisation.id
+
+
+def test_existing_movements_remain_unchanged_after_an_adjustment(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    receipt = _receive(db_session, organisation, cement_raw_material, warehouse_1, "80", reference_id=1)
+    db_session.commit()
+    original_quantity = receipt.quantity
+    original_created_at = receipt.created_at
+
+    _adjust(db_session, organisation, cement_raw_material, warehouse_1, "-5")
+    db_session.commit()
+
+    reloaded_receipt = db_session.query(StockMovement).filter(StockMovement.id == receipt.id).one()
+    assert reloaded_receipt.quantity == original_quantity
+    assert reloaded_receipt.created_at == original_created_at
+    assert reloaded_receipt.movement_type == RECEIPT
+
+
+def test_a_failed_adjustment_leaves_ledger_and_balance_unchanged(db_session, organisation, cement_raw_material, warehouse_1):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "20")
+    db_session.commit()
+
+    with pytest.raises(BusinessRuleError):
+        _adjust(db_session, organisation, cement_raw_material, warehouse_1, "-100")
+    db_session.rollback()
+
+    assert db_session.query(StockMovement).filter(StockMovement.movement_type == ADJUSTMENT).count() == 0
+    assert db_session.query(InventoryAdjustment).count() == 0
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("20.0000")
+
+
+def test_adjustment_balance_matches_the_ledger_sum(db_session, organisation, cement_raw_material, warehouse_1):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "60", reference_id=1)
+    db_session.commit()
+    _adjust(db_session, organisation, cement_raw_material, warehouse_1, "10")
+    db_session.commit()
+    _adjust(db_session, organisation, cement_raw_material, warehouse_1, "-25")
+    db_session.commit()
+
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == _ledger_sum(db_session, cement_raw_material, warehouse_1)
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("45.0000")
