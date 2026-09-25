@@ -854,6 +854,114 @@ def test_convert_requires_the_accepted_quotation_upload(client, admin_headers, i
     assert _convert(client, admin_headers, rfq["id"], warehouse_1.id, [{"rfq_line_id": cement_id}]).status_code == 400
 
 
+# --- gap fix: split sourcing -------------------------------------------------------------------
+
+
+def test_split_sourcing_fulfils_the_full_requirement_from_two_suppliers(
+    client, admin_headers, acme_supplier, beta_supplier, cement_raw_material, warehouse_1, db_session
+):
+    """Scenario: RFQ requirement = 1000 KG, Supplier A can supply 600 KG,
+    Supplier B can supply 400 KG -- the Purchase Executive sources the
+    full requirement from both suppliers, without a disconnected
+    replacement RFQ (gap-fix: split sourcing). Two POs are created and
+    the total sourced reaches the original 1000 KG."""
+    rfq = _create(
+        client, admin_headers,
+        _form([acme_supplier.id, beta_supplier.id], [_line(cement_raw_material, quantity="1000")]),
+    ).json()
+    line_id = rfq["lines"][0]["id"]
+    acme_invitation = _invitation_for(rfq, acme_supplier.id)["id"]
+    beta_invitation = _invitation_for(rfq, beta_supplier.id)["id"]
+
+    acme_quote = _capture(
+        client, admin_headers, rfq["id"], acme_invitation,
+        [{"rfq_line_id": line_id, "unit_price": "10", "quantity": "600"}],
+    ).json()
+    beta_quote = _capture(
+        client, admin_headers, rfq["id"], beta_invitation,
+        [{"rfq_line_id": line_id, "unit_price": "11", "quantity": "400"}],
+    ).json()
+    acme_response_id = _invitation_for(acme_quote, acme_supplier.id)["responses"][0]["id"]
+    beta_response_id = _invitation_for(beta_quote, beta_supplier.id)["responses"][0]["id"]
+
+    # Accept Acme's (partial) quote -- the RFQ's one explicit decision.
+    accepted = _accept(client, admin_headers, rfq["id"], acme_response_id, [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    # Source Acme's 600 KG (the decided response, no response_id needed).
+    first = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "selected"  # not fully sourced yet -- stays open
+
+    # Source the remaining 400 KG from Beta -- naming Beta's own captured
+    # response, no second "decide" and no replacement RFQ.
+    second = _convert(client, admin_headers, rfq["id"], warehouse_1.id, response_id=beta_response_id)
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["status"] == "converted"  # now fully sourced
+    assert second_body["lines"][0]["sourced_quantity"] == "1000.0000"
+
+    pos = db_session.query(PurchaseOrder).order_by(PurchaseOrder.id).all()
+    assert [po.supplier_id for po in pos] == [acme_supplier.id, beta_supplier.id]
+    lines_by_supplier = {
+        po.supplier_id: db_session.query(PurchaseOrderLine).filter(PurchaseOrderLine.purchase_order_id == po.id).one()
+        for po in pos
+    }
+    assert (lines_by_supplier[acme_supplier.id].quantity, lines_by_supplier[acme_supplier.id].unit_price) == (
+        Decimal("600.0000"), Decimal("10.0000"),
+    )
+    assert (lines_by_supplier[beta_supplier.id].quantity, lines_by_supplier[beta_supplier.id].unit_price) == (
+        Decimal("400.0000"), Decimal("11.0000"),
+    )
+    assert sum(l.quantity for l in lines_by_supplier.values()) == Decimal("1000.0000")
+    assert [ref["id"] for ref in second_body["purchase_orders"]] == [po.id for po in pos]
+
+    # The original RFQ quantity and both suppliers' quotation history are
+    # untouched -- fully traceable.
+    refetched = client.get(f"/api/rfqs/{rfq['id']}", headers=admin_headers).json()
+    assert refetched["lines"][0]["quantity"] == "1000.0000"
+    acme_inv = _invitation_for(refetched, acme_supplier.id)
+    beta_inv = _invitation_for(refetched, beta_supplier.id)
+    assert (acme_inv["responses"][0]["lines"][0]["quantity"], acme_inv["responses"][0]["lines"][0]["unit_price"]) == (
+        "600.0000", "10.0000",
+    )
+    assert (beta_inv["responses"][0]["lines"][0]["quantity"], beta_inv["responses"][0]["lines"][0]["unit_price"]) == (
+        "400.0000", "11.0000",
+    )
+
+
+def test_split_sourcing_shows_the_remaining_unsourced_quantity(
+    client, admin_headers, acme_supplier, cement_raw_material, warehouse_1
+):
+    """600 KG sourced -> the remaining 400 KG of the 1000 KG requirement
+    is clearly visible as unsourced, and the RFQ stays open (not
+    `converted`) so it can still be sourced further (gap-fix: split
+    sourcing)."""
+    rfq = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material, quantity="1000")])).json()
+    line_id = rfq["lines"][0]["id"]
+    assert rfq["lines"][0]["sourced_quantity"] == "0.0000"
+
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    quoted = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": line_id, "unit_price": "10", "quantity": "600"}],
+    ).json()
+    response_id = _invitation_for(quoted, acme_supplier.id)["responses"][0]["id"]
+    accepted = _accept(client, admin_headers, rfq["id"], response_id, [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    body = converted.json()
+
+    line = body["lines"][0]
+    assert line["quantity"] == "1000.0000"
+    assert line["sourced_quantity"] == "600.0000"
+    remaining = Decimal(line["quantity"]) - Decimal(line["sourced_quantity"])
+    assert remaining == Decimal("400.0000")
+    assert body["status"] == "selected"  # partially sourced -- never silently closed
+
+
 # --- cancel / list / isolation / permissions ------------------------------------------------
 
 

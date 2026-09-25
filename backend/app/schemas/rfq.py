@@ -36,6 +36,11 @@ class RfqLineOut(BaseModel):
     unit_of_measure_id: int
     required_by_date: date | None
     remarks: str | None
+    # How much of `quantity` has been put on a Purchase Order converted
+    # from this RFQ so far, in this same unit -- 0 until the first
+    # conversion. `quantity - sourced_quantity` is what still needs a
+    # supplier (gap-fix: split sourcing, docs/modules/rfq.md).
+    sourced_quantity: Decimal = Decimal("0.0000")
 
 
 class RfqResponseLineOut(BaseModel):
@@ -100,6 +105,20 @@ class RfqInvitationOut(BaseModel):
     follow_ups: list[RfqInvitationFollowUpOut] = []
 
 
+class RfqPurchaseOrderRefOut(BaseModel):
+    """One Purchase Order converted from this RFQ -- there can be more
+    than one when the requirement was split across suppliers (gap-fix:
+    split sourcing). `purchase_order_id` on `RfqOut` below only ever
+    names the first; this is the complete, traceable list."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    po_number: str
+    supplier_id: int
+    status: str
+
+
 class RfqOut(BaseModel):
     """`invitations[].responses[].lines` is the whole comparison shape
     (docs/modules/rfq.md #6) -- assembled from stored rows, never a
@@ -127,6 +146,10 @@ class RfqOut(BaseModel):
     lines: list[RfqLineOut]
     invitations: list[RfqInvitationOut]
     acceptance_files: list[FileOut] = []
+    # Every Purchase Order converted from this RFQ, oldest first -- one
+    # when sourced from a single supplier, more when split across
+    # suppliers (gap-fix: split sourcing).
+    purchase_orders: list[RfqPurchaseOrderRefOut] = []
 
 
 class RfqLineCreateRequest(BaseModel):
@@ -375,12 +398,18 @@ class RfqConvertRequest(BaseModel):
     """PO generation (docs/modules/rfq.md #8). `expected_delivery_date`
     and `payment_terms` are required. `lines` omitted -> every RFQ line converts at the approved
     quote's price. `lines` given -> exactly those lines, each at its
-    override price or, when none is given, the quoted one."""
+    override price or, when none is given, the quoted one.
+
+    `response_id` omitted -> the RFQ's own decided response. Set only to
+    convert a second (or later) time, naming another response captured
+    on this same RFQ, to source the remaining quantity from a different
+    supplier (gap-fix: split sourcing, docs/modules/rfq.md)."""
 
     expected_delivery_date: date
     payment_terms: str = Field(min_length=1, max_length=200)
     supplier_reference: str | None = Field(default=None, max_length=100)
     notes: str | None = Field(default=None, max_length=4000)
+    response_id: int | None = None
 
     @field_validator("payment_terms")
     @classmethod

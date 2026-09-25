@@ -194,6 +194,14 @@ class PurchaseOrderLine(Base, TimestampMixin):
     raw_material_id: Mapped[int] = mapped_column(
         ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    # Which RFQ line this PO line was converted from, when it was --
+    # null for a PO raised directly with no RFQ. Lets several POs (one
+    # per supplier) each source part of the same RFQ line's requirement
+    # be added back up against it, to show how much has been sourced and
+    # how much remains (gap-fix: split sourcing, docs/modules/rfq.md).
+    rfq_line_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rfq_lines.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     unit_of_measure_id: Mapped[int] = mapped_column(
         ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=False, index=True

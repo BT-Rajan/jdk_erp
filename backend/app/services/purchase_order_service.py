@@ -89,6 +89,9 @@ class PurchaseOrderLineInput:
     conversion_factor: Decimal = Decimal(1)
     required_by_date: date | None = None
     remarks: str | None = None
+    # Which RFQ line this line was converted from -- None for a PO
+    # raised directly with no RFQ (gap-fix: split sourcing).
+    rfq_line_id: int | None = None
 
 
 def assert_transition_allowed(current_status: str, target_status: str) -> None:
@@ -218,6 +221,7 @@ def create_purchase_order_with_lines(
             PurchaseOrderLine(
                 purchase_order_id=purchase_order.id,
                 raw_material_id=line_input.raw_material.id,
+                rfq_line_id=line_input.rfq_line_id,
                 quantity=line_input.quantity,
                 unit_of_measure_id=line_input.unit_of_measure_id or line_input.raw_material.unit_of_measure_id,
                 conversion_factor=line_input.conversion_factor if line_input.unit_of_measure_id else Decimal(1),

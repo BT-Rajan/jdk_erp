@@ -12,7 +12,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.errors import BusinessRuleError, ConflictError, ValidationError
-from app.models.purchase_order import PurchaseOrder
+from app.models.purchase_order import PurchaseOrder, PurchaseOrderLine
 from app.models.raw_material import RawMaterial
 from app.models.unit import UnitOfMeasure
 from app.models.rfq import (
@@ -297,27 +297,150 @@ def decide(
     db.add(rfq)
 
 
-def get_selected_invitation(db: Session, rfq: Rfq) -> RfqSupplierInvitation:
-    """The invitation behind the selected response -- the PO's supplier
-    source (docs/modules/rfq.md #8)."""
+def get_invitation_for_response(db: Session, rfq: Rfq, response_id: int | None) -> RfqSupplierInvitation:
+    """The invitation behind a captured response on this RFQ -- the PO's
+    supplier source (docs/modules/rfq.md #8). `response_id` defaults to
+    the RFQ's own decided response, but converting to a Purchase Order a
+    second time can name a different one of this RFQ's own captured
+    responses, to source the remaining quantity from another supplier
+    (gap-fix: split sourcing) -- it still must belong to an invitation on
+    *this* RFQ, the same check `decide` applies when selecting."""
+    if response_id is None:
+        raise BusinessRuleError("This RFQ has no selected supplier response to convert.")
     invitation = (
         db.query(RfqSupplierInvitation)
         .join(RfqResponse, RfqResponse.invitation_id == RfqSupplierInvitation.id)
-        .filter(RfqResponse.id == rfq.selected_response_id, RfqSupplierInvitation.rfq_id == rfq.id)
+        .filter(RfqResponse.id == response_id, RfqSupplierInvitation.rfq_id == rfq.id)
         .first()
     )
     if invitation is None:
-        raise BusinessRuleError("This RFQ has no selected supplier response to convert.")
+        raise ValidationError(
+            "response_id must reference a response captured on this RFQ.",
+            fields={"response_id": "Not a response on this RFQ."},
+        )
     return invitation
 
 
+def line_requested_in_material_units(
+    rfq_line: RfqLine, material: RawMaterial, units: dict[int, UnitOfMeasure]
+) -> Decimal:
+    """The RFQ line's own requested quantity, normalised to the
+    material's own unit -- the same basis a Purchase Order line's
+    `quantity * conversion_factor` already uses, so "how much of this
+    line has been sourced" can be compared to "how much was asked for"
+    on one scale, whatever unit a particular supplier quoted or was
+    purchased in (gap-fix: split sourcing)."""
+    if rfq_line.unit_of_measure_id == material.unit_of_measure_id:
+        return rfq_line.quantity
+    ratio = line_unit_ratio(
+        units[rfq_line.unit_of_measure_id],
+        material,
+        units.get(material.alternate_conversion_unit_of_measure_id),
+        units[material.unit_of_measure_id],
+    )
+    if ratio is None:
+        raise BusinessRuleError(
+            f"{material.name}: its requested unit no longer converts to its unit. Update the unit setup first."
+        )
+    return rfq_line.quantity * ratio
+
+
+def sourced_quantities(db: Session, rfq_line_ids: list[int]) -> dict[int, Decimal]:
+    """How much of each given RFQ line has already been put on a
+    Purchase Order (any status -- once ordered, it counts as sourced),
+    normalised to the material's own unit via each PO line's own
+    `conversion_factor` (gap-fix: split sourcing)."""
+    if not rfq_line_ids:
+        return {}
+    totals: dict[int, Decimal] = {}
+    rows = (
+        db.query(PurchaseOrderLine.rfq_line_id, PurchaseOrderLine.quantity, PurchaseOrderLine.conversion_factor)
+        .filter(PurchaseOrderLine.rfq_line_id.in_(rfq_line_ids))
+        .all()
+    )
+    for rfq_line_id, quantity, conversion_factor in rows:
+        totals[rfq_line_id] = totals.get(rfq_line_id, Decimal(0)) + quantity * conversion_factor
+    return totals
+
+
+def _rfq_line_conversion_context(
+    db: Session, rfq_lines: list[RfqLine]
+) -> tuple[dict[int, RawMaterial], dict[int, UnitOfMeasure]]:
+    """Every material and unit a set of RFQ lines could need to convert
+    against its own unit -- shared by is_fully_sourced and
+    line_sourced_quantities (gap-fix: split sourcing)."""
+    materials = {
+        m.id: m for m in db.query(RawMaterial).filter(RawMaterial.id.in_({l.raw_material_id for l in rfq_lines}))
+    }
+    unit_ids = {l.unit_of_measure_id for l in rfq_lines} | {m.unit_of_measure_id for m in materials.values()} | {
+        m.alternate_conversion_unit_of_measure_id for m in materials.values() if m.alternate_conversion_unit_of_measure_id
+    }
+    units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids))}
+    return materials, units
+
+
+def is_fully_sourced(db: Session, rfq: Rfq) -> bool:
+    """Every line's full requested quantity has been put on a Purchase
+    Order converted from this RFQ -- the gate for moving the RFQ to its
+    terminal `converted` status. While any line still has quantity
+    remaining, the RFQ stays `selected`: open to converting again,
+    naming another of its captured responses, to source the rest
+    (gap-fix: split sourcing)."""
+    rfq_lines = db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id).all()
+    if not rfq_lines:
+        return True
+    materials, units = _rfq_line_conversion_context(db, rfq_lines)
+    sourced = sourced_quantities(db, [l.id for l in rfq_lines])
+    for line in rfq_lines:
+        try:
+            requested = line_requested_in_material_units(line, materials[line.raw_material_id], units)
+        except BusinessRuleError:
+            # A different, unconverted line's unit setup broke since the
+            # RFQ was created -- never let that block or unwind a
+            # conversion that has already correctly gone through for
+            # another line; it just means this RFQ isn't fully sourced.
+            return False
+        if sourced.get(line.id, Decimal(0)) < requested:
+            return False
+    return True
+
+
+def line_sourced_quantities(db: Session, rfq_lines: list[RfqLine]) -> dict[int, Decimal]:
+    """Each given RFQ line's sourced quantity so far, converted back into
+    that line's own requested unit (matching RfqLine.quantity/
+    unit_of_measure_id) -- for the "how much has been sourced, how much
+    remains" display (gap-fix: split sourcing)."""
+    if not rfq_lines:
+        return {}
+    materials, units = _rfq_line_conversion_context(db, rfq_lines)
+    sourced_in_material_units = sourced_quantities(db, [l.id for l in rfq_lines])
+    result: dict[int, Decimal] = {}
+    for line in rfq_lines:
+        sourced = sourced_in_material_units.get(line.id, Decimal(0))
+        material = materials[line.raw_material_id]
+        if sourced != 0 and line.unit_of_measure_id != material.unit_of_measure_id:
+            ratio = line_unit_ratio(
+                units[line.unit_of_measure_id],
+                material,
+                units.get(material.alternate_conversion_unit_of_measure_id),
+                units[material.unit_of_measure_id],
+            )
+            if ratio:
+                sourced = sourced / ratio
+        result[line.id] = sourced.quantize(Decimal("0.0001"))
+    return result
+
+
 def resolve_conversion_prices(
-    db: Session, *, rfq: Rfq, overrides: dict[int, Decimal | None] | None
+    db: Session, *, rfq: Rfq, response_id: int, overrides: dict[int, Decimal | None] | None
 ) -> list[tuple[RfqLine, Decimal, Decimal | None, int | None]]:
-    """docs/modules/rfq.md #8. `overrides is None` -> every RFQ line, at
-    the selected response's quoted price. Otherwise exactly the listed
-    lines, each at its override price, or the quoted one when no override
-    is given. A line with neither is rejected, naming the line -- a price
+    """docs/modules/rfq.md #8. `response_id` is a response captured on
+    this RFQ -- normally its decided one, but converting a second time
+    can name another to source the rest from a different supplier
+    (gap-fix: split sourcing). `overrides is None` -> every RFQ line, at
+    that response's quoted price. Otherwise exactly the listed lines,
+    each at its override price, or the quoted one when no override is
+    given. A line with neither is rejected, naming the line -- a price
     is never guessed.
 
     Also resolves each line's quoted quantity (the third tuple element) --
@@ -345,7 +468,7 @@ def resolve_conversion_prices(
             RfqResponseLine.quantity,
             RfqResponseLine.unit_of_measure_id,
         )
-        .filter(RfqResponseLine.response_id == rfq.selected_response_id)
+        .filter(RfqResponseLine.response_id == response_id)
         .all()
     )
     quoted_prices = {row.rfq_line_id: row.unit_price for row in quoted_rows}
@@ -380,6 +503,10 @@ class RfqConversionLine:
     conversion_factor: Decimal
     required_by_date: date | None
     remarks: str | None
+    # Which RFQ line this was converted from -- carried onto the PO line
+    # so several suppliers' POs against the same line can be added back
+    # up (gap-fix: split sourcing).
+    rfq_line_id: int
 
 
 def convert_to_purchase_order(
@@ -396,13 +523,19 @@ def convert_to_purchase_order(
     created_by_user_id: int | None,
 ) -> PurchaseOrder:
     """docs/modules/rfq.md #8/#14 -- only valid from `selected`. Supplier
-    comes from the selected response's invitation; each line's material
-    and quantity carry forward from the RFQ untouched. Built on the same
+    comes from the given response's invitation; each line's material and
+    quantity carry forward from the RFQ untouched. Built on the same
     app/services/purchase_order_service.create_purchase_order_with_lines
     the plain "New Purchase" flow uses -- one transaction, caller
-    commits. Moving to `converted` is also this action's own idempotency
-    guard: a repeated submission fails assert_transition_allowed before a
-    second Purchase Order could ever be created."""
+    commits.
+
+    Callable more than once on the same RFQ: each call sources the given
+    lines from one response (one supplier), for up to what remains
+    unsourced on each (the caller already checked this) -- gap-fix: split
+    sourcing. The RFQ only reaches its terminal `converted` status, and
+    stops accepting further conversions, once every line's full
+    requested quantity has been sourced across all of its Purchase
+    Orders; until then it stays `selected`."""
     assert_transition_allowed(rfq.status, CONVERTED)
 
     purchase_order = purchase_order_service.create_purchase_order_with_lines(
@@ -428,12 +561,18 @@ def convert_to_purchase_order(
                 conversion_factor=line.conversion_factor,
                 required_by_date=line.required_by_date,
                 remarks=line.remarks,
+                rfq_line_id=line.rfq_line_id,
             )
             for line in lines
         ],
     )
 
-    rfq.purchase_order_id = purchase_order.id
-    rfq.status = CONVERTED
+    # The first conversion's PO is kept as the header's own reference;
+    # every PO converted from this RFQ (this one included) is always
+    # available via PurchaseOrder.rfq_id for full traceability.
+    if rfq.purchase_order_id is None:
+        rfq.purchase_order_id = purchase_order.id
+    if is_fully_sourced(db, rfq):
+        rfq.status = CONVERTED
     db.add(rfq)
     return purchase_order
