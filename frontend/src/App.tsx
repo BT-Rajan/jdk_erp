@@ -9,6 +9,8 @@ import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentSettingsPage } from '@/pages/DocumentSettingsPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { FinancePaymentsPage } from '@/pages/FinancePaymentsPage'
+import { FinishedGoodsAdjustmentsPage } from '@/pages/FinishedGoodsAdjustmentsPage'
+import { FinishedGoodsStockPositionPage } from '@/pages/FinishedGoodsStockPositionPage'
 import { GoodsReceivingPage } from '@/pages/GoodsReceivingPage'
 import { InventoryAdjustmentsPage } from '@/pages/InventoryAdjustmentsPage'
 import { InventoryOpeningStockPage } from '@/pages/InventoryOpeningStockPage'
@@ -89,6 +91,8 @@ export function App() {
           <Route path="/inventory/adjustments" element={<InventoryAdjustmentsPage />} />
           <Route path="/inventory/opening-stock" element={<InventoryOpeningStockPage />} />
           <Route path="/inventory/reconciliation" element={<InventoryReconciliationPage />} />
+          <Route path="/inventory/finished-goods" element={<FinishedGoodsStockPositionPage />} />
+          <Route path="/inventory/finished-goods-adjustments" element={<FinishedGoodsAdjustmentsPage />} />
           <Route path="/finance/payments" element={<FinancePaymentsPage />} />
           <Route path="/finance/payments/:purchaseOrderId" element={<FinancePaymentsPage />} />
           <Route path="/users" element={<UsersPage />} />

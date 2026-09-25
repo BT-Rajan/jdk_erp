@@ -5,6 +5,7 @@ from app.models.document_template import DocumentTemplate
 from app.models.customer import Customer
 from app.models.email_account import EmailAccount
 from app.models.file import FileRecord
+from app.models.finished_goods_inventory import FinishedGoodsAdjustment, FinishedGoodsInventory, FinishedGoodsMovement
 from app.models.inventory import InventoryAdjustment, OpeningStockEntry, RawMaterialInventory, StockMovement
 from app.models.job import Job
 from app.models.machine import Machine
@@ -75,6 +76,9 @@ __all__ = [
     "RawMaterialInventory",
     "InventoryAdjustment",
     "OpeningStockEntry",
+    "FinishedGoodsMovement",
+    "FinishedGoodsInventory",
+    "FinishedGoodsAdjustment",
     "Rfq",
     "RfqLine",
     "RfqResponse",
