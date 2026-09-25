@@ -50,6 +50,16 @@ class StockMovement(Base, OrganisationScopedMixin):
     __tablename__ = "stock_movements"
     __table_args__ = (
         Index("ix_stock_movements_reference_type_reference_id", "reference_type", "reference_id"),
+        # A given source event can post at most one movement of a given
+        # kind -- e.g. one `receipt` and, separately, one `receipt_reversal`
+        # for the same receipt line, but never two `receipt` rows for it
+        # (gap-fix: Inventory ledger hardening). The single inventory-level
+        # guard against a source movement being posted twice, never relying
+        # on the caller alone.
+        UniqueConstraint(
+            "reference_type", "reference_id", "movement_type",
+            name="uq_stock_movements_reference_type_reference_id_movement_type",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -61,6 +71,17 @@ class StockMovement(Base, OrganisationScopedMixin):
     )
     movement_type: Mapped[str] = mapped_column(String(20), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    # The unit `quantity` above is expressed in -- always the raw
+    # material's own stock unit at the moment this row was written (never
+    # re-derived later: RawMaterial.unit_of_measure_id is permanently
+    # frozen the instant any StockMovement exists for it, so this can
+    # never drift from what it was when written). Recorded explicitly so
+    # the ledger row is self-describing rather than relying on that
+    # external freeze rule alone (gap-fix: Inventory ledger hardening --
+    # movement UOM).
+    unit_of_measure_id: Mapped[int] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     reference_type: Mapped[str] = mapped_column(String(30), nullable=False)
     reference_id: Mapped[int] = mapped_column(nullable=False)
     created_by_user_id: Mapped[int | None] = mapped_column(

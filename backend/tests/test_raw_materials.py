@@ -579,8 +579,10 @@ def test_edit_raw_material_rejects_unit_change_once_used_in_a_bom(
 def test_edit_raw_material_rejects_unit_change_once_a_stock_movement_exists(
     client, admin_user, db_session, organisation, cement_raw_material, warehouse_1, mass_kilogram_unit
 ):
-    """Same guard, for StockMovement/RawMaterialInventory's implicit
-    unit (docs/audit UOM risk: neither table stores its own unit)."""
+    """Same guard, once a StockMovement exists for this material -- its
+    own unit_of_measure_id column is just this movement's own record of
+    what was already true; the freeze is about RawMaterial.unit_of_measure_id
+    itself, never about to change once real quantities exist."""
     from app.models.inventory import RECEIPT, StockMovement
 
     movement = StockMovement(
@@ -589,6 +591,7 @@ def test_edit_raw_material_rejects_unit_change_once_a_stock_movement_exists(
         warehouse_id=warehouse_1.id,
         movement_type=RECEIPT,
         quantity=10,
+        unit_of_measure_id=cement_raw_material.unit_of_measure_id,
         reference_type="test",
         reference_id=1,
     )
