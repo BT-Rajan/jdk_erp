@@ -101,3 +101,32 @@ class OpeningStockOut(BaseModel):
     created_by_name: str | None
     created_at: datetime
     quantity_on_hand: Decimal
+
+
+class BalanceReconciliationOut(BaseModel):
+    """One (raw material, warehouse) pair's own comparison -- read-only,
+    never a fix (gap-fix: Stock Balance -- ledger/balance
+    reconciliation)."""
+
+    raw_material_id: int
+    material_name: str
+    warehouse_id: int
+    warehouse_name: str
+    ledger_sum: Decimal
+    quantity_on_hand: Decimal
+    difference: Decimal
+    matches: bool
+
+
+class ReconciliationReportOut(BaseModel):
+    """A report, not a dashboard: the full comparison for every (raw
+    material, warehouse) pair this organisation has a snapshot for, plus
+    a summary count. No history, no scheduling, no fix-it action --
+    exactly the gap the Stock Balance audit itself flagged as
+    unaddressed, surfaced here for a human to act on (a Controlled Stock
+    Adjustment, if the snapshot is what's wrong) rather than left
+    entirely unchecked."""
+
+    pairs_checked: int
+    mismatches_found: int
+    pairs: list[BalanceReconciliationOut]
