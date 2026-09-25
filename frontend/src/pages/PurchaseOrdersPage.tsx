@@ -247,8 +247,9 @@ const STATUS_TONES: Record<PurchaseOrderStatus, BadgeTone> = {
 
 const RESOLUTIONS: Record<PurchaseOrderReconciliation['kind'], { value: string; label: string }[]> = {
   receipt: [
-    { value: 'keep_pending', label: 'Keep remaining quantity pending (incl. replacement requested)' },
-    { value: 'cancel_remaining', label: 'Accept received quantity — cancel the remainder' },
+    { value: 'keep_pending', label: 'Await balance — remaining quantity still expected (incl. replacement requested)' },
+    { value: 'accept_received_quantity', label: 'Accept received quantity — amount owed stays as ordered' },
+    { value: 'cancel_remaining', label: 'Cancel balance — amount owed reduced to match what was received' },
   ],
   payment: [
     { value: 'accept_paid_amount', label: 'Accept the paid amount as the final amount' },
@@ -258,7 +259,8 @@ const RESOLUTIONS: Record<PurchaseOrderReconciliation['kind'], { value: string; 
 
 const RESOLUTION_LABELS: Record<string, string> = {
   keep_pending: 'Remaining kept pending',
-  cancel_remaining: 'Remainder cancelled',
+  accept_received_quantity: 'Received quantity accepted (amount owed unchanged)',
+  cancel_remaining: 'Balance cancelled (amount owed reduced)',
   accept_paid_amount: 'Paid amount accepted',
   correct_payment: 'Payment to be corrected',
 }

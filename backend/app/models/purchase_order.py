@@ -419,10 +419,17 @@ RECONCILIATION_RESOLVED = "resolved"
 # Resolutions the PO creator can choose (docs/modules/purchase_orders.md
 # Revision 6).
 RESOLVE_KEEP_PENDING = "keep_pending"  # remaining stays expected (incl. replacement requested)
-RESOLVE_CANCEL_REMAINING = "cancel_remaining"  # accept what was received; the rest is cancelled
+# Accept what was received as final for this line -- the outstanding
+# quantity is cancelled (the only way to stop a line blocking
+# all_received without rewriting its original ordered quantity), but
+# the PO's final_amount is held unchanged via amount_adjustment: the
+# short quantity is accepted operationally, never financially. Distinct
+# from RESOLVE_CANCEL_REMAINING, which lowers what's owed.
+RESOLVE_ACCEPT_RECEIVED_QUANTITY = "accept_received_quantity"
+RESOLVE_CANCEL_REMAINING = "cancel_remaining"  # accept what was received; the rest is cancelled, final_amount reduced
 RESOLVE_ACCEPT_PAID_AMOUNT = "accept_paid_amount"  # final amount becomes what was paid
 RESOLVE_CORRECT_PAYMENT = "correct_payment"  # Finance corrects the payment(s)
-RECEIPT_RESOLUTIONS = (RESOLVE_KEEP_PENDING, RESOLVE_CANCEL_REMAINING)
+RECEIPT_RESOLUTIONS = (RESOLVE_KEEP_PENDING, RESOLVE_ACCEPT_RECEIVED_QUANTITY, RESOLVE_CANCEL_REMAINING)
 PAYMENT_RESOLUTIONS = (RESOLVE_ACCEPT_PAID_AMOUNT, RESOLVE_CORRECT_PAYMENT)
 
 

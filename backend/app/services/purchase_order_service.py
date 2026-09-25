@@ -39,6 +39,7 @@ from app.models.purchase_order import (
     RECONCILIATION_REQUIRED,
     RECONCILIATION_RESOLVED,
     RESOLVE_ACCEPT_PAID_AMOUNT,
+    RESOLVE_ACCEPT_RECEIVED_QUANTITY,
     RESOLVE_CANCEL_REMAINING,
     RECEIPT_CANCELLED,
     RECEIPT_DRAFT,
@@ -367,13 +368,20 @@ def resolve_reconciliation(
         )
 
     lines = _lines(db, purchase_order)
-    if resolution == RESOLVE_CANCEL_REMAINING:
+    if resolution in (RESOLVE_CANCEL_REMAINING, RESOLVE_ACCEPT_RECEIVED_QUANTITY):
         if not any(line.received_quantity > 0 for line in lines):
             raise BusinessRuleError("Nothing has been received -- cancel the purchase order instead.")
+        before = final_amount(purchase_order, lines)
         for line in lines:
             line.cancelled_quantity = max(line.quantity - line.received_quantity, Decimal("0"))
             db.add(line)
         db.flush()
+        if resolution == RESOLVE_ACCEPT_RECEIVED_QUANTITY:
+            # Operationally accepted, never financially: the amount owed
+            # stays exactly what it was before the outstanding quantity
+            # was cancelled.
+            purchase_order.amount_adjustment += before - final_amount(purchase_order, lines)
+            db.add(purchase_order)
     elif resolution == RESOLVE_ACCEPT_PAID_AMOUNT:
         purchase_order.amount_adjustment += _paid(db, purchase_order) - final_amount(purchase_order, lines)
         db.add(purchase_order)

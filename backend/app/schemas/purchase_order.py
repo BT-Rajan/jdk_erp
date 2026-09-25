@@ -418,9 +418,9 @@ class CancelPaymentRequest(BaseModel):
 
 
 class ResolveReconciliationRequest(BaseModel):
-    """Receipt discrepancy: `keep_pending` or `cancel_remaining`. Payment
-    discrepancy: `accept_paid_amount` or `correct_payment`. A documented
-    note is always required."""
+    """Receipt discrepancy: `keep_pending`, `accept_received_quantity`, or
+    `cancel_remaining`. Payment discrepancy: `accept_paid_amount` or
+    `correct_payment`. A documented note is always required."""
 
     resolution: str
     note: str = Field(min_length=1, max_length=4000)

@@ -188,6 +188,61 @@ def test_cancel_remaining_reduces_the_final_amount(client, admin_headers, acme_s
     assert _pay(client, admin_headers, po["id"], "900").json()["status"] == "closed"
 
 
+def test_accept_received_quantity_leaves_the_amount_owed_unchanged(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material
+):
+    """Outcome 1 (Accept Received Quantity) vs outcome 3 (Cancel Balance):
+    both close out the line's outstanding balance the same mechanical way
+    (cancelled_quantity absorbs the shortfall, since the original ordered
+    quantity is never rewritten), but only Cancel Balance reduces what's
+    owed. Accept Received Quantity holds final_amount unchanged via
+    amount_adjustment -- the shortage is accepted operationally, not
+    financially."""
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)  # 100 x 10
+    _receive(client, admin_headers, po["id"], line_id, "90")
+    resolved = _resolve(
+        client, admin_headers, _po(client, admin_headers, po["id"]), "accept_received_quantity", "Supplier will not ship the rest; keep the agreed total"
+    )
+    assert resolved.status_code == 200
+    body = resolved.json()
+    assert body["status"] == "received"
+    assert body["lines"][0]["cancelled_quantity"] == "10.0000"
+    # The historical order itself is untouched.
+    assert body["lines"][0]["quantity"] == "100.0000"
+    assert body["lines"][0]["unit_price"] == "10.0000"
+    # Unlike Cancel Balance, the full original amount is still owed.
+    assert body["final_amount"] == "1000.0000"
+    rec = body["reconciliations"][0]
+    assert rec["resolution"] == "accept_received_quantity"
+    assert rec["resolution_note"] == "Supplier will not ship the rest; keep the agreed total"
+    assert rec["resolved_by_user_id"] is not None
+    assert rec["resolved_at"] is not None
+
+    # Paying only the reduced (900) amount does NOT close it -- the full
+    # 1000 is still owed.
+    assert _pay(client, admin_headers, po["id"], "900", is_final=True).json()["status"] == "payment_reconciliation"
+
+
+def test_reconciliation_resolutions_do_not_rewrite_the_original_po(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material
+):
+    """Supplier, unit and the original ordered quantity/price are never
+    rewritten by any of the three receipt resolutions."""
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    original_line = po["lines"][0]
+    _receive(client, admin_headers, po["id"], line_id, "90")
+    resolved = _resolve(
+        client, admin_headers, _po(client, admin_headers, po["id"]), "keep_pending", "Awaiting the rest"
+    ).json()
+    line = resolved["lines"][0]
+    assert (line["quantity"], line["unit_price"], line["unit_of_measure_id"]) == (
+        original_line["quantity"], original_line["unit_price"], original_line["unit_of_measure_id"],
+    )
+    assert resolved["supplier_id"] == po["supplier_id"]
+    assert resolved["status"] == "partially_received"
+    assert resolved["lines"][0]["cancelled_quantity"] == "0.0000"
+
+
 def test_only_the_creator_resolves(client, admin_headers, db_session, organisation, active_user, acme_supplier, warehouse_1, cement_raw_material):
     po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
     _receive(client, admin_headers, po["id"], line_id, "50")
