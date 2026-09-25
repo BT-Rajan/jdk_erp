@@ -69,6 +69,52 @@ def line_unit_ratio(
     return uom_conversion.resolve_conversion_ratio(unit, material_unit, material, material_alternate_unit)
 
 
+def _resolve_quoted_unit(db: Session, *, unit_id: int, raw_material_id: int, organisation_id: int) -> None:
+    """Validates a supplier-quoted unit that differs from its RFQ line's
+    own unit: must be an active unit in this organisation, and must
+    convert to the material's own unit -- the same discipline
+    app/api/rfqs.py's _validate_form already applies to an RFQ line's own
+    unit_of_measure_id (gap-fix: supplier UOM mismatch, e.g. RFQ in KG,
+    supplier quotes per TON)."""
+    material = (
+        db.query(RawMaterial)
+        .filter(
+            RawMaterial.id == raw_material_id,
+            RawMaterial.organisation_id == organisation_id,
+            RawMaterial.is_active.is_(True),
+        )
+        .first()
+    )
+    if material is None:
+        raise BusinessRuleError("This RFQ line's material is no longer active.")
+    unit_ids = [unit_id, material.unit_of_measure_id]
+    if material.alternate_conversion_unit_of_measure_id:
+        unit_ids.append(material.alternate_conversion_unit_of_measure_id)
+    units = {
+        u.id: u
+        for u in db.query(UnitOfMeasure).filter(
+            UnitOfMeasure.id.in_(unit_ids), UnitOfMeasure.organisation_id == organisation_id
+        )
+    }
+    unit = units.get(unit_id)
+    if unit is None or not unit.is_active:
+        raise ValidationError(
+            "The quoted unit must be an active unit in your organisation.",
+            fields={"lines": "Invalid quoted unit of measure."},
+        )
+    material_unit = units[material.unit_of_measure_id]
+    alternate = (
+        units.get(material.alternate_conversion_unit_of_measure_id)
+        if material.alternate_conversion_unit_of_measure_id
+        else None
+    )
+    if line_unit_ratio(unit, material, alternate, material_unit) is None:
+        raise ValidationError(
+            f"{material.name}: the quoted unit {unit.code} does not convert to its unit {material_unit.code}.",
+            fields={"lines": "Quoted unit has no conversion to the material's unit."},
+        )
+
+
 @dataclass
 class ResponseLineInput:
     rfq_line_id: int
@@ -76,6 +122,9 @@ class ResponseLineInput:
     # None -> quoted at the RFQ line's own requested quantity (gap-fix:
     # partial quotation).
     quantity: Decimal | None
+    # None -> quoted in the RFQ line's own requested unit (gap-fix:
+    # supplier UOM mismatch).
+    unit_of_measure_id: int | None
     delivery_days: int | None
     remarks: str | None
 
@@ -114,15 +163,23 @@ def capture_response(
         raise BusinessRuleError("Can only capture a supplier response for an issued RFQ.")
 
     requested_ids = {line.rfq_line_id for line in lines}
-    valid_ids = {
-        row.id
-        for row in db.query(RfqLine.id).filter(RfqLine.rfq_id == rfq.id, RfqLine.id.in_(requested_ids)).all()
+    rfq_lines_by_id = {
+        row.id: row
+        for row in db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id, RfqLine.id.in_(requested_ids)).all()
     }
-    if valid_ids != requested_ids:
+    if set(rfq_lines_by_id) != requested_ids:
         raise ValidationError(
             "One or more quoted lines do not belong to this RFQ.",
             fields={"lines": "Every quoted line must be a line on this RFQ."},
         )
+
+    for line in lines:
+        if line.unit_of_measure_id is None:
+            continue
+        rfq_line = rfq_lines_by_id[line.rfq_line_id]
+        if line.unit_of_measure_id == rfq_line.unit_of_measure_id:
+            continue
+        _resolve_quoted_unit(db, unit_id=line.unit_of_measure_id, raw_material_id=rfq_line.raw_material_id, organisation_id=rfq.organisation_id)
 
     response = RfqResponse(
         organisation_id=rfq.organisation_id,
@@ -145,6 +202,7 @@ def capture_response(
             rfq_line_id=line.rfq_line_id,
             unit_price=line.unit_price,
             quantity=line.quantity,
+            unit_of_measure_id=line.unit_of_measure_id,
             delivery_days=line.delivery_days,
             remarks=line.remarks,
         )
@@ -255,7 +313,7 @@ def get_selected_invitation(db: Session, rfq: Rfq) -> RfqSupplierInvitation:
 
 def resolve_conversion_prices(
     db: Session, *, rfq: Rfq, overrides: dict[int, Decimal | None] | None
-) -> list[tuple[RfqLine, Decimal, Decimal | None]]:
+) -> list[tuple[RfqLine, Decimal, Decimal | None, int | None]]:
     """docs/modules/rfq.md #8. `overrides is None` -> every RFQ line, at
     the selected response's quoted price. Otherwise exactly the listed
     lines, each at its override price, or the quoted one when no override
@@ -267,7 +325,10 @@ def resolve_conversion_prices(
     line (the RFQ line's own requested quantity applies), otherwise the
     quantity the supplier actually agreed to (gap-fix: partial
     quotation must carry through to the PO, not just be recorded and
-    ignored)."""
+    ignored) -- and each line's quoted unit of measure (the fourth tuple
+    element) -- None when the selected response quoted in the RFQ line's
+    own unit, otherwise the unit the supplier actually quoted in (gap-fix:
+    supplier UOM mismatch must carry through to the PO)."""
     rfq_lines = db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id).order_by(RfqLine.id).all()
     if overrides is not None:
         lines_by_id = {line.id: line for line in rfq_lines}
@@ -278,21 +339,27 @@ def resolve_conversion_prices(
         raise BusinessRuleError("This RFQ has no lines to convert.")
 
     quoted_rows = (
-        db.query(RfqResponseLine.rfq_line_id, RfqResponseLine.unit_price, RfqResponseLine.quantity)
+        db.query(
+            RfqResponseLine.rfq_line_id,
+            RfqResponseLine.unit_price,
+            RfqResponseLine.quantity,
+            RfqResponseLine.unit_of_measure_id,
+        )
         .filter(RfqResponseLine.response_id == rfq.selected_response_id)
         .all()
     )
     quoted_prices = {row.rfq_line_id: row.unit_price for row in quoted_rows}
     quoted_quantities = {row.rfq_line_id: row.quantity for row in quoted_rows}
+    quoted_units = {row.rfq_line_id: row.unit_of_measure_id for row in quoted_rows}
 
-    resolved: list[tuple[RfqLine, Decimal, Decimal | None]] = []
+    resolved: list[tuple[RfqLine, Decimal, Decimal | None, int | None]] = []
     missing: list[int] = []
     for line in rfq_lines:
         price = (overrides or {}).get(line.id) or quoted_prices.get(line.id)
         if price is None:
             missing.append(line.id)
         else:
-            resolved.append((line, price, quoted_quantities.get(line.id)))
+            resolved.append((line, price, quoted_quantities.get(line.id), quoted_units.get(line.id)))
     if missing:
         raise ValidationError(
             "Enter a unit price for every line the selected supplier did not quote.",

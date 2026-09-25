@@ -567,6 +567,98 @@ def test_capture_response_rejects_non_positive_quoted_quantity(client, admin_hea
     assert response.status_code == 422
 
 
+# --- gap fix: supplier-quoted UOM -----------------------------------------------------------
+
+
+def test_quote_in_the_rfq_line_own_unit_needs_no_override(
+    client, admin_headers, acme_supplier, gravel_raw_material, mass_kilogram_unit, warehouse_1, db_session
+):
+    """Scenario 1: the supplier quotes in the same unit the RFQ line
+    asked for -- explicitly selecting it changes nothing, and the PO
+    still gets a plain 1:1 conversion factor."""
+    rfq = _create(
+        client, admin_headers, _form([acme_supplier.id], [_line(gravel_raw_material, mass_kilogram_unit.id, "100")])
+    ).json()
+    line_id = rfq["lines"][0]["id"]
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    body = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": line_id, "unit_price": "5", "quantity": "100", "unit_of_measure_id": mass_kilogram_unit.id}],
+    ).json()
+    response = _invitation_for(body, acme_supplier.id)["responses"][0]
+    assert response["lines"][0]["unit_of_measure_id"] == mass_kilogram_unit.id
+
+    accepted = _accept(client, admin_headers, rfq["id"], response["id"], [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    line = db_session.query(PurchaseOrderLine).one()
+    assert (line.unit_of_measure_id, line.conversion_factor, line.unit_price) == (
+        mass_kilogram_unit.id, Decimal("1.000000"), Decimal("5.0000"),
+    )
+
+
+def test_quote_in_a_different_compatible_unit_carries_through_to_the_po(
+    client, admin_headers, acme_supplier, gravel_raw_material, mass_kilogram_unit, tonne_unit, warehouse_1, db_session
+):
+    """Scenario 2: the RFQ asks for 1000 KG, the supplier quotes 1 TON @
+    85 KWD. Scenario 3: the original quoted unit and quantity remain
+    visible/auditable on the response, and the RFQ's own line is
+    untouched. Scenario 4: the selected quote is usable for the PO --
+    created in what the supplier actually quoted, not the RFQ's KG ask
+    (gap-fix: supplier UOM mismatch)."""
+    rfq = _create(
+        client, admin_headers, _form([acme_supplier.id], [_line(gravel_raw_material, mass_kilogram_unit.id, "1000")])
+    ).json()
+    line_id = rfq["lines"][0]["id"]
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    captured = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": line_id, "unit_price": "85", "quantity": "1", "unit_of_measure_id": tonne_unit.id}],
+    )
+    assert captured.status_code == 201, captured.text
+    body = captured.json()
+    response = _invitation_for(body, acme_supplier.id)["responses"][0]
+
+    quoted_line = response["lines"][0]
+    assert quoted_line["unit_of_measure_id"] == tonne_unit.id
+    assert quoted_line["quantity"] == "1.0000"
+    assert rfq["lines"][0]["quantity"] == "1000.0000"
+    assert rfq["lines"][0]["unit_of_measure_id"] == mass_kilogram_unit.id
+
+    accepted = _accept(client, admin_headers, rfq["id"], response["id"], [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    line = db_session.query(PurchaseOrderLine).one()
+    assert (line.quantity, line.unit_of_measure_id, line.unit_price, line.conversion_factor) == (
+        Decimal("1.0000"), tonne_unit.id, Decimal("85.0000"), Decimal("1000.000000"),
+    )
+
+
+def test_quote_unit_override_requires_a_quantity(client, admin_headers, issued_rfq, acme_supplier, tonne_unit):
+    rfq, cement_id, _ = issued_rfq
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    response = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": cement_id, "unit_price": "42", "unit_of_measure_id": tonne_unit.id}],
+    )
+    assert response.status_code == 422
+
+
+def test_quote_unit_must_convert_to_the_material_unit(client, admin_headers, issued_rfq, acme_supplier, tonne_unit):
+    """Cement is in plain KG (no dimension) -- a quote in tonnes cannot be
+    interpreted, the same rule the RFQ line's own unit is held to."""
+    rfq, cement_id, _ = issued_rfq
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    response = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": cement_id, "unit_price": "42", "quantity": "1", "unit_of_measure_id": tonne_unit.id}],
+    )
+    assert response.status_code == 422
+
+
 def test_add_follow_up_requires_a_non_blank_note(client, admin_headers, issued_rfq, beta_supplier):
     rfq, _, _ = issued_rfq
     beta = _invitation_for(rfq, beta_supplier.id)["id"]

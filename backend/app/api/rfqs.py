@@ -844,6 +844,7 @@ def capture_rfq_response(
                 rfq_line_id=line.rfq_line_id,
                 unit_price=line.unit_price,
                 quantity=line.quantity,
+                unit_of_measure_id=line.unit_of_measure_id,
                 delivery_days=line.delivery_days,
                 remarks=line.remarks,
             )
@@ -1061,18 +1062,23 @@ def convert_rfq_to_purchase_order(
     # agreed; the unit's ratio to the material's own unit is stored on the
     # line so receiving posts stock correctly. `quoted_quantity` overrides
     # the RFQ line's own requested quantity when the selected response
-    # quoted a different one (gap-fix: partial quotation).
+    # quoted a different one (gap-fix: partial quotation). `quoted_unit_id`
+    # likewise overrides the RFQ line's own unit when the supplier quoted
+    # in a different one (gap-fix: supplier UOM mismatch) -- the PO is
+    # always created in what the supplier actually agreed to, never the
+    # RFQ's original ask.
     conversion_lines = []
-    for rfq_line, unit_price, quoted_quantity in priced_lines:
+    for rfq_line, unit_price, quoted_quantity, quoted_unit_id in priced_lines:
         material = _resolve_active_raw_material(db, rfq_line.raw_material_id, current_user.organisation_id)
+        effective_unit_id = quoted_unit_id if quoted_unit_id is not None else rfq_line.unit_of_measure_id
         ratio = Decimal(1)
-        if rfq_line.unit_of_measure_id != material.unit_of_measure_id:
-            unit_ids = [rfq_line.unit_of_measure_id, material.unit_of_measure_id]
+        if effective_unit_id != material.unit_of_measure_id:
+            unit_ids = [effective_unit_id, material.unit_of_measure_id]
             if material.alternate_conversion_unit_of_measure_id:
                 unit_ids.append(material.alternate_conversion_unit_of_measure_id)
             units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids))}
             ratio = rfq_service.line_unit_ratio(
-                units[rfq_line.unit_of_measure_id],
+                units[effective_unit_id],
                 material,
                 units.get(material.alternate_conversion_unit_of_measure_id),
                 units[material.unit_of_measure_id],
@@ -1086,7 +1092,7 @@ def convert_rfq_to_purchase_order(
                 raw_material=material,
                 quantity=quoted_quantity if quoted_quantity is not None else rfq_line.quantity,
                 unit_price=unit_price,
-                unit_of_measure_id=rfq_line.unit_of_measure_id,
+                unit_of_measure_id=effective_unit_id,
                 conversion_factor=ratio,
                 required_by_date=rfq_line.required_by_date,
                 remarks=rfq_line.remarks,

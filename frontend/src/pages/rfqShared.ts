@@ -15,6 +15,8 @@ export interface RfqResponseLine {
   unit_price: string
   /** null -> quoted at the RFQ line's own requested quantity. */
   quantity: string | null
+  /** null -> quoted in the RFQ line's own requested unit. */
+  unit_of_measure_id: number | null
   delivery_days: number | null
   remarks: string | null
 }

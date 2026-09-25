@@ -202,6 +202,16 @@ class RfqResponseLine(Base, TimestampMixin):
     # never forced to be re-entered when it matches (docs/modules/rfq.md
     # gap-fix: partial quotation).
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    # The unit `unit_price`/`quantity` above are actually expressed in --
+    # null means "the RFQ line's own requested unit", never silently
+    # assumed when the supplier quoted in a different one (gap-fix:
+    # supplier UOM mismatch, e.g. RFQ in KG, supplier quotes per TON).
+    # Validated active and convertible to the material's own unit at
+    # capture time, the same discipline RfqLine.unit_of_measure_id
+    # already applies (app/services/rfq_service.capture_response).
+    unit_of_measure_id: Mapped[int | None] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     delivery_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
 

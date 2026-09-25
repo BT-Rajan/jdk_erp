@@ -153,7 +153,9 @@ function ComparisonTable({
                       <>
                         {formatPrice(quoted.unit_price)}
                         {quoted.quantity !== null && (
-                          <span className="block text-xs text-gold-100/50">Qty quoted: {formatNumber(quoted.quantity)} {unitCode(line.unit_of_measure_id)}</span>
+                          <span className="block text-xs text-gold-100/50">
+                            Qty quoted: {formatNumber(quoted.quantity)} {unitCode(quoted.unit_of_measure_id ?? line.unit_of_measure_id)}
+                          </span>
                         )}
                         {quoted.delivery_days !== null && <span className="block text-xs text-gold-100/50">{quoted.delivery_days} days</span>}
                       </>
@@ -203,6 +205,8 @@ interface CaptureLineDraft {
   unit_price: string
   /** Blank -> quoted at the RFQ line's own requested quantity, never forced. */
   quantity: string
+  /** Blank -> quoted in the RFQ line's own requested unit, never forced. */
+  unit_of_measure_id: string
   delivery_days: string
   remarks: string
 }
@@ -502,7 +506,10 @@ export function RfqsPage() {
   function updateCaptureLine(lineId: number, patch: Partial<CaptureLineDraft>) {
     setCaptureLines((prev) => ({
       ...prev,
-      [lineId]: { ...(prev[lineId] ?? { unit_price: '', quantity: '', delivery_days: '', remarks: '' }), ...patch },
+      [lineId]: {
+        ...(prev[lineId] ?? { unit_price: '', quantity: '', unit_of_measure_id: '', delivery_days: '', remarks: '' }),
+        ...patch,
+      },
     }))
   }
 
@@ -522,6 +529,10 @@ export function RfqsPage() {
       }
       if (quoted.some(({ draft }) => draft.quantity.trim() !== '' && !isPositiveDecimal(draft.quantity.trim()))) {
         setCaptureError('Quoted quantity must be a positive number.')
+        return
+      }
+      if (quoted.some(({ draft }) => draft.unit_of_measure_id.trim() !== '' && draft.quantity.trim() === '')) {
+        setCaptureError('Enter the quantity quoted in that unit when quoting in a different unit.')
         return
       }
       if (quoted.some(({ draft }) => draft.delivery_days.trim() !== '' && !INTEGER_RE.test(draft.delivery_days.trim()))) {
@@ -544,6 +555,7 @@ export function RfqsPage() {
             rfq_line_id: line.id,
             unit_price: draft.unit_price.trim(),
             quantity: draft.quantity.trim() === '' ? null : draft.quantity.trim(),
+            unit_of_measure_id: draft.unit_of_measure_id.trim() === '' ? null : Number(draft.unit_of_measure_id),
             delivery_days: draft.delivery_days.trim() === '' ? null : Number(draft.delivery_days),
             remarks: draft.remarks.trim() || null,
           })),
@@ -652,6 +664,17 @@ export function RfqsPage() {
     const map = new Map<number, string>()
     for (const l of selectedResponse?.response.lines ?? []) {
       if (l.quantity !== null) map.set(l.rfq_line_id, l.quantity)
+    }
+    return map
+  }, [selectedResponse])
+
+  /** The unit the PO line will actually be created in -- the approved
+   * quote's own quoted unit when it quoted in a different one (gap-fix:
+   * supplier UOM mismatch), otherwise the RFQ line's own requested unit. */
+  const convertUnits = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const l of selectedResponse?.response.lines ?? []) {
+      if (l.unit_of_measure_id !== null) map.set(l.rfq_line_id, l.unit_of_measure_id)
     }
     return map
   }, [selectedResponse])
@@ -982,9 +1005,11 @@ export function RfqsPage() {
                                     <tr key={quoted.id} className="border-t border-ink-700">
                                       <td className="py-1 pr-3">{rfqLine ? materialName(rfqLine.raw_material_id) : `Item #${quoted.rfq_line_id}`}</td>
                                       <td className="py-1 pr-3">
-                                        {rfqLine ? `${formatNumber(quoted.quantity ?? rfqLine.quantity)} ${unitCode(rfqLine.unit_of_measure_id)}` : ''}
+                                        {rfqLine
+                                          ? `${formatNumber(quoted.quantity ?? rfqLine.quantity)} ${unitCode(quoted.unit_of_measure_id ?? rfqLine.unit_of_measure_id)}`
+                                          : ''}
                                         {rfqLine && quoted.quantity !== null && quoted.quantity !== rfqLine.quantity && (
-                                          <span className="block text-xs text-gold-100/50">Requested {formatNumber(rfqLine.quantity)}</span>
+                                          <span className="block text-xs text-gold-100/50">Requested {formatNumber(rfqLine.quantity)} {unitCode(rfqLine.unit_of_measure_id)}</span>
                                         )}
                                       </td>
                                       <td className="py-1 pr-3">{formatPrice(quoted.unit_price)}</td>
@@ -1048,7 +1073,8 @@ export function RfqsPage() {
             <p className="text-sm text-gold-100/70">
               Enter the quoted unit price per item. Leave an item blank if the supplier did not quote it. Leave "Qty
               Quoted" blank if the supplier quoted the requested quantity -- only fill it in when they quoted a
-              different quantity.
+              different quantity. Leave "Unit Quoted" as "(same as requested)" unless the supplier quoted in a
+              different unit (e.g. per tonne instead of per kg) -- then select it and enter the quantity in that unit.
             </p>
             <table className="w-full text-sm">
               <thead>
@@ -1056,6 +1082,7 @@ export function RfqsPage() {
                   <th className="py-2 pr-3">Product / Material</th>
                   <th className="py-2 pr-3">Qty Requested</th>
                   <th className="py-2 pr-3">Qty Quoted</th>
+                  <th className="py-2 pr-3">Unit Quoted</th>
                   <th className="py-2 pr-3">Unit Price</th>
                   <th className="py-2 pr-3">Delivery Days</th>
                   <th className="py-2 pr-3">Remarks</th>
@@ -1077,6 +1104,19 @@ export function RfqsPage() {
                         value={captureLines[line.id]?.quantity ?? ''}
                         onChange={(e) => updateCaptureLine(line.id, { quantity: e.target.value })}
                       />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <select
+                        aria-label={`Unit quoted for ${materialName(line.raw_material_id)}`}
+                        className="w-32 rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
+                        value={captureLines[line.id]?.unit_of_measure_id ?? ''}
+                        onChange={(e) => updateCaptureLine(line.id, { unit_of_measure_id: e.target.value })}
+                      >
+                        <option value="">(same as requested)</option>
+                        {units.filter((u) => u.is_active).map((u) => (
+                          <option key={u.id} value={u.id}>{u.code}</option>
+                        ))}
+                      </select>
                     </td>
                     <td className="py-2 pr-3">
                       <input
@@ -1275,9 +1315,11 @@ export function RfqsPage() {
                       </td>
                       <td className="py-2 pr-3">{materialName(line.raw_material_id)}</td>
                       <td className="py-2 pr-3">
-                        {formatNumber(quantity)} {unitCode(line.unit_of_measure_id)}
-                        {convertQuantities.has(line.id) && (
-                          <span className="block text-xs text-gold-100/50">Requested {formatNumber(line.quantity)}</span>
+                        {formatNumber(quantity)} {unitCode(convertUnits.get(line.id) ?? line.unit_of_measure_id)}
+                        {(convertQuantities.has(line.id) || convertUnits.has(line.id)) && (
+                          <span className="block text-xs text-gold-100/50">
+                            Requested {formatNumber(line.quantity)} {unitCode(line.unit_of_measure_id)}
+                          </span>
                         )}
                       </td>
                       <td className="py-2 pr-3">

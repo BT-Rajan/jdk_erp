@@ -48,6 +48,10 @@ class RfqResponseLineOut(BaseModel):
     # set -> the supplier quoted a different quantity (gap-fix: partial
     # quotation, docs/modules/rfq.md).
     quantity: Decimal | None
+    # None -> unit_price/quantity are in the RFQ line's own requested
+    # unit; set -> the supplier quoted in a different unit (gap-fix:
+    # supplier UOM mismatch, docs/modules/rfq.md).
+    unit_of_measure_id: int | None
     delivery_days: int | None
     remarks: str | None
 
@@ -211,6 +215,12 @@ class RfqResponseLineRequest(BaseModel):
     # never forced to be re-entered. Set only when the supplier quoted a
     # different quantity (gap-fix: partial quotation, docs/modules/rfq.md).
     quantity: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
+    # Omitted/null -> quoted in the RFQ line's own requested unit. Set
+    # only when the supplier quoted in a different unit (gap-fix:
+    # supplier UOM mismatch, docs/modules/rfq.md) -- when set, quantity
+    # must also be given, since the RFQ line's own quantity number was
+    # never meant for a different unit.
+    unit_of_measure_id: int | None = None
     delivery_days: int | None = Field(default=None, ge=0, le=3650)
     remarks: str | None = Field(default=None, max_length=2000)
 
@@ -232,6 +242,12 @@ class RfqResponseLineRequest(BaseModel):
         if value is not None and value <= 0:
             raise ValueError("Quantity must be greater than zero.")
         return value
+
+    @model_validator(mode="after")
+    def _check_quantity_given_with_unit(self) -> "RfqResponseLineRequest":
+        if self.unit_of_measure_id is not None and self.quantity is None:
+            raise ValueError("quantity is required when quoting in a different unit of measure.")
+        return self
 
 
 class RfqCaptureResponseRequest(BaseModel):

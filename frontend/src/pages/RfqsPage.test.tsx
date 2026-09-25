@@ -51,7 +51,7 @@ function response(id: number, invitationId: number, lines: { rfq_line_id: number
     freight_terms: null,
     note: null,
     created_by_user_id: 1,
-    lines: lines.map((l, i) => ({ id: id * 10 + i, quantity: null, delivery_days: null, remarks: null, ...l })),
+    lines: lines.map((l, i) => ({ id: id * 10 + i, quantity: null, unit_of_measure_id: null, delivery_days: null, remarks: null, ...l })),
     files: [],
   }
 }
