@@ -52,3 +52,52 @@ class AdjustmentOut(BaseModel):
     created_by_name: str | None
     created_at: datetime
     quantity_on_hand: Decimal
+
+
+class RecordOpeningStockRequest(BaseModel):
+    """Opening stock is always IN -- quantity must be strictly positive
+    (rule 2: never used to reduce existing stock; that's what a
+    Controlled Stock Adjustment is for). No unit_of_measure_id field --
+    same reasoning as AdjustStockRequest: the raw material's own current
+    stock unit is resolved server-side, never accepted as caller input
+    (gap-fix: Controlled Opening Stock -- UOM, no arbitrary unit
+    entry)."""
+
+    raw_material_id: int
+    warehouse_id: int
+    quantity: Decimal = Field(max_digits=14, decimal_places=4)
+    reason: str
+
+    @field_validator("quantity")
+    @classmethod
+    def _check_positive(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("Opening stock quantity must be greater than zero.")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def _check_reason(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("A reason/description is required to record opening stock.")
+        return value.strip()
+
+
+class OpeningStockOut(BaseModel):
+    """The created opening-stock entry's own record, plus the resulting
+    balance -- confirmation it landed, not a ledger/history view (no
+    inventory dashboard, no listing, in this pass)."""
+
+    id: int
+    raw_material_id: int
+    material_name: str
+    warehouse_id: int
+    warehouse_name: str
+    quantity: Decimal
+    unit_of_measure_id: int
+    unit_code: str
+    reason: str
+    created_by_user_id: int | None
+    created_by_name: str | None
+    created_at: datetime
+    quantity_on_hand: Decimal

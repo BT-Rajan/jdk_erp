@@ -19,10 +19,18 @@ from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 # the adjustment's direction (positive = stock in, negative = stock out),
 # so there is no separate direction column, the same reasoning
 # RECEIPT_REVERSAL's own negative quantity already established.
+# `OPENING_STOCK` (Controlled Opening Stock) is the one-time, IN-only
+# movement that establishes the verified physical stock a (raw material,
+# warehouse) pair starts with when it's first brought under this
+# ledger's control -- always positive (never used to reduce stock; that's
+# what ADJUSTMENT is for), and, unlike every other movement type here, is
+# further guarded to at most one per (raw_material_id, warehouse_id) pair
+# ever (see OpeningStockEntry below).
 RECEIPT = "receipt"
 RECEIPT_REVERSAL = "receipt_reversal"
 ADJUSTMENT = "adjustment"
-MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL, ADJUSTMENT)
+OPENING_STOCK = "opening_stock"
+MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL, ADJUSTMENT, OPENING_STOCK)
 
 # Generic (reference_type, reference_id), not a hard FK, so a future
 # Production/Sales movement can point at its own source document the same
@@ -39,9 +47,12 @@ MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL, ADJUSTMENT)
 # pointing at its own InventoryAdjustment row (below) -- the one place
 # its mandatory reason lives, the same "a movement's reference points at
 # whatever row explains it" shape the receipt reference already uses.
+# `OPENING_STOCK_REFERENCE` is what every Controlled Opening Stock
+# movement writes, pointing at its own OpeningStockEntry row (below).
 PURCHASE_ORDER_LINE_REFERENCE = "purchase_order_line"
 PURCHASE_ORDER_RECEIPT_LINE_REFERENCE = "purchase_order_receipt_line"
 ADJUSTMENT_REFERENCE = "inventory_adjustment"
+OPENING_STOCK_REFERENCE = "opening_stock"
 
 
 class StockMovement(Base, OrganisationScopedMixin):
@@ -145,4 +156,38 @@ class InventoryAdjustment(Base, OrganisationScopedMixin):
     __tablename__ = "inventory_adjustments"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+
+
+class OpeningStockEntry(Base, OrganisationScopedMixin):
+    """The one-time record backing a Controlled Opening Stock movement --
+    its own reason/description, and, via its UNIQUE(raw_material_id,
+    warehouse_id), the actual duplicate-protection mechanism rule 7
+    requires: this row's own insert is what a second opening-stock
+    submission for the same pair collides on (caught the same way
+    app/services/inventory_service._insert_movement already catches a
+    duplicate StockMovement's own IntegrityError), not merely the
+    already-unique reference_id every StockMovement's own reference
+    trivially has. Everything else the movement needs (material,
+    warehouse, quantity, unit, who, when) lives on its own StockMovement
+    row (movement_type=OPENING_STOCK, reference_type=OPENING_STOCK_REFERENCE,
+    reference_id=this row's id), the same shape InventoryAdjustment
+    already is for ADJUSTMENT. Never edited or deleted: if stock later
+    proves wrong, that's a Controlled Stock Adjustment, never a rewrite
+    of this row."""
+
+    __tablename__ = "opening_stock_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "raw_material_id", "warehouse_id", name="uq_opening_stock_entries_raw_material_id_warehouse_id"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    raw_material_id: Mapped[int] = mapped_column(
+        ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    warehouse_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouses.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     reason: Mapped[str] = mapped_column(String(500), nullable=False)

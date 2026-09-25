@@ -101,6 +101,7 @@ RFQ_SENT = "rfq_sent"
 RFQ_SEND_FAILED = "rfq_send_failed"
 DOCUMENT_TEMPLATE_UPDATED = "document_template_updated"
 INVENTORY_ADJUSTMENT_CREATED = "inventory_adjustment_created"
+INVENTORY_OPENING_STOCK_RECORDED = "inventory_opening_stock_recorded"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"

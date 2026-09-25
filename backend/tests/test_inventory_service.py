@@ -19,9 +19,12 @@ from app.core.errors import BusinessRuleError, ConflictError
 from app.models.inventory import (
     ADJUSTMENT,
     ADJUSTMENT_REFERENCE,
+    OPENING_STOCK,
+    OPENING_STOCK_REFERENCE,
     RECEIPT,
     RECEIPT_REVERSAL,
     InventoryAdjustment,
+    OpeningStockEntry,
     RawMaterialInventory,
     StockMovement,
 )
@@ -57,6 +60,19 @@ def _reverse(db_session, organisation, cement_raw_material, warehouse_1, quantit
 
 def _adjust(db_session, organisation, cement_raw_material, warehouse_1, quantity, reason="Cycle count correction"):
     return inventory_service.adjust_stock(
+        db_session,
+        organisation_id=organisation.id,
+        raw_material_id=cement_raw_material.id,
+        warehouse_id=warehouse_1.id,
+        quantity=Decimal(quantity),
+        unit_of_measure_id=cement_raw_material.unit_of_measure_id,
+        reason=reason,
+        created_by_user_id=None,
+    )
+
+
+def _open_stock(db_session, organisation, cement_raw_material, warehouse_1, quantity, reason="Physical count at go-live"):
+    return inventory_service.record_opening_stock(
         db_session,
         organisation_id=organisation.id,
         raw_material_id=cement_raw_material.id,
@@ -584,3 +600,107 @@ def test_adjustment_balance_matches_the_ledger_sum(db_session, organisation, cem
 
     assert _on_hand(db_session, cement_raw_material, warehouse_1) == _ledger_sum(db_session, cement_raw_material, warehouse_1)
     assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("45.0000")
+
+
+# --- Controlled Opening Stock ------------------------------------------------------------------
+
+
+def test_valid_opening_stock_increases_balance(db_session, organisation, cement_raw_material, warehouse_1):
+    _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "250")
+    db_session.commit()
+
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("250.0000")
+
+
+def test_opening_stock_creates_an_append_only_ledger_entry_distinct_from_other_movements(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    """Traceability: opening stock must be clearly identifiable as
+    opening stock, never confusable with a receipt, reversal or
+    adjustment."""
+    movement = _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "100")
+    db_session.commit()
+
+    assert movement.movement_type == OPENING_STOCK
+    assert movement.reference_type == OPENING_STOCK_REFERENCE
+    assert movement.quantity == Decimal("100.0000")
+    assert movement.unit_of_measure_id == cement_raw_material.unit_of_measure_id
+
+    stored = db_session.query(StockMovement).filter(StockMovement.id == movement.id).one()
+    assert stored.movement_type == OPENING_STOCK
+
+
+def test_opening_stock_records_user_time_and_reason_correctly(
+    db_session, organisation, active_user, cement_raw_material, warehouse_1
+):
+    movement = inventory_service.record_opening_stock(
+        db_session,
+        organisation_id=organisation.id,
+        raw_material_id=cement_raw_material.id,
+        warehouse_id=warehouse_1.id,
+        quantity=Decimal("40"),
+        unit_of_measure_id=cement_raw_material.unit_of_measure_id,
+        reason="Verified physical count before go-live",
+        created_by_user_id=active_user.id,
+    )
+    db_session.commit()
+
+    assert movement.created_by_user_id == active_user.id
+    assert movement.created_at is not None
+
+    entry = db_session.query(OpeningStockEntry).filter(OpeningStockEntry.id == movement.reference_id).one()
+    assert entry.reason == "Verified physical count before go-live"
+    assert entry.organisation_id == organisation.id
+    assert entry.raw_material_id == cement_raw_material.id
+    assert entry.warehouse_id == warehouse_1.id
+
+
+def test_a_second_opening_stock_for_the_same_pair_is_rejected_as_a_duplicate(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "100")
+    db_session.commit()
+
+    with pytest.raises(ConflictError):
+        _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "50")
+    db_session.rollback()
+
+    assert db_session.query(StockMovement).filter(StockMovement.movement_type == OPENING_STOCK).count() == 1
+    assert db_session.query(OpeningStockEntry).count() == 1
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("100.0000")
+
+
+def test_existing_movements_remain_unchanged_after_opening_stock(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    """Opening stock's own OpeningStockEntry uniqueness is keyed on
+    (raw_material_id, warehouse_id), entirely independent of any prior
+    movement's own reference -- recording it alongside an existing
+    RECEIPT for the same pair must leave that receipt untouched."""
+    receipt = _receive(db_session, organisation, cement_raw_material, warehouse_1, "30", reference_id=1)
+    db_session.commit()
+    original_quantity = receipt.quantity
+    original_created_at = receipt.created_at
+
+    _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "20")
+    db_session.commit()
+
+    reloaded_receipt = db_session.query(StockMovement).filter(StockMovement.id == receipt.id).one()
+    assert reloaded_receipt.quantity == original_quantity
+    assert reloaded_receipt.created_at == original_created_at
+    assert reloaded_receipt.movement_type == RECEIPT
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("50.0000")
+
+
+def test_a_failed_opening_stock_leaves_ledger_and_balance_unchanged(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "75")
+    db_session.commit()
+
+    with pytest.raises(ConflictError):
+        _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "999")
+    db_session.rollback()
+
+    assert db_session.query(StockMovement).filter(StockMovement.movement_type == OPENING_STOCK).count() == 1
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("75.0000")

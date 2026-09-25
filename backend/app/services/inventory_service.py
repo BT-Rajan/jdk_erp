@@ -3,19 +3,21 @@
 or touch RawMaterialInventory.quantity_on_hand anywhere else. Purchase's
 post_receipt/reverse_receipt (docs/modules/purchase_orders.md #38,
 Revision 4) are the callers for RECEIPT/RECEIPT_REVERSAL; app/api/inventory.py's
-create_adjustment is the one caller for ADJUSTMENT (Controlled Stock
-Adjustments -- a verified physical/system stock difference, corrected by
-a new movement, never a direct edit of the snapshot or an existing
-movement). A future Production/Sales module issuing stock reuses this
+create_adjustment/create_opening_stock are the callers for ADJUSTMENT
+(Controlled Stock Adjustments -- a verified physical/system stock
+difference, corrected by a new movement, never a direct edit of the
+snapshot or an existing movement) and OPENING_STOCK (Controlled Opening
+Stock -- the one-time, IN-only movement establishing a pair's starting
+balance). A future Production/Sales module issuing stock reuses this
 same service rather than maintaining a second, parallel ledger
 (docs/ENGINEERING_PRINCIPLES.md #2).
 
 Does not commit -- same convention as audit_service.log_event: the
 caller commits this alongside whatever else belongs in the same
 transaction (a PurchaseOrderLine.received_quantity update for a receipt;
-nothing else for an adjustment), so the two succeed or fail together
-(task's own "receipt + inventory movement must be atomic" requirement,
-extended identically to adjustments)."""
+nothing else for an adjustment or opening stock), so the two succeed or
+fail together (task's own "receipt + inventory movement must be atomic"
+requirement, extended identically to adjustments and opening stock)."""
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,9 +26,12 @@ from app.core.errors import BusinessRuleError, ConflictError
 from app.models.inventory import (
     ADJUSTMENT,
     ADJUSTMENT_REFERENCE,
+    OPENING_STOCK,
+    OPENING_STOCK_REFERENCE,
     RECEIPT,
     RECEIPT_REVERSAL,
     InventoryAdjustment,
+    OpeningStockEntry,
     RawMaterialInventory,
     StockMovement,
 )
@@ -221,6 +226,74 @@ def adjust_stock(
         unit_of_measure_id=unit_of_measure_id,
         reference_type=ADJUSTMENT_REFERENCE,
         reference_id=adjustment.id,
+        created_by_user_id=created_by_user_id,
+    )
+    _insert_movement(db, movement)
+
+    _increment_inventory(
+        db,
+        organisation_id=organisation_id,
+        raw_material_id=raw_material_id,
+        warehouse_id=warehouse_id,
+        quantity=quantity,
+    )
+    return movement
+
+
+def record_opening_stock(
+    db: Session,
+    *,
+    organisation_id: int,
+    raw_material_id: int,
+    warehouse_id: int,
+    quantity,
+    unit_of_measure_id: int,
+    reason: str,
+    created_by_user_id: int | None,
+) -> StockMovement:
+    """Controlled Opening Stock -- the one-time, IN-only movement that
+    establishes the verified physical stock a (raw material, warehouse)
+    pair starts with when it's first brought under this ledger's
+    control. `quantity` must already be validated strictly positive by
+    the caller (the API schema's own field validator) -- opening stock
+    is never used to reduce a balance; that's what adjust_stock is for.
+    Same atomic shape as receive_stock/adjust_stock: a new append-only
+    OPENING_STOCK ledger row, applied to the snapshot through the exact
+    same `_increment_inventory` conditional-UPDATE, never a direct write
+    to quantity_on_hand and never an edit of any existing StockMovement.
+
+    Duplicate protection (rule 7) is the OpeningStockEntry insert's own
+    UNIQUE(raw_material_id, warehouse_id) -- a second opening-stock
+    submission for the same pair fails here, before any StockMovement or
+    balance change is even attempted, so a rejected duplicate has zero
+    effect, not just a rejected *second* effect. Not wrapped in its own
+    savepoint, same reasoning `_insert_movement` already documents:
+    nothing here or in any caller touches `db` again after catching
+    IntegrityError, so there's nothing a savepoint would need to protect
+    from being poisoned. `unit_of_measure_id` is the raw material's own
+    current stock unit, resolved and validated by the caller -- never
+    accepted as arbitrary input, and never a historical re-derivation
+    (gap-fix: Controlled Opening Stock -- UOM)."""
+    entry = OpeningStockEntry(
+        organisation_id=organisation_id, raw_material_id=raw_material_id, warehouse_id=warehouse_id, reason=reason
+    )
+    try:
+        db.add(entry)
+        db.flush()
+    except IntegrityError as exc:
+        raise ConflictError(
+            "Opening stock has already been recorded for this raw material in this warehouse."
+        ) from exc
+
+    movement = StockMovement(
+        organisation_id=organisation_id,
+        raw_material_id=raw_material_id,
+        warehouse_id=warehouse_id,
+        movement_type=OPENING_STOCK,
+        quantity=quantity,
+        unit_of_measure_id=unit_of_measure_id,
+        reference_type=OPENING_STOCK_REFERENCE,
+        reference_id=entry.id,
         created_by_user_id=created_by_user_id,
     )
     _insert_movement(db, movement)
