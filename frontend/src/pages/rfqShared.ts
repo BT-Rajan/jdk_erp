@@ -13,6 +13,8 @@ export interface RfqResponseLine {
   id: number
   rfq_line_id: number
   unit_price: string
+  /** null -> quoted at the RFQ line's own requested quantity. */
+  quantity: string | null
   delivery_days: number | null
   remarks: string | null
 }
@@ -33,6 +35,13 @@ export interface RfqResponse {
   files: RfqFile[]
 }
 
+export interface RfqInvitationFollowUp {
+  id: number
+  note: string
+  created_by_user_id: number | null
+  created_at: string
+}
+
 export interface RfqInvitation {
   id: number
   supplier_id: number
@@ -40,7 +49,10 @@ export interface RfqInvitation {
   invited_at: string
   last_emailed_at: string | null
   pdf_file: RfqFile | null
+  /** Every revision's PDF, oldest to newest -- none are ever deleted. */
+  pdf_files: RfqFile[]
   responses: RfqResponse[]
+  follow_ups: RfqInvitationFollowUp[]
 }
 
 export interface RfqLine {

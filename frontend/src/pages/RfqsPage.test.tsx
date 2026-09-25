@@ -51,7 +51,7 @@ function response(id: number, invitationId: number, lines: { rfq_line_id: number
     freight_terms: null,
     note: null,
     created_by_user_id: 1,
-    lines: lines.map((l, i) => ({ id: id * 10 + i, delivery_days: null, remarks: null, ...l })),
+    lines: lines.map((l, i) => ({ id: id * 10 + i, quantity: null, delivery_days: null, remarks: null, ...l })),
     files: [],
   }
 }
@@ -84,13 +84,18 @@ function makeRfq(overrides: Record<string, unknown> = {}) {
     invitations: [
       {
         id: 1, supplier_id: 1, status: 'quoted', invited_at: '2026-01-10T09:00:00', last_emailed_at: null, pdf_file: PDF,
+        pdf_files: [PDF], follow_ups: [],
         responses: [response(1, 1, [{ rfq_line_id: 100, unit_price: '42.0000' }, { rfq_line_id: 101, unit_price: '5.0000', delivery_days: 3 }])],
       },
       {
         id: 2, supplier_id: 2, status: 'quoted', invited_at: '2026-01-10T09:00:00', last_emailed_at: null, pdf_file: PDF,
+        pdf_files: [PDF], follow_ups: [],
         responses: [response(2, 2, [{ rfq_line_id: 100, unit_price: '39.5000' }])],
       },
-      { id: 3, supplier_id: 3, status: 'sent', invited_at: '2026-01-10T09:00:00', last_emailed_at: null, pdf_file: PDF, responses: [] },
+      {
+        id: 3, supplier_id: 3, status: 'sent', invited_at: '2026-01-10T09:00:00', last_emailed_at: null, pdf_file: PDF,
+        pdf_files: [PDF], follow_ups: [], responses: [],
+      },
     ],
     acceptance_files: [],
     ...overrides,

@@ -25,6 +25,7 @@ from app.models.rfq import (
     RESPONSE_RECEIVED,
     SELECTED,
     Rfq,
+    RfqInvitationFollowUp,
     RfqLine,
     RfqResponse,
     RfqResponseLine,
@@ -72,6 +73,9 @@ def line_unit_ratio(
 class ResponseLineInput:
     rfq_line_id: int
     unit_price: Decimal
+    # None -> quoted at the RFQ line's own requested quantity (gap-fix:
+    # partial quotation).
+    quantity: Decimal | None
     delivery_days: int | None
     remarks: str | None
 
@@ -140,6 +144,7 @@ def capture_response(
             response_id=response.id,
             rfq_line_id=line.rfq_line_id,
             unit_price=line.unit_price,
+            quantity=line.quantity,
             delivery_days=line.delivery_days,
             remarks=line.remarks,
         )
@@ -169,6 +174,24 @@ def decline_invitation(rfq: Rfq, invitation: RfqSupplierInvitation) -> None:
     if invitation.status != INVITATION_SENT:
         raise BusinessRuleError(f"Cannot decline an invitation that is already '{invitation.status}'.")
     invitation.status = INVITATION_DECLINED
+
+
+def add_follow_up(
+    db: Session, *, rfq: Rfq, invitation: RfqSupplierInvitation, note: str, created_by_user_id: int | None
+) -> RfqInvitationFollowUp:
+    """Gap-fix: supplier follow-up -- a simple, append-only note against
+    one invited supplier, same "record what happened" gate as
+    decline_invitation (a live RFQ only; nothing to follow up on a
+    draft, and a decided/cancelled/converted RFQ is already history)."""
+    if invitation.rfq_id != rfq.id:
+        raise BusinessRuleError("This invitation does not belong to this RFQ.")
+    if rfq.status not in (ISSUED, RESPONSE_RECEIVED):
+        raise BusinessRuleError("Can only record a follow-up on an issued RFQ.")
+
+    follow_up = RfqInvitationFollowUp(invitation_id=invitation.id, note=note, created_by_user_id=created_by_user_id)
+    db.add(follow_up)
+    db.flush()
+    return follow_up
 
 
 def decide(

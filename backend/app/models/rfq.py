@@ -197,5 +197,29 @@ class RfqResponseLine(Base, TimestampMixin):
     )
     rfq_line_id: Mapped[int] = mapped_column(ForeignKey("rfq_lines.id", ondelete="CASCADE"), nullable=False, index=True)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    # The quantity the supplier actually quoted, when it differs from the
+    # RFQ line's requested quantity -- null means "the requested quantity",
+    # never forced to be re-entered when it matches (docs/modules/rfq.md
+    # gap-fix: partial quotation).
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     delivery_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class RfqInvitationFollowUp(Base, TimestampMixin):
+    """One simple, freeform follow-up note recorded against an invited
+    supplier -- not a communication/email log (that already exists,
+    unrelated, for Purchase Order: PurchaseOrderCommunication). No status,
+    no recipient, no send action -- a plain, append-only note history, the
+    same "never edited, always a new row" discipline as RfqResponse. No
+    `organisation_id` of its own -- a child of an already organisation-
+    scoped invitation, same shape as RfqResponse."""
+
+    __tablename__ = "rfq_invitation_follow_ups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    invitation_id: Mapped[int] = mapped_column(
+        ForeignKey("rfq_supplier_invitations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

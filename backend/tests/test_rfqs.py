@@ -459,6 +459,133 @@ def test_decline_is_a_flag_only(client, admin_headers, issued_rfq, acme_supplier
     assert _invitation_for(body, acme_supplier.id)["status"] == "sent"
 
 
+# --- gap fixes: quoted quantity, follow-up, quote history, cancellation retains history --------
+
+
+def _follow_up(client, headers, rfq_id, invitation_id, note="Called, will quote by Thursday."):
+    return client.post(
+        f"/api/rfqs/{rfq_id}/invitations/{invitation_id}/follow-ups", json={"note": note}, headers=headers
+    )
+
+
+def test_full_practical_scenario(client, admin_headers, issued_rfq, acme_supplier, beta_supplier):
+    """The complete practical scenario: RFQ issued to 2 suppliers -> one
+    remains awaiting -> follow up -> one supplier quotes (partial
+    quantity on one line) -> later revises price -> second supplier
+    declines -> select the first supplier's current quote -> cancel,
+    with history retained throughout."""
+    rfq, cement_id, sand_id = issued_rfq
+    acme = _invitation_for(rfq, acme_supplier.id)["id"]
+    beta = _invitation_for(rfq, beta_supplier.id)["id"]
+
+    # Both suppliers start "Awaiting Quote".
+    assert _invitation_for(rfq, acme_supplier.id)["status"] == "sent"
+    assert _invitation_for(rfq, beta_supplier.id)["status"] == "sent"
+
+    # Beta remains awaiting -- follow up with them.
+    followed_up = _follow_up(client, admin_headers, rfq["id"], beta).json()
+    beta_after_follow_up = _invitation_for(followed_up, beta_supplier.id)
+    assert beta_after_follow_up["status"] == "sent"
+    assert len(beta_after_follow_up["follow_ups"]) == 1
+    assert beta_after_follow_up["follow_ups"][0]["note"] == "Called, will quote by Thursday."
+    assert followed_up["status"] == "issued"  # a follow-up never changes the RFQ's own status
+
+    # Acme quotes: cement at the requested 100 KG (quantity omitted --
+    # never forced to re-enter it), sand at a partial 15 KG against the
+    # requested 20 KG.
+    first_quote = _capture(
+        client, admin_headers, rfq["id"], acme,
+        [
+            {"rfq_line_id": cement_id, "unit_price": "42.00"},
+            {"rfq_line_id": sand_id, "unit_price": "9.00", "quantity": "15"},
+        ],
+    ).json()
+    acme_inv = _invitation_for(first_quote, acme_supplier.id)
+    assert acme_inv["status"] == "quoted"
+    assert first_quote["status"] == "response_received"
+    first_response = acme_inv["responses"][0]
+    cement_line = next(l for l in first_response["lines"] if l["rfq_line_id"] == cement_id)
+    sand_line = next(l for l in first_response["lines"] if l["rfq_line_id"] == sand_id)
+    assert cement_line["quantity"] is None  # same as the 100 KG requested -- not forced
+    assert sand_line["quantity"] == "15.0000"  # partial: 15 of the 20 KG requested
+
+    # Acme later revises the price -- a new response, the earlier one untouched.
+    second_quote = _capture(
+        client, admin_headers, rfq["id"], acme,
+        [
+            {"rfq_line_id": cement_id, "unit_price": "39.50"},
+            {"rfq_line_id": sand_id, "unit_price": "9.00", "quantity": "15"},
+        ],
+    ).json()
+    acme_inv = _invitation_for(second_quote, acme_supplier.id)
+    assert len(acme_inv["responses"]) == 2
+    assert acme_inv["responses"][0]["lines"][0]["unit_price"] == "42.0000"  # previous quote preserved
+    assert acme_inv["responses"][1]["lines"][0]["unit_price"] == "39.5000"  # current quote
+    current_response_id = acme_inv["responses"][-1]["id"]
+
+    # Second supplier declines.
+    declined = client.post(f"/api/rfqs/{rfq['id']}/invitations/{beta}/decline", headers=admin_headers).json()
+    assert _invitation_for(declined, beta_supplier.id)["status"] == "declined"
+    # Beta's earlier follow-up is still there -- declining doesn't erase history.
+    assert len(_invitation_for(declined, beta_supplier.id)["follow_ups"]) == 1
+
+    # Select the first supplier's CURRENT quote (the revised one, not the superseded one).
+    selected = _accept(client, admin_headers, rfq["id"], current_response_id, [_upload(client, admin_headers)]).json()
+    assert selected["status"] == "selected"
+    assert selected["selected_response_id"] == current_response_id
+
+    # Cancel -- and every piece of history recorded along the way survives.
+    cancelled = client.patch(
+        f"/api/rfqs/{rfq['id']}/status",
+        json={"status": "cancelled", "cancel_reason": "Business need no longer exists."},
+        headers=admin_headers,
+    )
+    assert cancelled.status_code == 200
+    body = cancelled.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_reason"] == "Business need no longer exists."
+
+    refetched = client.get(f"/api/rfqs/{rfq['id']}", headers=admin_headers).json()
+    acme_inv = _invitation_for(refetched, acme_supplier.id)
+    beta_inv = _invitation_for(refetched, beta_supplier.id)
+    assert len(acme_inv["responses"]) == 2  # both quotes still there
+    assert acme_inv["responses"][0]["lines"][0]["unit_price"] == "42.0000"
+    assert acme_inv["responses"][1]["lines"][0]["unit_price"] == "39.5000"
+    assert len(beta_inv["follow_ups"]) == 1
+    assert beta_inv["status"] == "declined"
+    assert refetched["selected_response_id"] == current_response_id
+    assert refetched["status"] == "cancelled"
+
+
+def test_capture_response_rejects_non_positive_quoted_quantity(client, admin_headers, issued_rfq, acme_supplier):
+    rfq, cement_id, _ = issued_rfq
+    invitation = _invitation_for(rfq, acme_supplier.id)
+    response = _capture(
+        client, admin_headers, rfq["id"], invitation["id"],
+        [{"rfq_line_id": cement_id, "unit_price": "42", "quantity": "0"}],
+    )
+    assert response.status_code == 422
+
+
+def test_add_follow_up_requires_a_non_blank_note(client, admin_headers, issued_rfq, beta_supplier):
+    rfq, _, _ = issued_rfq
+    beta = _invitation_for(rfq, beta_supplier.id)["id"]
+    assert _follow_up(client, admin_headers, rfq["id"], beta, note="   ").status_code == 422
+
+
+def test_add_follow_up_rejected_once_rfq_is_no_longer_live(
+    client, admin_headers, issued_rfq, acme_supplier, beta_supplier, cement_raw_material, sand_raw_material
+):
+    rfq, cement_id, sand_id = issued_rfq
+    accepted = _quote_and_accept(
+        client, admin_headers, rfq, acme_supplier.id, {cement_id: "42", sand_id: "9"}
+    )
+    assert accepted["status"] == "selected"
+    beta = _invitation_for(accepted, beta_supplier.id)["id"]
+    # The RFQ has moved on to a decision -- nothing left to follow up on.
+    assert _follow_up(client, admin_headers, rfq["id"], beta).status_code == 400
+
+
 # --- accept / reject -------------------------------------------------------------------------
 
 

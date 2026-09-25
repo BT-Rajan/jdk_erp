@@ -25,7 +25,7 @@ from app.models.purchase_order import (
 )
 from app.models.raw_material import RawMaterial
 from app.models.refresh_token import RefreshToken
-from app.models.rfq import Rfq, RfqLine, RfqResponse, RfqResponseLine, RfqSupplierInvitation
+from app.models.rfq import Rfq, RfqInvitationFollowUp, RfqLine, RfqResponse, RfqResponseLine, RfqSupplierInvitation
 from app.models.role_permission import RolePermission
 from app.models.supplier import Supplier
 from app.models.supplier_material import SupplierMaterial
@@ -78,4 +78,5 @@ __all__ = [
     "RfqResponse",
     "RfqResponseLine",
     "RfqSupplierInvitation",
+    "RfqInvitationFollowUp",
 ]

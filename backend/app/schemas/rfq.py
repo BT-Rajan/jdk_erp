@@ -44,6 +44,10 @@ class RfqResponseLineOut(BaseModel):
     id: int
     rfq_line_id: int
     unit_price: Decimal
+    # None -> the supplier quoted the RFQ line's own requested quantity;
+    # set -> the supplier quoted a different quantity (gap-fix: partial
+    # quotation, docs/modules/rfq.md).
+    quantity: Decimal | None
     delivery_days: int | None
     remarks: str | None
 
@@ -66,6 +70,15 @@ class RfqResponseOut(BaseModel):
     files: list[FileOut] = []
 
 
+class RfqInvitationFollowUpOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    note: str
+    created_by_user_id: int | None
+    created_at: datetime
+
+
 class RfqInvitationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -75,7 +88,12 @@ class RfqInvitationOut(BaseModel):
     invited_at: datetime
     last_emailed_at: datetime | None
     pdf_file: FileOut | None = None
+    # Every letterhead PDF ever generated for this invitation, oldest to
+    # newest -- a revision never deletes an earlier one (`pdf_file` above
+    # stays the latest, for the existing download/email actions).
+    pdf_files: list[FileOut] = []
     responses: list[RfqResponseOut] = []
+    follow_ups: list[RfqInvitationFollowUpOut] = []
 
 
 class RfqOut(BaseModel):
@@ -189,6 +207,10 @@ class RfqStatusChangeRequest(BaseModel):
 class RfqResponseLineRequest(BaseModel):
     rfq_line_id: int
     unit_price: Decimal = Field(max_digits=14, decimal_places=4)
+    # Omitted/null -> quoted at the RFQ line's own requested quantity,
+    # never forced to be re-entered. Set only when the supplier quoted a
+    # different quantity (gap-fix: partial quotation, docs/modules/rfq.md).
+    quantity: Decimal | None = Field(default=None, max_digits=14, decimal_places=4)
     delivery_days: int | None = Field(default=None, ge=0, le=3650)
     remarks: str | None = Field(default=None, max_length=2000)
 
@@ -202,6 +224,13 @@ class RfqResponseLineRequest(BaseModel):
     def _check_positive(cls, value: Decimal) -> Decimal:
         if value <= 0:
             raise ValueError("Unit price must be greater than zero.")
+        return value
+
+    @field_validator("quantity")
+    @classmethod
+    def _check_positive_quantity(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value <= 0:
+            raise ValueError("Quantity must be greater than zero.")
         return value
 
 
@@ -275,6 +304,22 @@ class RfqDecisionRequest(BaseModel):
                     "Confirm the agreed quantities match the request. If they differ, raise another RFQ."
                 )
         return self
+
+
+class RfqInvitationFollowUpCreateRequest(BaseModel):
+    """A simple, freeform follow-up note against one invited supplier
+    (gap-fix: supplier follow-up, docs/modules/rfq.md) -- not a
+    communication/email log, just a record that "we followed up.\""""
+
+    note: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("note")
+    @classmethod
+    def _check_note(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("note is required.")
+        return value
 
 
 class RfqRaiseNewLineRequest(BaseModel):

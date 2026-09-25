@@ -22,6 +22,7 @@ from app.models.audit_event import (
     RFQ_CREATED,
     RFQ_DECIDED,
     RFQ_INVITATION_DECLINED,
+    RFQ_INVITATION_FOLLOW_UP_ADDED,
     RFQ_RESPONSE_CAPTURED,
     RFQ_SEND_FAILED,
     RFQ_SENT,
@@ -42,6 +43,7 @@ from app.models.rfq import (
     SELECTED,
     RFQ_STATUSES,
     Rfq,
+    RfqInvitationFollowUp,
     RfqLine,
     RfqResponse,
     RfqResponseLine,
@@ -56,6 +58,8 @@ from app.schemas.rfq import (
     RfqCaptureResponseRequest,
     RfqConvertRequest,
     RfqDecisionRequest,
+    RfqInvitationFollowUpCreateRequest,
+    RfqInvitationFollowUpOut,
     RfqInvitationOut,
     RfqLineOut,
     RfqOut,
@@ -186,6 +190,15 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
         ):
             response_lines_by_response[response_line.response_id].append(response_line)
 
+    follow_ups_by_invitation: dict[int, list[RfqInvitationFollowUp]] = defaultdict(list)
+    if invitation_ids:
+        for follow_up in (
+            db.query(RfqInvitationFollowUp)
+            .filter(RfqInvitationFollowUp.invitation_id.in_(invitation_ids))
+            .order_by(RfqInvitationFollowUp.id)
+        ):
+            follow_ups_by_invitation[follow_up.invitation_id].append(follow_up)
+
     # Every file this module owns (response evidence, per-supplier RFQ
     # PDFs, accepted-quotation uploads) in one query.
     files: dict[tuple[str, int], list[FileRecord]] = defaultdict(list)
@@ -241,7 +254,13 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
                     if files[(_INVITATION_PDF, invitation.id)]
                     else None
                 ),
+                # Every revision's PDF, oldest to newest -- none are ever
+                # deleted (gap-fix: RFQ revision must preserve history).
+                pdf_files=[FileOut.model_validate(f) for f in files[(_INVITATION_PDF, invitation.id)]],
                 responses=responses_by_invitation[invitation.id],
+                follow_ups=[
+                    RfqInvitationFollowUpOut.model_validate(f) for f in follow_ups_by_invitation[invitation.id]
+                ],
             )
         )
 
@@ -733,6 +752,33 @@ def decline_rfq_invitation(
     return _build_rfq_out(db, rfq)
 
 
+@router.post(
+    "/{rfq_id}/invitations/{invitation_id}/follow-ups", response_model=RfqOut, status_code=status.HTTP_201_CREATED
+)
+def add_rfq_invitation_follow_up(
+    rfq_id: int,
+    invitation_id: int,
+    payload: RfqInvitationFollowUpCreateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RfqOut:
+    """Gap-fix: supplier follow-up -- a simple, freeform note against one
+    invited supplier (e.g. "called, they'll quote by Thursday"). Gated
+    like response capture/decline: all three record what happened
+    regarding this supplier's response."""
+    rfq_scope.require_permission(db, current_user, rfq_scope.CAPTURE_RESPONSE)
+    rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
+    invitation = _get_invitation_in_rfq(db, rfq.id, invitation_id)
+
+    rfq_service.add_follow_up(db, rfq=rfq, invitation=invitation, note=payload.note, created_by_user_id=current_user.id)
+
+    _log(db, request, current_user, rfq, RFQ_INVITATION_FOLLOW_UP_ADDED, f"supplier_id: {invitation.supplier_id}")
+    db.commit()
+    db.refresh(rfq)
+    return _build_rfq_out(db, rfq)
+
+
 @router.patch("/{rfq_id}/status", response_model=RfqOut)
 def change_rfq_status(
     rfq_id: int,
@@ -797,6 +843,7 @@ def capture_rfq_response(
             rfq_service.ResponseLineInput(
                 rfq_line_id=line.rfq_line_id,
                 unit_price=line.unit_price,
+                quantity=line.quantity,
                 delivery_days=line.delivery_days,
                 remarks=line.remarks,
             )

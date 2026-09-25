@@ -152,6 +152,9 @@ function ComparisonTable({
                     {quoted ? (
                       <>
                         {formatPrice(quoted.unit_price)}
+                        {quoted.quantity !== null && (
+                          <span className="block text-xs text-gold-100/50">Qty quoted: {formatNumber(quoted.quantity)} {unitCode(line.unit_of_measure_id)}</span>
+                        )}
                         {quoted.delivery_days !== null && <span className="block text-xs text-gold-100/50">{quoted.delivery_days} days</span>}
                       </>
                     ) : (
@@ -172,6 +175,9 @@ function ComparisonTable({
 
 const cancelSchema = z.object({ cancel_reason: z.string().min(1, 'A reason is required to cancel this RFQ.') })
 type CancelFormValues = z.infer<typeof cancelSchema>
+
+const followUpSchema = z.object({ note: z.string().min(1, 'A note is required.') })
+type FollowUpFormValues = z.infer<typeof followUpSchema>
 
 const captureSchema = z.object({
   supplier_quotation_number: z.string(),
@@ -195,6 +201,8 @@ const emptyCaptureDefaults: CaptureFormValues = {
 
 interface CaptureLineDraft {
   unit_price: string
+  /** Blank -> quoted at the RFQ line's own requested quantity, never forced. */
+  quantity: string
   delivery_days: string
   remarks: string
 }
@@ -255,6 +263,9 @@ export function RfqsPage() {
   const [cancelTarget, setCancelTarget] = useState<Rfq | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
 
+  const [followUpTarget, setFollowUpTarget] = useState<RfqInvitation | null>(null)
+  const [followUpError, setFollowUpError] = useState<string | null>(null)
+
   const [captureInvitation, setCaptureInvitation] = useState<RfqInvitation | null>(null)
   const [captureLines, setCaptureLines] = useState<Record<number, CaptureLineDraft>>({})
   const [captureFiles, setCaptureFiles] = useState<File[]>([])
@@ -279,6 +290,7 @@ export function RfqsPage() {
   const [convertError, setConvertError] = useState<string | null>(null)
 
   const cancelForm = useForm<CancelFormValues>({ resolver: zodResolver(cancelSchema), defaultValues: { cancel_reason: '' } })
+  const followUpForm = useForm<FollowUpFormValues>({ resolver: zodResolver(followUpSchema), defaultValues: { note: '' } })
   const captureForm = useForm<CaptureFormValues>({ resolver: zodResolver(captureSchema), defaultValues: emptyCaptureDefaults })
 
   const table = useServerTable<Rfq, RfqsFilters>({ fetcher: fetchRfqs, pageSize: 20, initialFilters: { search: '', priority: '' } })
@@ -442,6 +454,27 @@ export function RfqsPage() {
     setCancelError(null)
   }
 
+  function openFollowUp(invitation: RfqInvitation) {
+    setFollowUpTarget(invitation)
+    followUpForm.reset({ note: '' })
+    setFollowUpError(null)
+  }
+
+  const onFollowUpSubmit = useCallback(
+    async (values: FollowUpFormValues) => {
+      if (!detailTarget || !followUpTarget) return
+      setFollowUpError(null)
+      try {
+        await apiClient.post(`/api/rfqs/${detailTarget.id}/invitations/${followUpTarget.id}/follow-ups`, { note: values.note })
+        setFollowUpTarget(null)
+        await refreshDetail(detailTarget.id)
+      } catch (err) {
+        setFollowUpError(err instanceof ApiError ? err.message : 'Failed to record follow-up.')
+      }
+    },
+    [detailTarget, followUpTarget, refreshDetail],
+  )
+
   const onCancelSubmit = useCallback(
     async (values: CancelFormValues) => {
       if (!cancelTarget) return
@@ -467,7 +500,10 @@ export function RfqsPage() {
   }
 
   function updateCaptureLine(lineId: number, patch: Partial<CaptureLineDraft>) {
-    setCaptureLines((prev) => ({ ...prev, [lineId]: { ...(prev[lineId] ?? { unit_price: '', delivery_days: '', remarks: '' }), ...patch } }))
+    setCaptureLines((prev) => ({
+      ...prev,
+      [lineId]: { ...(prev[lineId] ?? { unit_price: '', quantity: '', delivery_days: '', remarks: '' }), ...patch },
+    }))
   }
 
   const onCaptureSubmit = useCallback(
@@ -482,6 +518,10 @@ export function RfqsPage() {
       }
       if (quoted.some(({ draft }) => !isPositiveDecimal(draft.unit_price.trim()))) {
         setCaptureError('Unit prices must be positive numbers.')
+        return
+      }
+      if (quoted.some(({ draft }) => draft.quantity.trim() !== '' && !isPositiveDecimal(draft.quantity.trim()))) {
+        setCaptureError('Quoted quantity must be a positive number.')
         return
       }
       if (quoted.some(({ draft }) => draft.delivery_days.trim() !== '' && !INTEGER_RE.test(draft.delivery_days.trim()))) {
@@ -503,6 +543,7 @@ export function RfqsPage() {
           lines: quoted.map(({ line, draft }) => ({
             rfq_line_id: line.id,
             unit_price: draft.unit_price.trim(),
+            quantity: draft.quantity.trim() === '' ? null : draft.quantity.trim(),
             delivery_days: draft.delivery_days.trim() === '' ? null : Number(draft.delivery_days),
             remarks: draft.remarks.trim() || null,
           })),
@@ -865,16 +906,46 @@ export function RfqsPage() {
                             {canManage && isOpenForQuotes && invitation.status === 'sent' && (
                               <Button variant="secondary" onClick={() => declineInvitation(invitation)}>Mark Declined</Button>
                             )}
+                            {canManage && isOpenForQuotes && (
+                              <Button variant="secondary" onClick={() => openFollowUp(invitation)}>Add Follow-up...</Button>
+                            )}
                           </div>
                         </div>
 
-                        {invitation.responses.map((response) => (
+                        {invitation.pdf_files.length > 1 && (
+                          <p className="mt-1 text-xs text-gold-100/50">
+                            Earlier versions:{' '}
+                            {invitation.pdf_files.slice(0, -1).map((file, i) => (
+                              <span key={file.id}>
+                                {i > 0 && ', '}
+                                <button type="button" onClick={() => downloadFile(file)} className="underline hover:text-gold-100/80">
+                                  v{i + 1}
+                                </button>
+                              </span>
+                            ))}
+                          </p>
+                        )}
+
+                        {invitation.follow_ups.length > 0 && (
+                          <div className="mt-2 flex flex-col gap-1">
+                            {invitation.follow_ups.map((followUp) => (
+                              <p key={followUp.id} className="text-xs text-gold-100/60">
+                                Follow-up {formatKuwaitTime(followUp.created_at)}: {followUp.note}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+
+                        {invitation.responses.map((response, index) => (
                           <div
                             key={response.id}
                             className={`mt-3 rounded-md border p-3 ${detailTarget.selected_response_id === response.id ? 'border-gold-400' : 'border-ink-700'}`}
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                               <span>
+                                <Badge tone={index === invitation.responses.length - 1 ? 'success' : 'neutral'} className="mr-2">
+                                  {index === invitation.responses.length - 1 ? 'Current Quote' : 'Previous Quote'}
+                                </Badge>
                                 Received {formatKuwaitTime(response.response_received_at)}
                                 {response.supplier_quotation_number && ` · Ref ${response.supplier_quotation_number}`}
                                 {response.valid_until && ` · Valid until ${formatDate(response.valid_until)}`}
@@ -899,7 +970,12 @@ export function RfqsPage() {
                                   return (
                                     <tr key={quoted.id} className="border-t border-ink-700">
                                       <td className="py-1 pr-3">{rfqLine ? materialName(rfqLine.raw_material_id) : `Item #${quoted.rfq_line_id}`}</td>
-                                      <td className="py-1 pr-3">{rfqLine ? `${formatNumber(rfqLine.quantity)} ${unitCode(rfqLine.unit_of_measure_id)}` : ''}</td>
+                                      <td className="py-1 pr-3">
+                                        {rfqLine ? `${formatNumber(quoted.quantity ?? rfqLine.quantity)} ${unitCode(rfqLine.unit_of_measure_id)}` : ''}
+                                        {rfqLine && quoted.quantity !== null && quoted.quantity !== rfqLine.quantity && (
+                                          <span className="block text-xs text-gold-100/50">Requested {formatNumber(rfqLine.quantity)}</span>
+                                        )}
+                                      </td>
                                       <td className="py-1 pr-3">{formatPrice(quoted.unit_price)}</td>
                                       <td className="py-1 pr-3">{quoted.delivery_days !== null ? `${quoted.delivery_days} days` : '—'}</td>
                                       <td className="py-1 pr-3 text-gold-100/60">{quoted.remarks ?? ''}</td>
@@ -958,12 +1034,17 @@ export function RfqsPage() {
         {detailTarget && (
           <form className="flex flex-col gap-4">
             <Alert variant="danger">{captureError}</Alert>
-            <p className="text-sm text-gold-100/70">Enter the quoted unit price per item. Leave an item blank if the supplier did not quote it.</p>
+            <p className="text-sm text-gold-100/70">
+              Enter the quoted unit price per item. Leave an item blank if the supplier did not quote it. Leave "Qty
+              Quoted" blank if the supplier quoted the requested quantity -- only fill it in when they quoted a
+              different quantity.
+            </p>
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
                   <th className="py-2 pr-3">Product / Material</th>
-                  <th className="py-2 pr-3">Qty</th>
+                  <th className="py-2 pr-3">Qty Requested</th>
+                  <th className="py-2 pr-3">Qty Quoted</th>
                   <th className="py-2 pr-3">Unit Price</th>
                   <th className="py-2 pr-3">Delivery Days</th>
                   <th className="py-2 pr-3">Remarks</th>
@@ -974,6 +1055,18 @@ export function RfqsPage() {
                   <tr key={line.id} className="border-t border-ink-700">
                     <td className="py-2 pr-3">{materialName(line.raw_material_id)}</td>
                     <td className="py-2 pr-3">{formatNumber(line.quantity)} {unitCode(line.unit_of_measure_id)}</td>
+                    <td className="py-2 pr-3">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.0001"
+                        placeholder={formatNumber(line.quantity)}
+                        aria-label={`Quantity quoted for ${materialName(line.raw_material_id)}`}
+                        className="w-24 rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
+                        value={captureLines[line.id]?.quantity ?? ''}
+                        onChange={(e) => updateCaptureLine(line.id, { quantity: e.target.value })}
+                      />
+                    </td>
                     <td className="py-2 pr-3">
                       <input
                         type="number"
@@ -1219,6 +1312,29 @@ export function RfqsPage() {
         <form className="flex flex-col gap-4">
           <Alert variant="danger">{cancelError}</Alert>
           <TextareaField label="Reason" required hint="Required to cancel an RFQ." {...cancelForm.register('cancel_reason')} error={cancelForm.formState.errors.cancel_reason?.message} />
+        </form>
+      </Modal>
+
+      <Modal
+        open={!!followUpTarget}
+        title={followUpTarget ? `Add Follow-up — ${supplierName(followUpTarget.supplier_id)}` : ''}
+        onClose={() => setFollowUpTarget(null)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setFollowUpTarget(null)}>Cancel</Button>
+            <Button onClick={followUpForm.handleSubmit(onFollowUpSubmit)} isLoading={followUpForm.formState.isSubmitting}>Save Follow-up</Button>
+          </>
+        }
+      >
+        <form className="flex flex-col gap-4">
+          <Alert variant="danger">{followUpError}</Alert>
+          <TextareaField
+            label="Note"
+            required
+            hint="e.g. &quot;Called, they'll quote by Thursday.&quot;"
+            {...followUpForm.register('note')}
+            error={followUpForm.formState.errors.note?.message}
+          />
         </form>
       </Modal>
     </div>
