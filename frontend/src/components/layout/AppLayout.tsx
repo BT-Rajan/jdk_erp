@@ -53,7 +53,10 @@ const NAV_ENTRIES: NavEntry[] = [
     type: 'group',
     label: 'Inventory',
     icon: <Package size={16} />,
-    items: [{ label: 'Stock Adjustments', to: '/inventory/adjustments' }],
+    items: [
+      { label: 'Stock Adjustments', to: '/inventory/adjustments' },
+      { label: 'Opening Stock', to: '/inventory/opening-stock' },
+    ],
   },
   {
     type: 'group',

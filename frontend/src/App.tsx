@@ -11,6 +11,7 @@ import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { FinancePaymentsPage } from '@/pages/FinancePaymentsPage'
 import { GoodsReceivingPage } from '@/pages/GoodsReceivingPage'
 import { InventoryAdjustmentsPage } from '@/pages/InventoryAdjustmentsPage'
+import { InventoryOpeningStockPage } from '@/pages/InventoryOpeningStockPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { ProductsPage } from '@/pages/ProductsPage'
@@ -85,6 +86,7 @@ export function App() {
           <Route path="/purchase-orders/:purchaseOrderId/edit" element={<PurchaseOrderFormPage />} />
           <Route path="/receiving" element={<GoodsReceivingPage />} />
           <Route path="/inventory/adjustments" element={<InventoryAdjustmentsPage />} />
+          <Route path="/inventory/opening-stock" element={<InventoryOpeningStockPage />} />
           <Route path="/finance/payments" element={<FinancePaymentsPage />} />
           <Route path="/finance/payments/:purchaseOrderId" element={<FinancePaymentsPage />} />
           <Route path="/users" element={<UsersPage />} />
