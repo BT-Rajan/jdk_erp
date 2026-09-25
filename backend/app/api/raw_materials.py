@@ -79,13 +79,16 @@ def _resolve_active_category(db: Session, category_id: int, organisation_id: int
 
 
 def _has_recorded_quantity(db: Session, raw_material_id: int) -> bool:
-    """`unit_of_measure_id` is never stored on a BomComponent row or a
-    StockMovement/RawMaterialInventory row -- each implicitly means "in
-    this material's own unit." Once any such row exists, changing the
-    material's unit would silently change what every already-recorded
-    quantity means, with no conversion and no warning. RawMaterialInventory
-    is not checked separately -- app/services/inventory_service.py never
-    creates one without a StockMovement in the same call."""
+    """A BomComponent row's quantity, and RawMaterialInventory.quantity_on_hand,
+    both implicitly mean "in this material's own unit" (StockMovement now
+    records its own unit_of_measure_id explicitly, but that's just this
+    row's own record of what was already true -- it's still always the
+    material's own unit, never a different one). Once any such row
+    exists, changing the material's unit would silently change what every
+    already-recorded quantity means, with no conversion and no warning.
+    RawMaterialInventory is not checked separately --
+    app/services/inventory_service.py never creates one without a
+    StockMovement in the same call."""
     has_component = (
         db.query(BomComponent.id).filter(BomComponent.raw_material_id == raw_material_id).first() is not None
     )

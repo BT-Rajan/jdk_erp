@@ -236,9 +236,23 @@ def _increment_inventory(db: Session, *, organisation_id: int, raw_material_id: 
         .first()
     )
     if existing is not None:
-        # A row exists -- the update above was blocked by the negative-
-        # stock guard, not by a missing row.
-        _reject_negative(db, raw_material_id=raw_material_id, warehouse_id=warehouse_id, quantity=quantity)
+        # A row exists now -- either it already did when the update
+        # above ran (blocked there by the negative-stock guard) or a
+        # concurrent transaction's own first-ever movement for this same
+        # pair won the race and inserted it in the meantime (concurrency:
+        # this session's own conditional update above and this existence
+        # check are two separate statements, not one atomic step, so
+        # another session's commit can land between them). Either way,
+        # retry the same guarded update now that a row is known to
+        # exist -- only report negative stock if this retry still fails,
+        # never on the mere possibility that the earlier miss was really
+        # a race (gap-fix: Stock Balance hardening -- concurrency, a
+        # transaction that only lost the race to create the row must
+        # still have its own quantity correctly applied, not be wrongly
+        # rejected).
+        if not _apply_conditional_update(db, raw_material_id=raw_material_id, warehouse_id=warehouse_id, quantity=quantity):
+            _reject_negative(db, raw_material_id=raw_material_id, warehouse_id=warehouse_id, quantity=quantity)
+        return
     if quantity < 0:
         # Nothing on hand yet, and this would still go negative.
         _reject_negative(db, raw_material_id=raw_material_id, warehouse_id=warehouse_id, quantity=quantity)

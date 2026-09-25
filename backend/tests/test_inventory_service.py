@@ -12,7 +12,9 @@ discipline."""
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import func
 
+from app.core.database import SessionLocal
 from app.core.errors import BusinessRuleError, ConflictError
 from app.models.inventory import RECEIPT, RECEIPT_REVERSAL, RawMaterialInventory, StockMovement
 from app.services import inventory_service
@@ -55,6 +57,23 @@ def _on_hand(db_session, cement_raw_material, warehouse_1) -> Decimal:
         .first()
     )
     return row.quantity_on_hand if row is not None else Decimal("0")
+
+
+def _ledger_sum(db_session, cement_raw_material, warehouse_1) -> Decimal:
+    """The balance as the ledger itself implies it -- SUM(quantity) over
+    every StockMovement for this (raw_material, warehouse) pair,
+    independent of the RawMaterialInventory snapshot entirely. Used only
+    to verify the snapshot agrees with the ledger it's derived from,
+    never as a second way to compute a balance the app itself relies on."""
+    total = (
+        db_session.query(func.sum(StockMovement.quantity))
+        .filter(
+            StockMovement.raw_material_id == cement_raw_material.id,
+            StockMovement.warehouse_id == warehouse_1.id,
+        )
+        .scalar()
+    )
+    return total if total is not None else Decimal("0")
 
 
 # --- movement UOM -----------------------------------------------------------------------------
@@ -258,3 +277,166 @@ def test_a_receipt_can_only_be_reversed_once(db_session, organisation, cement_ra
 
     assert db_session.query(StockMovement).filter(StockMovement.reference_type == REFERENCE_TYPE).count() == 2
     assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("0.0000")
+
+
+# --- stock balance integrity ---------------------------------------------------------------------
+
+
+def test_receipt_increases_balance_by_exactly_the_movements_quantity(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "40", reference_id=1)
+    db_session.commit()
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("40.0000")
+
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "15", reference_id=2)
+    db_session.commit()
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("55.0000")
+
+
+def test_reversal_decreases_balance_by_exactly_the_movements_quantity(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "40", reference_id=1)
+    db_session.commit()
+
+    _reverse(db_session, organisation, cement_raw_material, warehouse_1, "15", reference_id=1)
+    db_session.commit()
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("25.0000")
+
+
+def test_multiple_movements_produce_the_expected_cumulative_balance(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100", reference_id=1)
+    db_session.commit()
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "50", reference_id=2)
+    db_session.commit()
+    _reverse(db_session, organisation, cement_raw_material, warehouse_1, "30", reference_id=1)
+    db_session.commit()
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "20", reference_id=3)
+    db_session.commit()
+
+    # 100 + 50 - 30 + 20 = 140.
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("140.0000")
+
+
+def test_ledger_derived_balance_matches_the_stored_snapshot(db_session, organisation, cement_raw_material, warehouse_1):
+    """RawMaterialInventory.quantity_on_hand is only ever a materialized
+    snapshot, never a second, independent source of truth -- summing
+    StockMovement.quantity for this (material, warehouse) pair must
+    always land on exactly what's stored, at every point along the way,
+    not just at the end."""
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100", reference_id=1)
+    db_session.commit()
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == _ledger_sum(db_session, cement_raw_material, warehouse_1)
+
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "50", reference_id=2)
+    db_session.commit()
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == _ledger_sum(db_session, cement_raw_material, warehouse_1)
+
+    _reverse(db_session, organisation, cement_raw_material, warehouse_1, "30", reference_id=1)
+    db_session.commit()
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == _ledger_sum(db_session, cement_raw_material, warehouse_1)
+
+
+def test_a_row_created_by_another_session_between_this_ones_update_attempt_and_existence_check_is_not_wrongly_rejected(
+    db_session, organisation, cement_raw_material, warehouse_1, monkeypatch
+):
+    """Concurrency: `_increment_inventory`'s conditional UPDATE and its
+    own follow-up "does a row exist" check (reached only when the update
+    found no row) are two separate statements, not one atomic step -- a
+    *different* session's own first-ever movement for this same pair can
+    commit in between. That must still be treated as a race this session
+    lost, retried against the row that now exists, never as proof this
+    session's own quantity was negative.
+
+    Simulated by monkeypatching `_apply_conditional_update` so its first
+    call -- the one `_increment_inventory` makes before its own
+    "does a row exist" check -- has the race's exact effect (another
+    session's commit landing right after it returns) before returning
+    the same False a real race would have produced; every later call
+    (this fix's own retry) runs unpatched. Two real, separate SQLite
+    connections can't be driven through this exact interleaving directly
+    -- plain SQLite (no WAL here, deliberately; see the Stock Balance
+    audit report) only allows one writer, so simulating the *outcome* of
+    the race is what actually exercises the bug this guards against, not
+    a literal thread race."""
+    real_apply_conditional_update = inventory_service._apply_conditional_update
+    calls = {"n": 0}
+
+    def _apply_conditional_update_racing_another_session(db, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return real_apply_conditional_update(db, **kwargs)
+        other = SessionLocal()
+        try:
+            other.add(
+                RawMaterialInventory(
+                    organisation_id=organisation.id,
+                    raw_material_id=cement_raw_material.id,
+                    warehouse_id=warehouse_1.id,
+                    quantity_on_hand=Decimal("40"),
+                )
+            )
+            other.commit()
+        finally:
+            other.close()
+        return False
+
+    monkeypatch.setattr(inventory_service, "_apply_conditional_update", _apply_conditional_update_racing_another_session)
+
+    inventory_service._increment_inventory(
+        db_session,
+        organisation_id=organisation.id,
+        raw_material_id=cement_raw_material.id,
+        warehouse_id=warehouse_1.id,
+        quantity=Decimal("15"),
+    )
+    db_session.commit()
+    assert calls["n"] == 2  # the race was hit, and the retry is what actually applied it
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("55.0000")
+
+
+def test_two_sequential_movements_for_the_same_pair_do_not_lose_either_update(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    """Two separate sessions (simulating two separate requests) writing
+    to the same (material, warehouse) pair, one right after the other,
+    must both take effect -- the second session's own commit, based on
+    its own fresh read of the row the first session just committed, must
+    not silently overwrite the first session's contribution."""
+    # db_session (this test's own fixture) may itself be holding an open
+    # transaction from an earlier fixture's add()->commit()->refresh()
+    # -- release it first so it can't block the two independent sessions
+    # below under plain SQLite's single-writer locking (same reasoning
+    # as the test above).
+    db_session.rollback()
+
+    first = SessionLocal()
+    try:
+        inventory_service._increment_inventory(
+            first,
+            organisation_id=organisation.id,
+            raw_material_id=cement_raw_material.id,
+            warehouse_id=warehouse_1.id,
+            quantity=Decimal("40"),
+        )
+        first.commit()
+    finally:
+        first.close()
+
+    second = SessionLocal()
+    try:
+        inventory_service._increment_inventory(
+            second,
+            organisation_id=organisation.id,
+            raw_material_id=cement_raw_material.id,
+            warehouse_id=warehouse_1.id,
+            quantity=Decimal("10"),
+        )
+        second.commit()
+    finally:
+        second.close()
+
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("50.0000")
