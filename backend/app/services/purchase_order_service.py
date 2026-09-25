@@ -625,6 +625,7 @@ def post_receipt(db: Session, *, receipt: PurchaseOrderReceipt, purchase_order: 
 
     receipt_lines = db.query(PurchaseOrderReceiptLine).filter(PurchaseOrderReceiptLine.receipt_id == receipt.id).all()
     factors = _conversion_factors(db, receipt_lines)
+    stock_units = _stock_units(db, receipt_lines)
     for receipt_line in receipt_lines:
         po_line_rowcount = (
             db.query(PurchaseOrderLine)
@@ -650,6 +651,7 @@ def post_receipt(db: Session, *, receipt: PurchaseOrderReceipt, purchase_order: 
             raw_material_id=receipt_line.raw_material_id,
             warehouse_id=receipt.warehouse_id,
             quantity=_stock_quantity(receipt_line.quantity, factors[receipt_line.purchase_order_line_id]),
+            unit_of_measure_id=stock_units[receipt_line.raw_material_id],
             reference_type=PURCHASE_ORDER_RECEIPT_LINE_REFERENCE,
             reference_id=receipt_line.id,
             created_by_user_id=posted_by_user_id,
@@ -716,8 +718,6 @@ def reverse_receipt(
         inventory_service.reverse_stock(
             db,
             organisation_id=purchase_order.organisation_id,
-            raw_material_id=receipt_line.raw_material_id,
-            warehouse_id=receipt.warehouse_id,
             quantity=_stock_quantity(receipt_line.quantity, factors[receipt_line.purchase_order_line_id]),
             reference_type=PURCHASE_ORDER_RECEIPT_LINE_REFERENCE,
             reference_id=receipt_line.id,
@@ -738,6 +738,18 @@ def _conversion_factors(db: Session, receipt_lines: list[PurchaseOrderReceiptLin
     return dict(
         db.query(PurchaseOrderLine.id, PurchaseOrderLine.conversion_factor).filter(PurchaseOrderLine.id.in_(ids)).all()
     )
+
+
+def _stock_units(db: Session, receipt_lines: list[PurchaseOrderReceiptLine]) -> dict[int, int]:
+    """Each receipt line's raw material's own current stock unit --
+    inventory quantities are always kept in this unit (never re-derived
+    later: a material's unit is permanently frozen the instant any
+    StockMovement exists for it, app/api/raw_materials.py's
+    _has_recorded_quantity). Resolved once per post/reverse call and
+    passed straight through to inventory_service, which never re-resolves
+    it itself (gap-fix: Inventory ledger hardening -- movement UOM)."""
+    ids = {line.raw_material_id for line in receipt_lines}
+    return dict(db.query(RawMaterial.id, RawMaterial.unit_of_measure_id).filter(RawMaterial.id.in_(ids)).all())
 
 
 def _stock_quantity(quantity: Decimal, factor: Decimal) -> Decimal:

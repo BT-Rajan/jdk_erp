@@ -100,6 +100,8 @@ RFQ_INVITATION_FOLLOW_UP_ADDED = "rfq_invitation_follow_up_added"
 RFQ_SENT = "rfq_sent"
 RFQ_SEND_FAILED = "rfq_send_failed"
 DOCUMENT_TEMPLATE_UPDATED = "document_template_updated"
+INVENTORY_ADJUSTMENT_CREATED = "inventory_adjustment_created"
+INVENTORY_OPENING_STOCK_RECORDED = "inventory_opening_stock_recorded"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"
@@ -112,6 +114,11 @@ MASTER_DATA_MODULE = "master_data"
 # Phase 4 -- Purchase Order lifecycle/receiving events
 # (docs/modules/purchase_orders.md).
 PROCUREMENT_MODULE = "procurement"
+# Controlled Stock Adjustments -- the Inventory module's own events,
+# distinct from PROCUREMENT_MODULE the same way its own
+# app/services/inventory_scope.py's module_key is distinct from
+# purchase_scope.py's.
+INVENTORY_MODULE = "inventory"
 
 
 class AuditEvent(Base):
