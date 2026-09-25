@@ -56,6 +56,7 @@ const NAV_ENTRIES: NavEntry[] = [
     items: [
       { label: 'Stock Adjustments', to: '/inventory/adjustments' },
       { label: 'Opening Stock', to: '/inventory/opening-stock' },
+      { label: 'Reconciliation', to: '/inventory/reconciliation' },
     ],
   },
   {
