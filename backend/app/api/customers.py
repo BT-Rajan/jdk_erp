@@ -142,7 +142,11 @@ def create_customer(
     elif assigned_to_user_id is not None:
         assignee = (
             db.query(User)
-            .filter(User.id == assigned_to_user_id, User.organisation_id == current_user.organisation_id)
+            .filter(
+                User.id == assigned_to_user_id,
+                User.organisation_id == current_user.organisation_id,
+                User.is_active.is_(True),
+            )
             .first()
         )
         if assignee is None:
@@ -294,7 +298,11 @@ def assign_customer(
     if payload.assigned_to_user_id is not None:
         assignee = (
             db.query(User)
-            .filter(User.id == payload.assigned_to_user_id, User.organisation_id == user.organisation_id)
+            .filter(
+                User.id == payload.assigned_to_user_id,
+                User.organisation_id == user.organisation_id,
+                User.is_active.is_(True),
+            )
             .first()
         )
         if assignee is None:
