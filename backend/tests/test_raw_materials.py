@@ -473,6 +473,31 @@ def test_edit_raw_material_rejects_adding_only_alternate_factor(client, admin_us
     assert response.status_code == 422
 
 
+def test_edit_raw_material_rejects_own_unit_changed_to_match_existing_alternate_unit(
+    client, admin_user, cement_raw_material, mass_kilogram_unit
+):
+    """Changing only unit_of_measure_id (not the alternate fields) must
+    still be checked against an already-configured alternate conversion
+    -- otherwise a material could end up with
+    alternate_conversion_unit_of_measure_id == unit_of_measure_id (e.g.
+    "1 BAG = 25 BAG"), the exact half-configured/self-referential state
+    create-time validation already rejects."""
+    headers = _login_headers(client, "admin_person")
+    add_alternate = client.patch(
+        f"/api/raw-materials/{cement_raw_material.id}",
+        json={"alternate_conversion_unit_of_measure_id": mass_kilogram_unit.id, "alternate_conversion_factor": "25"},
+        headers=headers,
+    )
+    assert add_alternate.status_code == 200
+
+    response = client.patch(
+        f"/api/raw-materials/{cement_raw_material.id}",
+        json={"unit_of_measure_id": mass_kilogram_unit.id},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
 # --- update ------------------------------------------------------------
 
 

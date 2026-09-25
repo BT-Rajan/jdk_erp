@@ -226,11 +226,21 @@ def update_raw_material(
     for field, value in updates.items():
         setattr(raw_material, field, value)
 
-    if "alternate_conversion_unit_of_measure_id" in updates or "alternate_conversion_factor" in updates:
+    if (
+        "alternate_conversion_unit_of_measure_id" in updates
+        or "alternate_conversion_factor" in updates
+        or "unit_of_measure_id" in updates
+    ):
         # Same both-or-neither discipline as UnitOfMeasure's
         # dimension/conversion_factor_to_base pair -- checked against the
         # merged post-update state since a partial update only sees the
-        # fields actually sent (docs/modules/boms.md #5).
+        # fields actually sent (docs/modules/boms.md #5). Also re-checked
+        # when only unit_of_measure_id changes (not just the alternate
+        # fields themselves) -- otherwise changing a material's own unit
+        # to match its already-configured alternate unit would silently
+        # leave alternate_conversion_unit_of_measure_id ==
+        # unit_of_measure_id (e.g. "1 BAG = 25 BAG"), an invariant this
+        # same block already rejects on create.
         if (raw_material.alternate_conversion_unit_of_measure_id is None) != (
             raw_material.alternate_conversion_factor is None
         ):
