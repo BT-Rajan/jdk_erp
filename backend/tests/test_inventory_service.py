@@ -658,10 +658,17 @@ def test_opening_stock_records_user_time_and_reason_correctly(
 def test_a_second_opening_stock_for_the_same_pair_is_rejected_as_a_duplicate(
     db_session, organisation, cement_raw_material, warehouse_1
 ):
+    """Sequentially, a second submission for the same pair is caught by
+    the broader "must be first movement" guard (the first opening
+    stock's own StockMovement now counts as an existing movement) before
+    it ever reaches the OpeningStockEntry table's own uniqueness -- see
+    test_a_genuine_race_between_two_opening_stock_submissions_still_only_applies_once
+    below for the case where that deeper, DB-level guard is the one that
+    actually fires."""
     _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "100")
     db_session.commit()
 
-    with pytest.raises(ConflictError):
+    with pytest.raises(BusinessRuleError):
         _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "50")
     db_session.rollback()
 
@@ -670,26 +677,82 @@ def test_a_second_opening_stock_for_the_same_pair_is_rejected_as_a_duplicate(
     assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("100.0000")
 
 
-def test_existing_movements_remain_unchanged_after_opening_stock(
-    db_session, organisation, cement_raw_material, warehouse_1
+def test_a_genuine_race_between_two_opening_stock_submissions_still_only_applies_once(
+    db_session, organisation, cement_raw_material, warehouse_1, monkeypatch
 ):
-    """Opening stock's own OpeningStockEntry uniqueness is keyed on
-    (raw_material_id, warehouse_id), entirely independent of any prior
-    movement's own reference -- recording it alongside an existing
-    RECEIPT for the same pair must leave that receipt untouched."""
+    """The "must be first movement" guard (`_has_any_movement`) is a
+    plain SELECT, not a DB constraint -- two concurrent submissions for a
+    pair with no movements yet could both pass it before either commits.
+    OpeningStockEntry's own UNIQUE(raw_material_id, warehouse_id) is what
+    actually closes that race. Simulated the same way the Stock Balance
+    audit's own concurrency regression test is: monkeypatching the guard
+    so its first call has the race's exact effect (a *different* session's
+    own opening stock committing right after it returns "no movement
+    yet") before returning that same False a real race would have
+    produced; the real check runs unpatched from then on."""
+    real_has_any_movement = inventory_service._has_any_movement
+    calls = {"n": 0}
+
+    def _has_any_movement_racing_another_session(db, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return real_has_any_movement(db, **kwargs)
+        other = SessionLocal()
+        try:
+            inventory_service.record_opening_stock(
+                other,
+                organisation_id=organisation.id,
+                raw_material_id=cement_raw_material.id,
+                warehouse_id=warehouse_1.id,
+                quantity=Decimal("40"),
+                unit_of_measure_id=cement_raw_material.unit_of_measure_id,
+                reason="Other session won the race",
+                created_by_user_id=None,
+            )
+            other.commit()
+        finally:
+            other.close()
+        return False
+
+    monkeypatch.setattr(inventory_service, "_has_any_movement", _has_any_movement_racing_another_session)
+
+    with pytest.raises(ConflictError):
+        _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "100")
+    db_session.rollback()
+
+    # 2, not 1: the patch is global, so the inner "other" session's own
+    # call into record_opening_stock also goes through it once (and
+    # correctly falls through to the real check, since by then calls["n"]
+    # is already > 1) -- what matters is db_session's own single attempt
+    # above raised ConflictError, not this internal bookkeeping detail.
+    assert calls["n"] == 2
+    assert db_session.query(StockMovement).filter(StockMovement.movement_type == OPENING_STOCK).count() == 1
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("40.0000")
+
+
+def test_existing_movements_remain_unchanged_after_opening_stock(
+    db_session, organisation, cement_raw_material, material_m_kg, warehouse_1
+):
+    """Recording opening stock for one (material, warehouse) pair must
+    leave a completely unrelated pair's own existing receipt untouched.
+    Uses two different materials in the same warehouse -- opening stock
+    for `material_m_kg` (which has no movements yet) is unaffected by,
+    and doesn't affect, `cement_raw_material`'s own prior receipt (opening
+    stock is only ever valid for a pair with no movements yet, so the
+    same pair as an existing receipt isn't a usable scenario here)."""
     receipt = _receive(db_session, organisation, cement_raw_material, warehouse_1, "30", reference_id=1)
     db_session.commit()
     original_quantity = receipt.quantity
     original_created_at = receipt.created_at
 
-    _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "20")
+    _open_stock(db_session, organisation, material_m_kg, warehouse_1, "20")
     db_session.commit()
 
     reloaded_receipt = db_session.query(StockMovement).filter(StockMovement.id == receipt.id).one()
     assert reloaded_receipt.quantity == original_quantity
     assert reloaded_receipt.created_at == original_created_at
     assert reloaded_receipt.movement_type == RECEIPT
-    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("50.0000")
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("30.0000")
 
 
 def test_a_failed_opening_stock_leaves_ledger_and_balance_unchanged(
@@ -698,9 +761,126 @@ def test_a_failed_opening_stock_leaves_ledger_and_balance_unchanged(
     _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "75")
     db_session.commit()
 
-    with pytest.raises(ConflictError):
+    with pytest.raises(BusinessRuleError):
         _open_stock(db_session, organisation, cement_raw_material, warehouse_1, "999")
     db_session.rollback()
 
     assert db_session.query(StockMovement).filter(StockMovement.movement_type == OPENING_STOCK).count() == 1
     assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("75.0000")
+
+
+# --- ledger/balance reconciliation -----------------------------------------------------------
+
+
+def test_reconciliation_reports_a_match_for_a_consistent_pair(db_session, organisation, cement_raw_material, warehouse_1):
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100", reference_id=1)
+    db_session.commit()
+    _adjust(db_session, organisation, cement_raw_material, warehouse_1, "-10")
+    db_session.commit()
+
+    report = inventory_service.reconcile_balances(db_session, organisation_id=organisation.id)
+    entry = next(p for p in report if p.raw_material_id == cement_raw_material.id and p.warehouse_id == warehouse_1.id)
+    assert entry.matches is True
+    assert entry.ledger_sum == Decimal("90.0000")
+    assert entry.quantity_on_hand == Decimal("90.0000")
+    assert entry.difference == Decimal("0.0000")
+
+
+def test_reconciliation_detects_a_snapshot_that_disagrees_with_the_ledger(
+    db_session, organisation, cement_raw_material, warehouse_1
+):
+    """A genuine data-integrity problem -- the snapshot has drifted from
+    what the ledger itself sums to (simulated here the only way it could
+    ever happen: something outside inventory_service writing to
+    quantity_on_hand directly, which this whole gap-fix pass exists to
+    catch, not to have caused)."""
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100", reference_id=1)
+    db_session.commit()
+
+    row = (
+        db_session.query(RawMaterialInventory)
+        .filter(RawMaterialInventory.raw_material_id == cement_raw_material.id, RawMaterialInventory.warehouse_id == warehouse_1.id)
+        .first()
+    )
+    row.quantity_on_hand = Decimal("150")
+    db_session.commit()
+
+    report = inventory_service.reconcile_balances(db_session, organisation_id=organisation.id)
+    entry = next(p for p in report if p.raw_material_id == cement_raw_material.id and p.warehouse_id == warehouse_1.id)
+    assert entry.matches is False
+    assert entry.ledger_sum == Decimal("100.0000")
+    assert entry.quantity_on_hand == Decimal("150")
+    assert entry.difference == Decimal("50")
+
+
+def test_reconciliation_never_writes_anything(db_session, organisation, cement_raw_material, warehouse_1):
+    """Read-only: running the report must not change the snapshot, the
+    ledger, or anything else -- even when it finds a mismatch."""
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100", reference_id=1)
+    db_session.commit()
+    row = (
+        db_session.query(RawMaterialInventory)
+        .filter(RawMaterialInventory.raw_material_id == cement_raw_material.id, RawMaterialInventory.warehouse_id == warehouse_1.id)
+        .first()
+    )
+    row.quantity_on_hand = Decimal("999")
+    db_session.commit()
+
+    inventory_service.reconcile_balances(db_session, organisation_id=organisation.id)
+
+    assert _on_hand(db_session, cement_raw_material, warehouse_1) == Decimal("999")
+    assert db_session.query(StockMovement).count() == 1
+
+
+def test_reconciliation_is_scoped_to_its_own_organisation(
+    db_session, organisation, other_organisation, cement_raw_material, warehouse_1
+):
+    from app.models.category import Category
+    from app.models.raw_material import RawMaterial
+    from app.models.unit import UnitOfMeasure
+    from app.models.warehouse import Warehouse
+
+    other_unit = UnitOfMeasure(organisation_id=other_organisation.id, name="Kilogram", code="KG", is_active=True)
+    db_session.add(other_unit)
+    db_session.commit()
+    other_category = Category(organisation_id=other_organisation.id, name="Materials", code="MAT", is_active=True)
+    db_session.add(other_category)
+    db_session.commit()
+    other_material = RawMaterial(
+        organisation_id=other_organisation.id,
+        code="OTH001",
+        name="Other Org Cement",
+        category_id=other_category.id,
+        unit_of_measure_id=other_unit.id,
+        is_active=True,
+    )
+    db_session.add(other_material)
+    db_session.commit()
+    other_warehouse = Warehouse(
+        organisation_id=other_organisation.id,
+        code="OWH-001",
+        name="Other Org Warehouse",
+        total_usable_storage_area=1000,
+        storage_area_unit_of_measure_id=other_unit.id,
+        is_active=True,
+    )
+    db_session.add(other_warehouse)
+    db_session.commit()
+
+    _receive(db_session, organisation, cement_raw_material, warehouse_1, "100", reference_id=1)
+    db_session.commit()
+    inventory_service.receive_stock(
+        db_session,
+        organisation_id=other_organisation.id,
+        raw_material_id=other_material.id,
+        warehouse_id=other_warehouse.id,
+        quantity=Decimal("40"),
+        unit_of_measure_id=other_unit.id,
+        reference_type="test_seed",
+        reference_id=1,
+        created_by_user_id=None,
+    )
+    db_session.commit()
+
+    report = inventory_service.reconcile_balances(db_session, organisation_id=organisation.id)
+    assert {(p.raw_material_id, p.warehouse_id) for p in report} == {(cement_raw_material.id, warehouse_1.id)}

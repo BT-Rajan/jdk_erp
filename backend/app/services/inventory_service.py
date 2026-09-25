@@ -19,6 +19,10 @@ nothing else for an adjustment or opening stock), so the two succeed or
 fail together (task's own "receipt + inventory movement must be atomic"
 requirement, extended identically to adjustments and opening stock)."""
 
+from dataclasses import dataclass
+from decimal import Decimal
+
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -240,6 +244,23 @@ def adjust_stock(
     return movement
 
 
+def _has_any_movement(db: Session, *, raw_material_id: int, warehouse_id: int) -> bool:
+    """Whether this (raw_material_id, warehouse_id) pair has any
+    StockMovement at all, of any type -- the "must be the first
+    movement" check record_opening_stock uses. A plain SELECT, not a DB
+    constraint: it can only see what's already committed, so it alone
+    can't close a race between two concurrent opening-stock submissions
+    for a pair with nothing recorded yet -- that's what OpeningStockEntry's
+    own UNIQUE(raw_material_id, warehouse_id) is for (gap-fix: Controlled
+    Opening Stock -- must be the first movement)."""
+    return (
+        db.query(StockMovement.id)
+        .filter(StockMovement.raw_material_id == raw_material_id, StockMovement.warehouse_id == warehouse_id)
+        .first()
+        is not None
+    )
+
+
 def record_opening_stock(
     db: Session,
     *,
@@ -273,7 +294,22 @@ def record_opening_stock(
     from being poisoned. `unit_of_measure_id` is the raw material's own
     current stock unit, resolved and validated by the caller -- never
     accepted as arbitrary input, and never a historical re-derivation
-    (gap-fix: Controlled Opening Stock -- UOM)."""
+    (gap-fix: Controlled Opening Stock -- UOM).
+
+    Opening stock is also rejected outright if this pair already has ANY
+    StockMovement on record, of any type -- not just a prior opening
+    stock. Opening stock's whole purpose (per its own rules) is
+    establishing the starting balance "when it's first brought under
+    this ledger's control"; a pair that's already received real receipts
+    or adjustments is no longer at that starting point, and letting
+    opening stock inject an extra, undated-relative-to-those-events
+    balance on top would misrepresent the ledger's own history (gap-fix:
+    Controlled Opening Stock -- must be the first movement)."""
+    if _has_any_movement(db, raw_material_id=raw_material_id, warehouse_id=warehouse_id):
+        raise BusinessRuleError(
+            "Opening stock can only be recorded before any other movement exists for this raw material in this warehouse."
+        )
+
     entry = OpeningStockEntry(
         organisation_id=organisation_id, raw_material_id=raw_material_id, warehouse_id=warehouse_id, reason=reason
     )
@@ -321,6 +357,71 @@ def get_quantity_on_hand(db: Session, *, raw_material_id: int, warehouse_id: int
         .first()
     )
     return row.quantity_on_hand if row is not None else 0
+
+
+@dataclass(frozen=True)
+class BalanceReconciliation:
+    """One (raw material, warehouse) pair's own comparison between
+    RawMaterialInventory.quantity_on_hand (the materialized snapshot)
+    and SUM(StockMovement.quantity) for that same pair (what the ledger
+    itself implies). Nothing here writes anything -- a mismatch is a
+    data-integrity fact to surface, per the same "no silent correction"
+    principle already established for adjustments and opening stock; if
+    the snapshot is what's wrong, a Controlled Stock Adjustment is the
+    fix, never an automatic rewrite from this report (gap-fix: Stock
+    Balance -- ledger/balance reconciliation, the gap the Stock Balance
+    audit itself noted: nothing previously checked this outside tests)."""
+
+    raw_material_id: int
+    warehouse_id: int
+    ledger_sum: Decimal
+    quantity_on_hand: Decimal
+
+    @property
+    def matches(self) -> bool:
+        return self.ledger_sum == self.quantity_on_hand
+
+    @property
+    def difference(self) -> Decimal:
+        """quantity_on_hand - ledger_sum -- positive means the snapshot
+        shows more than the ledger accounts for."""
+        return self.quantity_on_hand - self.ledger_sum
+
+
+def get_ledger_sum(db: Session, *, raw_material_id: int, warehouse_id: int) -> Decimal:
+    """The balance as the ledger itself implies it -- SUM(quantity) over
+    every StockMovement for this pair. Only ever used for reconciliation
+    (comparing it against the snapshot) -- never as a live substitute for
+    RawMaterialInventory.quantity_on_hand; get_quantity_on_hand above is
+    still the one place normal callers read the current balance from."""
+    total = (
+        db.query(func.sum(StockMovement.quantity))
+        .filter(StockMovement.raw_material_id == raw_material_id, StockMovement.warehouse_id == warehouse_id)
+        .scalar()
+    )
+    return total if total is not None else Decimal("0")
+
+
+def reconcile_balances(db: Session, *, organisation_id: int) -> list[BalanceReconciliation]:
+    """Every (raw material, warehouse) pair this organisation has a
+    snapshot row for, each compared against what its own ledger sums to.
+    Read-only report, not a fix: it never touches quantity_on_hand or
+    StockMovement, and never runs automatically -- a caller (the
+    reconciliation API endpoint) decides when to ask for it."""
+    pairs = (
+        db.query(RawMaterialInventory.raw_material_id, RawMaterialInventory.warehouse_id, RawMaterialInventory.quantity_on_hand)
+        .filter(RawMaterialInventory.organisation_id == organisation_id)
+        .all()
+    )
+    return [
+        BalanceReconciliation(
+            raw_material_id=raw_material_id,
+            warehouse_id=warehouse_id,
+            ledger_sum=get_ledger_sum(db, raw_material_id=raw_material_id, warehouse_id=warehouse_id),
+            quantity_on_hand=quantity_on_hand,
+        )
+        for raw_material_id, warehouse_id, quantity_on_hand in pairs
+    ]
 
 
 def _apply_conditional_update(db: Session, *, raw_material_id: int, warehouse_id: int, quantity) -> bool:

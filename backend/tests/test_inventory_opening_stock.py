@@ -124,11 +124,16 @@ def test_opening_stock_without_a_reason_is_rejected(client, admin_headers, cemen
 
 
 def test_duplicate_opening_stock_submission_is_rejected(client, admin_headers, cement_raw_material, warehouse_1, db_session):
+    """A sequential resubmission is caught by the broader "must be first
+    movement" guard (400) before it can reach OpeningStockEntry's own
+    uniqueness (409, only reachable under a genuine concurrent race --
+    see test_a_genuine_race_between_two_opening_stock_submissions_still_only_applies_once
+    in test_inventory_service.py)."""
     first = _open_stock(client, admin_headers, cement_raw_material.id, warehouse_1.id, "100")
     assert first.status_code == 201
 
     second = _open_stock(client, admin_headers, cement_raw_material.id, warehouse_1.id, "50")
-    assert second.status_code == 409
+    assert second.status_code == 400
 
     assert db_session.query(StockMovement).filter(StockMovement.movement_type == OPENING_STOCK).count() == 1
     row = (

@@ -4,9 +4,11 @@ receive/reverse flow: a correction (Adjustments) or a starting balance
 (Opening Stock). Each is gated by its own inventory:* action
 (app/services/inventory_scope.py), deliberately a different module_key
 than `purchase:receive` -- warehouse receiving authority alone must
-never also grant either. No listing, no dashboard, no approval
-workflow: this pass is only the two mechanisms themselves, verified
-atomic and traceable in the ledger."""
+never also grant either. Also the ledger/balance reconciliation report
+(GET /reconciliation) -- read-only, never a fix; the Stock Balance
+audit's own noted gap, closed as a report rather than left unaddressed.
+No dashboard, no approval workflow, no scheduling: these are the
+mechanisms and the one report, nothing more."""
 
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
@@ -23,7 +25,14 @@ from app.models.raw_material import RawMaterial
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
 from app.models.warehouse import Warehouse
-from app.schemas.inventory import AdjustmentOut, AdjustStockRequest, OpeningStockOut, RecordOpeningStockRequest
+from app.schemas.inventory import (
+    AdjustmentOut,
+    AdjustStockRequest,
+    BalanceReconciliationOut,
+    OpeningStockOut,
+    ReconciliationReportOut,
+    RecordOpeningStockRequest,
+)
 from app.services import audit_service, inventory_scope, inventory_service
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
@@ -180,4 +189,43 @@ def create_opening_stock(
         created_by_name=current_user.full_name,
         created_at=movement.created_at,
         quantity_on_hand=quantity_on_hand,
+    )
+
+
+@router.get("/reconciliation", response_model=ReconciliationReportOut)
+def get_reconciliation_report(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> ReconciliationReportOut:
+    """Every (raw material, warehouse) pair this organisation has a
+    stock snapshot for, each compared against what its own ledger sums
+    to -- read-only, never a fix. A mismatch is a data-integrity fact to
+    investigate and correct with a Controlled Stock Adjustment, never
+    something this report changes itself."""
+    inventory_scope.require_permission(db, current_user, inventory_scope.RECONCILE)
+    pairs = inventory_service.reconcile_balances(db, organisation_id=current_user.organisation_id)
+
+    material_names = dict(
+        db.query(RawMaterial.id, RawMaterial.name).filter(RawMaterial.id.in_({p.raw_material_id for p in pairs})).all()
+    )
+    warehouse_names = dict(
+        db.query(Warehouse.id, Warehouse.name).filter(Warehouse.id.in_({p.warehouse_id for p in pairs})).all()
+    )
+
+    out_pairs = [
+        BalanceReconciliationOut(
+            raw_material_id=pair.raw_material_id,
+            material_name=material_names.get(pair.raw_material_id, f"#{pair.raw_material_id}"),
+            warehouse_id=pair.warehouse_id,
+            warehouse_name=warehouse_names.get(pair.warehouse_id, f"#{pair.warehouse_id}"),
+            ledger_sum=pair.ledger_sum,
+            quantity_on_hand=pair.quantity_on_hand,
+            difference=pair.difference,
+            matches=pair.matches,
+        )
+        for pair in pairs
+    ]
+    return ReconciliationReportOut(
+        pairs_checked=len(out_pairs),
+        mismatches_found=sum(1 for p in out_pairs if not p.matches),
+        pairs=out_pairs,
     )
