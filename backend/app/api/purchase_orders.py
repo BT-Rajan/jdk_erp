@@ -467,7 +467,12 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
         amount_adjustment=purchase_order.amount_adjustment,
         final_amount=final,
         paid_amount=paid,
-        outstanding_amount=final - paid,
+        # A cancelled order owes nothing further; any amount already paid
+        # is what's owed back, not still outstanding to pay (gap-fix:
+        # supplier-failure cancellation) -- everything else about paid/
+        # final_amount is untouched.
+        outstanding_amount=Decimal("0.0000") if purchase_order.status == CANCELLED else final - paid,
+        refundable_amount=paid if purchase_order.status == CANCELLED else Decimal("0.0000"),
         payment_status=purchase_order_service.payment_status(final, paid),
         lines=[PurchaseOrderLineOut.model_validate(line) for line in lines],
         revisions=[_build_revision_out(db, revision) for revision in revisions],

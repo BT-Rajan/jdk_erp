@@ -962,6 +962,95 @@ def test_split_sourcing_shows_the_remaining_unsourced_quantity(
     assert body["status"] == "selected"  # partially sourced -- never silently closed
 
 
+# --- gap fix: PO cancellation on supplier failure ------------------------------------------
+
+
+def test_cancelling_a_po_with_a_payment_keeps_it_visible_and_the_rfq_traceable(
+    client, admin_headers, issued_rfq, acme_supplier, warehouse_1
+):
+    """Scenario: PO issued, a payment already recorded, the supplier then
+    says they cannot fulfil -- the PE cancels the PO. The payment must
+    stay fully visible (never silently removed or treated as a refund),
+    the cancellation reason is recorded, and the RFQ/selected quotation
+    this PO came from remain traceable (gap-fix: supplier-failure
+    cancellation, docs/modules/purchase_orders.md)."""
+    rfq, cement_id, sand_id = issued_rfq
+    _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {cement_id: "42", sand_id: "9"})
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    po_id = converted.json()["purchase_order_id"]
+
+    assert client.post(f"/api/purchase-orders/{po_id}/submit", headers=admin_headers).status_code == 200
+    assert client.post(f"/api/purchase-orders/{po_id}/approve", headers=admin_headers).status_code == 200
+    payment = client.post(
+        f"/api/purchase-orders/{po_id}/payments",
+        json={"payment_date": "2026-01-15", "amount": "500", "payment_method": "Bank Transfer", "reference_number": "TXN1"},
+        headers=admin_headers,
+    )
+    assert payment.status_code == 201, payment.text
+    payment_id = payment.json()["payments"][0]["id"]
+
+    cancelled = client.patch(
+        f"/api/purchase-orders/{po_id}/status",
+        json={"status": "cancelled", "cancel_reason": "Supplier confirmed they cannot fulfil this order."},
+        headers=admin_headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    body = cancelled.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_reason"] == "Supplier confirmed they cannot fulfil this order."
+    assert body["cancelled_at"] is not None
+
+    # The payment is still there, unmodified -- never auto-cancelled/refunded.
+    assert len(body["payments"]) == 1
+    assert body["payments"][0]["id"] == payment_id
+    assert body["payments"][0]["status"] == "recorded"
+    assert body["payments"][0]["amount"] == "500.0000"
+
+    # Nothing more is owed to pay; the 500 already paid is now refundable,
+    # not still "outstanding" (which would wrongly suggest more is owed).
+    assert body["outstanding_amount"] == "0.0000"
+    assert body["refundable_amount"] == "500.0000"
+
+    # The original RFQ and selected quotation remain traceable.
+    assert body["rfq_id"] == rfq["id"]
+    assert body["rfq_number"] == rfq["rfq_number"]
+    assert body["rfq_response_id"] is not None
+    refetched_rfq = client.get(f"/api/rfqs/{rfq['id']}", headers=admin_headers).json()
+    assert refetched_rfq["status"] == "converted"
+    assert refetched_rfq["purchase_order_id"] == po_id
+    assert refetched_rfq["selected_response_id"] == body["rfq_response_id"]
+
+
+def test_cancelling_a_po_with_no_payment_still_works_normally(
+    client, admin_headers, issued_rfq, acme_supplier, warehouse_1
+):
+    """A PO with no payment recorded cancels exactly as before -- no
+    refundable amount, no payments to preserve, existing behaviour
+    unchanged."""
+    rfq, cement_id, sand_id = issued_rfq
+    _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {cement_id: "42", sand_id: "9"})
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    po_id = converted.json()["purchase_order_id"]
+    assert client.post(f"/api/purchase-orders/{po_id}/submit", headers=admin_headers).status_code == 200
+    assert client.post(f"/api/purchase-orders/{po_id}/approve", headers=admin_headers).status_code == 200
+
+    cancelled = client.patch(
+        f"/api/purchase-orders/{po_id}/status",
+        json={"status": "cancelled", "cancel_reason": "Supplier confirmed they cannot fulfil this order."},
+        headers=admin_headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    body = cancelled.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_reason"] == "Supplier confirmed they cannot fulfil this order."
+    assert body["payments"] == []
+    assert body["outstanding_amount"] == "0.0000"
+    assert body["refundable_amount"] == "0"  # Decimal("0") -- no payments to add precision from
+    assert body["rfq_id"] == rfq["id"]
+
+
 # --- cancel / list / isolation / permissions ------------------------------------------------
 
 

@@ -192,6 +192,11 @@ class PurchaseOrderOut(BaseModel):
     final_amount: Decimal
     paid_amount: Decimal
     outstanding_amount: Decimal
+    # What's already been paid toward a now-cancelled order -- 0 unless
+    # `status` is `cancelled` and a payment was recorded. Never an actual
+    # refund transaction, just the figure that one is owed (gap-fix:
+    # supplier-failure cancellation, docs/modules/purchase_orders.md).
+    refundable_amount: Decimal = Decimal("0.0000")
     payment_status: str
     lines: list[PurchaseOrderLineOut]
     revisions: list[PurchaseOrderRevisionOut]
@@ -551,6 +556,11 @@ class FinancePurchaseOrderOut(BaseModel):
     final_amount: Decimal
     paid_amount: Decimal
     outstanding_amount: Decimal
+    # What's already been paid toward a now-cancelled order -- 0 unless
+    # `status` is `cancelled` and a payment was recorded. Never an actual
+    # refund transaction, just the figure that one is owed (gap-fix:
+    # supplier-failure cancellation, docs/modules/purchase_orders.md).
+    refundable_amount: Decimal = Decimal("0.0000")
     payment_status: str
     lines: list[FinanceLineOut]
     payments: list[FinancePaymentOut]

@@ -191,6 +191,8 @@ interface PurchaseOrder {
   final_amount: string
   paid_amount: string
   outstanding_amount: string
+  /** What's owed back on a cancelled order with a payment already made -- '0.0000' otherwise. */
+  refundable_amount: string
   payment_status: PaymentStatus
   lines: PurchaseOrderLine[]
   revisions: PurchaseOrderRevision[]
@@ -731,10 +733,13 @@ export function PurchaseOrdersPage() {
       key: 'payment',
       label: 'Payment',
       hideBelow: 'lg',
-      render: (po) =>
-        ['draft', 'pending_approval', 'cancelled'].includes(po.status) ? '—' : (
-          <Badge tone={PAYMENT_STATUS_TONES[po.payment_status]}>{PAYMENT_STATUS_LABELS[po.payment_status]}</Badge>
-        ),
+      render: (po) => {
+        if (po.status === 'cancelled') {
+          return Number(po.refundable_amount) > 0 ? <Badge tone="warning">Refundable</Badge> : '—'
+        }
+        if (['draft', 'pending_approval'].includes(po.status)) return '—'
+        return <Badge tone={PAYMENT_STATUS_TONES[po.payment_status]}>{PAYMENT_STATUS_LABELS[po.payment_status]}</Badge>
+      },
     },
     {
       key: 'actions',
@@ -1013,9 +1018,26 @@ export function PurchaseOrdersPage() {
                         <span className="mx-2 text-gold-100/30">|</span>
                         <span className="text-gold-100/50">Paid </span>{detailTarget.paid_amount}
                         <span className="mx-2 text-gold-100/30">|</span>
-                        <span className="text-gold-100/50">Outstanding </span>{detailTarget.outstanding_amount}
+                        {detailTarget.status === 'cancelled' ? (
+                          <>
+                            <span className="text-gold-100/50">Refundable </span>
+                            <span className={Number(detailTarget.refundable_amount) > 0 ? 'font-semibold text-gold-200' : undefined}>
+                              {detailTarget.refundable_amount}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-gold-100/50">Outstanding </span>{detailTarget.outstanding_amount}
+                          </>
+                        )}
                       </div>
                     </div>
+                    {detailTarget.status === 'cancelled' && Number(detailTarget.refundable_amount) > 0 && (
+                      <p className="mb-2 text-sm text-gold-200">
+                        This order was cancelled with {detailTarget.refundable_amount} {detailTarget.currency} already paid --
+                        no further payment is due; this amount is owed back from the supplier.
+                      </p>
+                    )}
                     {detailTarget.payments.length === 0 ? (
                       <p className="text-sm text-gold-100/60">No payments recorded yet.</p>
                     ) : (

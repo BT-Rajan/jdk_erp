@@ -21,6 +21,7 @@ from app.core.errors import NotFoundError
 from app.core.search import apply_keyword_filter
 from app.models.purchase_order import (
     APPROVED,
+    CANCELLED,
     CLOSED,
     PARTIALLY_RECEIVED,
     PAYMENT_RECONCILIATION,
@@ -43,7 +44,11 @@ from app.services import purchase_order_service, purchase_payment_scope
 router = APIRouter(prefix="/api/finance", tags=["finance"])
 
 _PAYABLE = (APPROVED, SENT, PARTIALLY_RECEIVED, RECONCILIATION_REQUIRED, RECEIVED, PAYMENT_RECONCILIATION)
-_VISIBLE = (*_PAYABLE, CLOSED)
+# CLOSED (fully settled) and CANCELLED (supplier couldn't fulfil --
+# gap-fix: a payment already recorded must stay reachable/visible to
+# Finance, never disappear once the order is cancelled) are visible by
+# direct lookup, just no longer part of the "still to pay" list below.
+_VISIBLE = (*_PAYABLE, CLOSED, CANCELLED)
 
 
 def _build_outs(db: Session, purchase_orders: list[PurchaseOrder]) -> list[FinancePurchaseOrderOut]:
@@ -71,6 +76,10 @@ def _build_outs(db: Session, purchase_orders: list[PurchaseOrder]) -> list[Finan
         po_payments = [p for p in payments if p.purchase_order_id == po.id]
         final = purchase_order_service.final_amount(po, po_lines)
         paid = purchase_order_service.paid_amount(po_payments)
+        # A cancelled order owes nothing further; any amount already paid
+        # is what's owed back, not still outstanding to pay (gap-fix:
+        # supplier-failure cancellation).
+        cancelled = po.status == CANCELLED
         out.append(
             FinancePurchaseOrderOut(
                 id=po.id,
@@ -87,7 +96,8 @@ def _build_outs(db: Session, purchase_orders: list[PurchaseOrder]) -> list[Finan
                 currency=po.currency,
                 final_amount=final,
                 paid_amount=paid,
-                outstanding_amount=max(final - paid, Decimal("0")),
+                outstanding_amount=Decimal("0.0000") if cancelled else max(final - paid, Decimal("0")),
+                refundable_amount=paid if cancelled else Decimal("0.0000"),
                 payment_status=purchase_order_service.payment_status(final, paid),
                 lines=[
                     FinanceLineOut(
