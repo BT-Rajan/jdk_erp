@@ -172,6 +172,9 @@ interface PurchaseOrder {
   revision_number: number
   order_date: string
   expected_delivery_date: string | null
+  /** expected_delivery_date has passed and the PO isn't fully received/closed/cancelled. */
+  is_overdue: boolean
+  days_overdue: number
   supplier_reference: string | null
   payment_terms: string | null
   currency: string
@@ -219,6 +222,7 @@ interface PaginatedResponse<T> {
 
 interface PurchaseOrdersFilters {
   search: string
+  overdue: boolean
 }
 
 const STATUS_LABELS: Record<PurchaseOrderStatus, string> = {
@@ -334,6 +338,7 @@ async function fetchPurchaseOrders({
       sort_by: sort?.field,
       sort_direction: sort?.direction,
       q: filters.search || undefined,
+      overdue: filters.overdue || undefined,
     },
   })
   return { rows: data.data, total: data.pagination.total }
@@ -371,6 +376,7 @@ export function PurchaseOrdersPage() {
 
   const [searchInput, setSearchInput] = useState('')
   const debouncedSearch = useDebouncedValue(searchInput, 300)
+  const [overdueFilter, setOverdueFilter] = useState(false)
 
   const [detailTarget, setDetailTarget] = useState<PurchaseOrder | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -418,7 +424,7 @@ export function PurchaseOrdersPage() {
   const table = useServerTable<PurchaseOrder, PurchaseOrdersFilters>({
     fetcher: fetchPurchaseOrders,
     pageSize: 20,
-    initialFilters: { search: '' },
+    initialFilters: { search: '', overdue: false },
   })
 
   const isFirstSearchRender = useRef(true)
@@ -427,8 +433,8 @@ export function PurchaseOrdersPage() {
       isFirstSearchRender.current = false
       return
     }
-    table.setFilters({ search: debouncedSearch })
-  }, [debouncedSearch])
+    table.setFilters({ search: debouncedSearch, overdue: overdueFilter })
+  }, [debouncedSearch, overdueFilter])
 
   const suppliersById = useMemo(() => new Map(suppliers.map((s) => [s.id, s])), [suppliers])
   const materialsById = useMemo(() => new Map(materials.map((m) => [m.id, m])), [materials])
@@ -726,7 +732,21 @@ export function PurchaseOrdersPage() {
     { key: 'po_number', label: 'PO Number', render: (po) => po.po_number },
     { key: 'supplier', label: 'Supplier', render: (po) => suppliersById.get(po.supplier_id)?.name ?? `#${po.supplier_id}` },
     { key: 'order_date', label: 'Order Date', hideBelow: 'sm', render: (po) => formatDate(po.order_date) },
-    { key: 'expected', label: 'Expected Delivery', hideBelow: 'md', render: (po) => formatDate(po.expected_delivery_date) },
+    {
+      key: 'expected',
+      label: 'Expected Delivery',
+      hideBelow: 'md',
+      render: (po) => (
+        <>
+          {formatDate(po.expected_delivery_date)}
+          {po.is_overdue && (
+            <Badge tone="danger" className="mt-1 block w-fit">
+              {`Overdue ${po.days_overdue} ${po.days_overdue === 1 ? 'day' : 'days'}`}
+            </Badge>
+          )}
+        </>
+      ),
+    },
     { key: 'total', label: 'Total', hideBelow: 'md', render: (po) => `${po.total_amount} ${po.currency}` },
     { key: 'status', label: 'Status', render: (po) => <Badge tone={STATUS_TONES[po.status]}>{STATUS_LABELS[po.status]}</Badge> },
     {
@@ -783,6 +803,14 @@ export function PurchaseOrdersPage() {
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
           />
+          <SelectField
+            label="Delivery"
+            value={overdueFilter ? 'overdue' : ''}
+            onChange={(event) => setOverdueFilter(event.target.value === 'overdue')}
+          >
+            <option value="">All</option>
+            <option value="overdue">Overdue only</option>
+          </SelectField>
         </FilterBar>
 
         <DataTable
@@ -829,7 +857,14 @@ export function PurchaseOrdersPage() {
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                   <div><span className="text-gold-100/50">Supplier: </span>{suppliersById.get(detailTarget.supplier_id)?.name ?? `#${detailTarget.supplier_id}`}</div>
                   <div><span className="text-gold-100/50">PO Date: </span>{formatDate(detailTarget.order_date)}</div>
-                  <div><span className="text-gold-100/50">Expected Delivery: </span>{formatDate(detailTarget.expected_delivery_date)}</div>
+                  <div>
+                    <span className="text-gold-100/50">Expected Delivery: </span>{formatDate(detailTarget.expected_delivery_date)}
+                    {detailTarget.is_overdue && (
+                      <Badge tone="danger" className="ml-2">
+                        {`Overdue ${detailTarget.days_overdue} ${detailTarget.days_overdue === 1 ? 'day' : 'days'}`}
+                      </Badge>
+                    )}
+                  </div>
                   <div><span className="text-gold-100/50">Payment Terms: </span>{detailTarget.payment_terms ?? '—'}</div>
                   <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
                   <div><span className="text-gold-100/50">Revision: </span>{detailTarget.revision_number || '—'}</div>

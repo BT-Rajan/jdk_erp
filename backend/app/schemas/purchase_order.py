@@ -169,6 +169,12 @@ class PurchaseOrderOut(BaseModel):
     revision_number: int
     order_date: date
     expected_delivery_date: date | None
+    # expected_delivery_date has passed and the PO is not fully received/
+    # closed/cancelled -- for the Purchase Executive to immediately spot
+    # a supplier running late (gap-fix: overdue PO visibility,
+    # docs/modules/purchase_orders.md). Never a status of its own.
+    is_overdue: bool = False
+    days_overdue: int = 0
     supplier_reference: str | None
     payment_terms: str | None
     currency: str

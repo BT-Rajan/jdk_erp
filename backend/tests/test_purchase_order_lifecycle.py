@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.roles import TEAM_MEMBER
+from app.models.purchase_order import PurchaseOrder
 from app.models.role_permission import RolePermission
 from app.services import email_service
 
@@ -343,3 +344,86 @@ def test_failed_follow_up_email_is_kept_with_its_status(client, admin_headers, a
     entry = _po(client, admin_headers, po["id"])["communications"][-1]
     assert (entry["kind"], entry["status"]) == ("follow_up", "failed")
     assert entry["error"]
+
+
+# --- gap fix: overdue PO visibility --------------------------------------------------------
+
+
+def _backdate(db_session, po_id, days):
+    row = db_session.query(PurchaseOrder).get(po_id)
+    row.expected_delivery_date = date.today() - timedelta(days=days)
+    db_session.commit()
+
+
+def test_future_delivery_date_is_not_overdue(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+    po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)  # FUTURE
+    assert po["is_overdue"] is False
+    assert po["days_overdue"] == 0
+
+
+def test_todays_delivery_date_is_not_overdue(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session):
+    po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=0)
+    body = _po(client, admin_headers, po["id"])
+    assert body["is_overdue"] is False
+    assert body["days_overdue"] == 0
+
+
+def test_past_delivery_date_with_outstanding_quantity_is_overdue(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=3)
+    body = _po(client, admin_headers, po["id"])
+    assert body["status"] == "sent"
+    assert body["is_overdue"] is True
+    assert body["days_overdue"] == 3
+
+    # Still overdue -- outstanding quantity remains -- after a short receipt too.
+    _receive(client, admin_headers, po["id"], line_id, "40")
+    partial = _po(client, admin_headers, po["id"])
+    assert partial["status"] == "reconciliation_required"
+    assert partial["is_overdue"] is True
+    assert partial["days_overdue"] == 3
+
+
+def test_past_delivery_date_fully_received_is_not_overdue(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=3)
+    _receive(client, admin_headers, po["id"], line_id, "100")
+    body = _po(client, admin_headers, po["id"])
+    assert body["status"] == "received"
+    assert body["is_overdue"] is False
+    assert body["days_overdue"] == 0
+
+
+def test_past_delivery_date_cancelled_is_not_overdue(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=3)
+    cancelled = client.patch(
+        f"/api/purchase-orders/{po['id']}/status",
+        json={"status": "cancelled", "cancel_reason": "Supplier out of stock"},
+        headers=admin_headers,
+    ).json()
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["is_overdue"] is False
+    assert cancelled["days_overdue"] == 0
+
+
+def test_overdue_filter_returns_only_overdue_pos(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    overdue_po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, overdue_po["id"], days=5)
+    on_time_po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+
+    unfiltered = client.get("/api/purchase-orders", headers=admin_headers).json()
+    assert {p["id"] for p in unfiltered["data"]} == {overdue_po["id"], on_time_po["id"]}
+
+    filtered = client.get("/api/purchase-orders", params={"overdue": True}, headers=admin_headers).json()
+    assert [p["id"] for p in filtered["data"]] == [overdue_po["id"]]
+    assert filtered["pagination"]["total"] == 1

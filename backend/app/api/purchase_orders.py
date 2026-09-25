@@ -48,6 +48,8 @@ from app.models.purchase_order import (
     COMMUNICATION_RECORDED,
     COMMUNICATION_SENT,
     DRAFT,
+    PAYMENT_RECONCILIATION,
+    RECEIVED,
     SENT,
     PurchaseOrderCommunication,
     PurchaseOrderReconciliation,
@@ -119,6 +121,23 @@ _PURCHASE_ORDER_REVISION_ENTITY = "purchase_order_revision"
 _PURCHASE_ORDER_PAYMENT_ENTITY = "purchase_order_payment"
 _PURCHASE_ORDER_RECEIPT_ENTITY = "purchase_order_receipt"
 _PURCHASE_ORDER_COMMUNICATION_ENTITY = "purchase_order_communication"
+
+# Statuses that mean "fully received" (or beyond) -- a PO in one of these
+# is never overdue, whatever its expected delivery date, since delivery
+# is no longer outstanding (payment_reconciliation is only ever reached
+# once receiving is fully done, docs/modules/purchase_orders.md Revision
+# 6's refresh_status). Cancelled is excluded for the same reason nothing
+# is still expected. Every other status still has quantity outstanding
+# (gap-fix: overdue PO visibility).
+_NOT_OVERDUE_STATUSES = (RECEIVED, CLOSED, PAYMENT_RECONCILIATION, CANCELLED)
+
+
+def is_overdue(expected_delivery_date: date | None, status: str, today: date) -> bool:
+    return (
+        expected_delivery_date is not None
+        and expected_delivery_date < today
+        and status not in _NOT_OVERDUE_STATUSES
+    )
 
 
 def _get_po_in_org(db: Session, purchase_order_id: int, organisation_id: int) -> PurchaseOrder:
@@ -440,6 +459,8 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
     rfq_number = (
         db.query(Rfq.rfq_number).filter(Rfq.id == purchase_order.rfq_id).scalar() if purchase_order.rfq_id else None
     )
+    today = date.today()
+    overdue = is_overdue(purchase_order.expected_delivery_date, purchase_order.status, today)
     return PurchaseOrderOut(
         id=purchase_order.id,
         organisation_id=purchase_order.organisation_id,
@@ -453,6 +474,8 @@ def _build_po_out(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrderOu
         revision_number=purchase_order.revision_number,
         order_date=purchase_order.order_date,
         expected_delivery_date=purchase_order.expected_delivery_date,
+        is_overdue=overdue,
+        days_overdue=(today - purchase_order.expected_delivery_date).days if overdue else 0,
         supplier_reference=purchase_order.supplier_reference,
         payment_terms=purchase_order.payment_terms,
         currency=purchase_order.currency,
@@ -577,6 +600,7 @@ def list_purchase_orders(
     sort_direction: Literal["asc", "desc"] = Query("asc"),
     status_filter: str | None = Query(None, alias="status"),
     supplier_id: int | None = Query(None),
+    overdue: bool | None = Query(None),
     q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -589,6 +613,14 @@ def list_purchase_orders(
     query = db.query(PurchaseOrder).filter(PurchaseOrder.organisation_id == current_user.organisation_id)
     if status_filter is not None:
         query = query.filter(PurchaseOrder.status == status_filter)
+    if overdue:
+        # Same rule as is_overdue() above, expressed in SQL so pagination
+        # counts only overdue rows (gap-fix: overdue PO visibility).
+        query = query.filter(
+            PurchaseOrder.expected_delivery_date.isnot(None),
+            PurchaseOrder.expected_delivery_date < date.today(),
+            PurchaseOrder.status.notin_(_NOT_OVERDUE_STATUSES),
+        )
     if supplier_id is not None:
         query = query.filter(PurchaseOrder.supplier_id == supplier_id)
     query = apply_keyword_filter(query, q, PurchaseOrder.po_number)
