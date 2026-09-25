@@ -9,13 +9,20 @@ from decimal import Decimal
 
 import pytest
 
-from app.core.roles import TEAM_MEMBER
-from app.models.audit_event import AuditEvent, PURCHASE_ORDER_APPROVED, PURCHASE_ORDER_SEND_FAILED
+from app.core.roles import SUPER_ADMIN, TEAM_MEMBER
+from app.core.security import hash_password
+from app.models.audit_event import (
+    AuditEvent,
+    PURCHASE_ORDER_APPROVED,
+    PURCHASE_ORDER_SEND_FAILED,
+    PURCHASE_ORDER_STATUS_CHANGED,
+)
 from app.models.file import FileRecord
 from app.models.purchase_order import PurchaseOrder
 from app.models.role_permission import RolePermission
 from app.models.raw_material import RawMaterial
 from app.models.unit import UnitOfMeasure
+from app.models.user import User
 from app.services import purchase_order_service
 
 FUTURE = (date.today() + timedelta(days=30)).isoformat()
@@ -373,6 +380,89 @@ def test_cannot_issue_a_cancelled_purchase_order(client, admin_headers, acme_sup
     _cancel(client, admin_headers, po["id"])
     response = _issue(client, admin_headers, po["id"])
     assert response.status_code == 400
+
+
+# --- gap fix: cancellation authority -- admin/super_admin only, never purchase:issue --------
+
+
+def test_super_admin_can_cancel(client, db_session, organisation, acme_supplier, warehouse_1, cement_raw_material):
+    db_session.add(
+        User(
+            organisation_id=organisation.id,
+            role=SUPER_ADMIN,
+            full_name="Super Admin",
+            email="super_admin@example.com",
+            username="super_admin_person",
+            password_hash=hash_password("Str0ng!Pass"),
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    headers = _login_headers(client, "super_admin_person")
+
+    po = _create_po(client, headers, acme_supplier.id, warehouse_1.id).json()
+    _add_line(client, headers, po["id"], cement_raw_material.id, "10", unit_price="5")
+    _issue(client, headers, po["id"])
+    response = _cancel(client, headers, po["id"])
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+
+
+def test_team_member_with_purchase_issue_cannot_cancel(
+    client, active_user, organisation, db_session, acme_supplier, warehouse_1, cement_raw_material, admin_headers
+):
+    """purchase:issue is no longer cancellation authority -- only
+    admin/super_admin may cancel (gap-fix: PO cancellation authority).
+    The same grant still covers what it always did (sending a pending/
+    approved/sent PO back to draft) -- nothing else about it changed."""
+    db_session.add(
+        RolePermission(organisation_id=organisation.id, role=TEAM_MEMBER, module_key="purchase", action="view", scope="all")
+    )
+    db_session.add(
+        RolePermission(organisation_id=organisation.id, role=TEAM_MEMBER, module_key="purchase", action="issue", scope="all")
+    )
+    db_session.commit()
+    headers = _login_headers(client)
+
+    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
+    _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
+    _issue(client, admin_headers, po["id"])
+
+    denied = _cancel(client, headers, po["id"])
+    assert denied.status_code == 403
+    refetched = client.get(f"/api/purchase-orders/{po['id']}", headers=admin_headers).json()
+    assert refetched["status"] != "cancelled"
+
+    # The rest of what purchase:issue grants is unaffected.
+    reopened = _reopen(client, headers, po["id"])
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "draft"
+
+
+def test_admin_cancellation_still_records_reason_and_audit_trail(
+    client, admin_headers, admin_user, organisation, db_session, acme_supplier, warehouse_1, cement_raw_material
+):
+    po = _create_po(client, admin_headers, acme_supplier.id, warehouse_1.id).json()
+    _add_line(client, admin_headers, po["id"], cement_raw_material.id, "10", unit_price="5")
+    _issue(client, admin_headers, po["id"])
+    response = _cancel(client, admin_headers, po["id"], reason="Supplier confirmed they cannot fulfil.")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cancel_reason"] == "Supplier confirmed they cannot fulfil."
+    assert body["cancelled_by_user_id"] == admin_user.id
+
+    events = (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.action == PURCHASE_ORDER_STATUS_CHANGED,
+            AuditEvent.entity_id == po["id"],
+            AuditEvent.organisation_id == organisation.id,
+        )
+        .all()
+    )
+    assert len(events) == 1
+    assert "cancelled" in events[0].details
+    assert events[0].actor_user_id == admin_user.id
 
 
 # --- organisation isolation ---------------------------------------------------

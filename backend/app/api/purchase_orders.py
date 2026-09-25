@@ -207,6 +207,14 @@ def _require_creator_or_admin(user: User, purchase_order: PurchaseOrder) -> None
         raise AccessDeniedError("Only the purchase order's creator can resolve its discrepancies.")
 
 
+def _require_admin_to_cancel(user: User) -> None:
+    """Cancelling a PO is deliberately not covered by `purchase:issue` --
+    only an admin/super_admin may take it, no organisation-configured
+    grant can extend that (gap-fix: PO cancellation authority)."""
+    if user.role not in ADMIN_ROLES:
+        raise AccessDeniedError("You do not have permission to do this.")
+
+
 def _log_communication(
     db: Session,
     *,
@@ -827,9 +835,14 @@ def change_purchase_order_status(
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
     """Back to `draft` (send a pending PO back, or "Create Revision" of an
-    approved/sent PO -- it must then be approved again) or cancel
-    (docs/modules/purchase_orders.md #23)."""
-    purchase_scope.require_permission(db, current_user, purchase_scope.ISSUE)
+    approved/sent PO -- it must then be approved again), gated by
+    `purchase:issue` same as before, or cancel -- gated by admin/
+    super_admin only, never `purchase:issue` (gap-fix: PO cancellation
+    authority) -- (docs/modules/purchase_orders.md #23)."""
+    if payload.status == CANCELLED:
+        _require_admin_to_cancel(current_user)
+    else:
+        purchase_scope.require_permission(db, current_user, purchase_scope.ISSUE)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
     purchase_order_service.assert_transition_allowed(purchase_order.status, payload.status)
 
