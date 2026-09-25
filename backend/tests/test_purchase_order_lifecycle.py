@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.roles import TEAM_MEMBER
+from app.models.purchase_order import PurchaseOrder
 from app.models.role_permission import RolePermission
 from app.services import email_service
 
@@ -188,6 +189,61 @@ def test_cancel_remaining_reduces_the_final_amount(client, admin_headers, acme_s
     assert _pay(client, admin_headers, po["id"], "900").json()["status"] == "closed"
 
 
+def test_accept_received_quantity_leaves_the_amount_owed_unchanged(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material
+):
+    """Outcome 1 (Accept Received Quantity) vs outcome 3 (Cancel Balance):
+    both close out the line's outstanding balance the same mechanical way
+    (cancelled_quantity absorbs the shortfall, since the original ordered
+    quantity is never rewritten), but only Cancel Balance reduces what's
+    owed. Accept Received Quantity holds final_amount unchanged via
+    amount_adjustment -- the shortage is accepted operationally, not
+    financially."""
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)  # 100 x 10
+    _receive(client, admin_headers, po["id"], line_id, "90")
+    resolved = _resolve(
+        client, admin_headers, _po(client, admin_headers, po["id"]), "accept_received_quantity", "Supplier will not ship the rest; keep the agreed total"
+    )
+    assert resolved.status_code == 200
+    body = resolved.json()
+    assert body["status"] == "received"
+    assert body["lines"][0]["cancelled_quantity"] == "10.0000"
+    # The historical order itself is untouched.
+    assert body["lines"][0]["quantity"] == "100.0000"
+    assert body["lines"][0]["unit_price"] == "10.0000"
+    # Unlike Cancel Balance, the full original amount is still owed.
+    assert body["final_amount"] == "1000.0000"
+    rec = body["reconciliations"][0]
+    assert rec["resolution"] == "accept_received_quantity"
+    assert rec["resolution_note"] == "Supplier will not ship the rest; keep the agreed total"
+    assert rec["resolved_by_user_id"] is not None
+    assert rec["resolved_at"] is not None
+
+    # Paying only the reduced (900) amount does NOT close it -- the full
+    # 1000 is still owed.
+    assert _pay(client, admin_headers, po["id"], "900", is_final=True).json()["status"] == "payment_reconciliation"
+
+
+def test_reconciliation_resolutions_do_not_rewrite_the_original_po(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material
+):
+    """Supplier, unit and the original ordered quantity/price are never
+    rewritten by any of the three receipt resolutions."""
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    original_line = po["lines"][0]
+    _receive(client, admin_headers, po["id"], line_id, "90")
+    resolved = _resolve(
+        client, admin_headers, _po(client, admin_headers, po["id"]), "keep_pending", "Awaiting the rest"
+    ).json()
+    line = resolved["lines"][0]
+    assert (line["quantity"], line["unit_price"], line["unit_of_measure_id"]) == (
+        original_line["quantity"], original_line["unit_price"], original_line["unit_of_measure_id"],
+    )
+    assert resolved["supplier_id"] == po["supplier_id"]
+    assert resolved["status"] == "partially_received"
+    assert resolved["lines"][0]["cancelled_quantity"] == "0.0000"
+
+
 def test_only_the_creator_resolves(client, admin_headers, db_session, organisation, active_user, acme_supplier, warehouse_1, cement_raw_material):
     po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
     _receive(client, admin_headers, po["id"], line_id, "50")
@@ -288,3 +344,86 @@ def test_failed_follow_up_email_is_kept_with_its_status(client, admin_headers, a
     entry = _po(client, admin_headers, po["id"])["communications"][-1]
     assert (entry["kind"], entry["status"]) == ("follow_up", "failed")
     assert entry["error"]
+
+
+# --- gap fix: overdue PO visibility --------------------------------------------------------
+
+
+def _backdate(db_session, po_id, days):
+    row = db_session.query(PurchaseOrder).get(po_id)
+    row.expected_delivery_date = date.today() - timedelta(days=days)
+    db_session.commit()
+
+
+def test_future_delivery_date_is_not_overdue(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material):
+    po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)  # FUTURE
+    assert po["is_overdue"] is False
+    assert po["days_overdue"] == 0
+
+
+def test_todays_delivery_date_is_not_overdue(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session):
+    po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=0)
+    body = _po(client, admin_headers, po["id"])
+    assert body["is_overdue"] is False
+    assert body["days_overdue"] == 0
+
+
+def test_past_delivery_date_with_outstanding_quantity_is_overdue(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=3)
+    body = _po(client, admin_headers, po["id"])
+    assert body["status"] == "sent"
+    assert body["is_overdue"] is True
+    assert body["days_overdue"] == 3
+
+    # Still overdue -- outstanding quantity remains -- after a short receipt too.
+    _receive(client, admin_headers, po["id"], line_id, "40")
+    partial = _po(client, admin_headers, po["id"])
+    assert partial["status"] == "reconciliation_required"
+    assert partial["is_overdue"] is True
+    assert partial["days_overdue"] == 3
+
+
+def test_past_delivery_date_fully_received_is_not_overdue(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    po, line_id = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=3)
+    _receive(client, admin_headers, po["id"], line_id, "100")
+    body = _po(client, admin_headers, po["id"])
+    assert body["status"] == "received"
+    assert body["is_overdue"] is False
+    assert body["days_overdue"] == 0
+
+
+def test_past_delivery_date_cancelled_is_not_overdue(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, po["id"], days=3)
+    cancelled = client.patch(
+        f"/api/purchase-orders/{po['id']}/status",
+        json={"status": "cancelled", "cancel_reason": "Supplier out of stock"},
+        headers=admin_headers,
+    ).json()
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["is_overdue"] is False
+    assert cancelled["days_overdue"] == 0
+
+
+def test_overdue_filter_returns_only_overdue_pos(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session
+):
+    overdue_po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+    _backdate(db_session, overdue_po["id"], days=5)
+    on_time_po, _ = _sent_po(client, admin_headers, acme_supplier.id, warehouse_1.id, cement_raw_material.id)
+
+    unfiltered = client.get("/api/purchase-orders", headers=admin_headers).json()
+    assert {p["id"] for p in unfiltered["data"]} == {overdue_po["id"], on_time_po["id"]}
+
+    filtered = client.get("/api/purchase-orders", params={"overdue": True}, headers=admin_headers).json()
+    assert [p["id"] for p in filtered["data"]] == [overdue_po["id"]]
+    assert filtered["pagination"]["total"] == 1

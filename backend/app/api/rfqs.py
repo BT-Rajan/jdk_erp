@@ -22,6 +22,7 @@ from app.models.audit_event import (
     RFQ_CREATED,
     RFQ_DECIDED,
     RFQ_INVITATION_DECLINED,
+    RFQ_INVITATION_FOLLOW_UP_ADDED,
     RFQ_RESPONSE_CAPTURED,
     RFQ_SEND_FAILED,
     RFQ_SENT,
@@ -32,6 +33,7 @@ from app.models.document_template import RFQ_DOCUMENT, DocumentTemplate
 from app.models.file import FileRecord
 from app.models.raw_material import RawMaterial
 from app.models.organisation import Organisation
+from app.models.purchase_order import PurchaseOrder
 from app.models.rfq import (
     CANCELLED,
     CONVERTED,
@@ -42,6 +44,7 @@ from app.models.rfq import (
     SELECTED,
     RFQ_STATUSES,
     Rfq,
+    RfqInvitationFollowUp,
     RfqLine,
     RfqResponse,
     RfqResponseLine,
@@ -56,9 +59,12 @@ from app.schemas.rfq import (
     RfqCaptureResponseRequest,
     RfqConvertRequest,
     RfqDecisionRequest,
+    RfqInvitationFollowUpCreateRequest,
+    RfqInvitationFollowUpOut,
     RfqInvitationOut,
     RfqLineOut,
     RfqOut,
+    RfqPurchaseOrderRefOut,
     RfqRaiseNewRequest,
     RfqResponseLineOut,
     RfqResponseOut,
@@ -156,8 +162,17 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
     rfq_ids = [rfq.id for rfq in rfqs]
 
     lines_by_rfq: dict[int, list[RfqLine]] = defaultdict(list)
+    all_lines: list[RfqLine] = []
     for line in db.query(RfqLine).filter(RfqLine.rfq_id.in_(rfq_ids)).order_by(RfqLine.id):
         lines_by_rfq[line.rfq_id].append(line)
+        all_lines.append(line)
+    # How much of each line has already been sourced (gap-fix: split
+    # sourcing) -- one query for every RFQ in this batch, not one per row.
+    sourced_by_line = rfq_service.line_sourced_quantities(db, all_lines)
+
+    purchase_orders_by_rfq: dict[int, list[RfqPurchaseOrderRefOut]] = defaultdict(list)
+    for po in db.query(PurchaseOrder).filter(PurchaseOrder.rfq_id.in_(rfq_ids)).order_by(PurchaseOrder.id):
+        purchase_orders_by_rfq[po.rfq_id].append(RfqPurchaseOrderRefOut.model_validate(po))
 
     invitations = (
         db.query(RfqSupplierInvitation)
@@ -185,6 +200,15 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
             .order_by(RfqResponseLine.id)
         ):
             response_lines_by_response[response_line.response_id].append(response_line)
+
+    follow_ups_by_invitation: dict[int, list[RfqInvitationFollowUp]] = defaultdict(list)
+    if invitation_ids:
+        for follow_up in (
+            db.query(RfqInvitationFollowUp)
+            .filter(RfqInvitationFollowUp.invitation_id.in_(invitation_ids))
+            .order_by(RfqInvitationFollowUp.id)
+        ):
+            follow_ups_by_invitation[follow_up.invitation_id].append(follow_up)
 
     # Every file this module owns (response evidence, per-supplier RFQ
     # PDFs, accepted-quotation uploads) in one query.
@@ -241,7 +265,13 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
                     if files[(_INVITATION_PDF, invitation.id)]
                     else None
                 ),
+                # Every revision's PDF, oldest to newest -- none are ever
+                # deleted (gap-fix: RFQ revision must preserve history).
+                pdf_files=[FileOut.model_validate(f) for f in files[(_INVITATION_PDF, invitation.id)]],
                 responses=responses_by_invitation[invitation.id],
+                follow_ups=[
+                    RfqInvitationFollowUpOut.model_validate(f) for f in follow_ups_by_invitation[invitation.id]
+                ],
             )
         )
 
@@ -264,9 +294,21 @@ def _build_rfq_outs(db: Session, rfqs: list[Rfq]) -> list[RfqOut]:
             decision_note=rfq.decision_note,
             selected_response_id=rfq.selected_response_id,
             purchase_order_id=rfq.purchase_order_id,
-            lines=[RfqLineOut.model_validate(line) for line in lines_by_rfq[rfq.id]],
+            lines=[
+                RfqLineOut(
+                    id=line.id,
+                    raw_material_id=line.raw_material_id,
+                    quantity=line.quantity,
+                    unit_of_measure_id=line.unit_of_measure_id,
+                    required_by_date=line.required_by_date,
+                    remarks=line.remarks,
+                    sourced_quantity=sourced_by_line.get(line.id, Decimal(0)),
+                )
+                for line in lines_by_rfq[rfq.id]
+            ],
             invitations=invitations_by_rfq[rfq.id],
             acceptance_files=[FileOut.model_validate(f) for f in files[(_ACCEPTANCE_FILE, rfq.id)]],
+            purchase_orders=purchase_orders_by_rfq[rfq.id],
         )
         for rfq in rfqs
     ]
@@ -733,6 +775,33 @@ def decline_rfq_invitation(
     return _build_rfq_out(db, rfq)
 
 
+@router.post(
+    "/{rfq_id}/invitations/{invitation_id}/follow-ups", response_model=RfqOut, status_code=status.HTTP_201_CREATED
+)
+def add_rfq_invitation_follow_up(
+    rfq_id: int,
+    invitation_id: int,
+    payload: RfqInvitationFollowUpCreateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RfqOut:
+    """Gap-fix: supplier follow-up -- a simple, freeform note against one
+    invited supplier (e.g. "called, they'll quote by Thursday"). Gated
+    like response capture/decline: all three record what happened
+    regarding this supplier's response."""
+    rfq_scope.require_permission(db, current_user, rfq_scope.CAPTURE_RESPONSE)
+    rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
+    invitation = _get_invitation_in_rfq(db, rfq.id, invitation_id)
+
+    rfq_service.add_follow_up(db, rfq=rfq, invitation=invitation, note=payload.note, created_by_user_id=current_user.id)
+
+    _log(db, request, current_user, rfq, RFQ_INVITATION_FOLLOW_UP_ADDED, f"supplier_id: {invitation.supplier_id}")
+    db.commit()
+    db.refresh(rfq)
+    return _build_rfq_out(db, rfq)
+
+
 @router.patch("/{rfq_id}/status", response_model=RfqOut)
 def change_rfq_status(
     rfq_id: int,
@@ -797,6 +866,8 @@ def capture_rfq_response(
             rfq_service.ResponseLineInput(
                 rfq_line_id=line.rfq_line_id,
                 unit_price=line.unit_price,
+                quantity=line.quantity,
+                unit_of_measure_id=line.unit_of_measure_id,
                 delivery_days=line.delivery_days,
                 remarks=line.remarks,
             )
@@ -973,16 +1044,23 @@ def convert_rfq_to_purchase_order(
     db: Session = Depends(get_db),
 ) -> RfqOut:
     """docs/modules/rfq.md #8/#14 -- only valid from `selected`. Supplier
-    comes from the selected response's invitation; material/quantity
-    carry forward from the RFQ lines; unit prices default from the
-    selected response and can be overridden per line. `warehouse_id` is
-    the only input with no upstream source. Never re-submittable once
-    converted -- the status flip is this action's own idempotency
-    guard."""
+    comes from the invitation behind `response_id` (the RFQ's own decided
+    response by default); material/quantity carry forward from the RFQ
+    lines; unit prices default from that response and can be overridden
+    per line. `warehouse_id` is the only input with no upstream source.
+
+    Callable more than once on the same RFQ, naming a different
+    `response_id` each time, to source part of the requirement from one
+    supplier and the rest from another (gap-fix: split sourcing) -- each
+    line converted is capped at what remains unsourced on it. The RFQ
+    reaches its terminal `converted` status, and stops accepting further
+    conversions, only once every line is fully sourced; until then it
+    stays `selected`."""
     rfq_scope.require_permission(db, current_user, rfq_scope.CONVERT)
     rfq = _get_rfq_in_org(db, rfq_id, current_user.organisation_id)
-    # Transition guard first, so a repeat submission fails as a business
-    # rule before any other lookup can mask it with a different error.
+    # Transition guard first, so a submission on an already fully sourced
+    # (or cancelled/rejected) RFQ fails as a business rule before any
+    # other lookup can mask it with a different error.
     rfq_service.assert_transition_allowed(rfq.status, CONVERTED)
     has_acceptance = (
         db.query(FileRecord.id)
@@ -1002,28 +1080,43 @@ def convert_rfq_to_purchase_order(
             "Expected delivery date cannot be in the past.",
             fields={"expected_delivery_date": "Cannot be in the past."},
         )
-    invitation = rfq_service.get_selected_invitation(db, rfq)
+    target_response_id = payload.response_id if payload.response_id is not None else rfq.selected_response_id
+    invitation = rfq_service.get_invitation_for_response(db, rfq, target_response_id)
     _resolve_active_supplier(db, invitation.supplier_id, current_user.organisation_id)
 
     overrides = None
     if payload.lines is not None:
         overrides = {entry.rfq_line_id: entry.unit_price for entry in payload.lines}
-    priced_lines = rfq_service.resolve_conversion_prices(db, rfq=rfq, overrides=overrides)
+    priced_lines = rfq_service.resolve_conversion_prices(
+        db, rfq=rfq, response_id=target_response_id, overrides=overrides
+    )
+    already_sourced = rfq_service.sourced_quantities(db, [rfq_line.id for rfq_line, *_ in priced_lines])
 
     # PO lines keep the RFQ line's unit, quantity and price exactly as
     # agreed; the unit's ratio to the material's own unit is stored on the
-    # line so receiving posts stock correctly.
+    # line so receiving posts stock correctly. `quoted_quantity` overrides
+    # the RFQ line's own requested quantity when the response quoted a
+    # different one (gap-fix: partial quotation). `quoted_unit_id`
+    # likewise overrides the RFQ line's own unit when the supplier quoted
+    # in a different one (gap-fix: supplier UOM mismatch) -- the PO is
+    # always created in what the supplier actually agreed to, never the
+    # RFQ's original ask. Every line is also capped at what remains
+    # unsourced on it, both units normalised to the material's own unit
+    # (gap-fix: split sourcing) -- a second conversion can never source
+    # more than the original requirement, across however many suppliers.
     conversion_lines = []
-    for rfq_line, unit_price in priced_lines:
+    for rfq_line, unit_price, quoted_quantity, quoted_unit_id in priced_lines:
         material = _resolve_active_raw_material(db, rfq_line.raw_material_id, current_user.organisation_id)
+        effective_unit_id = quoted_unit_id if quoted_unit_id is not None else rfq_line.unit_of_measure_id
+        unit_ids = {effective_unit_id, material.unit_of_measure_id, rfq_line.unit_of_measure_id}
+        if material.alternate_conversion_unit_of_measure_id:
+            unit_ids.add(material.alternate_conversion_unit_of_measure_id)
+        units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids))}
+
         ratio = Decimal(1)
-        if rfq_line.unit_of_measure_id != material.unit_of_measure_id:
-            unit_ids = [rfq_line.unit_of_measure_id, material.unit_of_measure_id]
-            if material.alternate_conversion_unit_of_measure_id:
-                unit_ids.append(material.alternate_conversion_unit_of_measure_id)
-            units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids))}
+        if effective_unit_id != material.unit_of_measure_id:
             ratio = rfq_service.line_unit_ratio(
-                units[rfq_line.unit_of_measure_id],
+                units[effective_unit_id],
                 material,
                 units.get(material.alternate_conversion_unit_of_measure_id),
                 units[material.unit_of_measure_id],
@@ -1032,15 +1125,27 @@ def convert_rfq_to_purchase_order(
                 raise BusinessRuleError(
                     f"{material.name}: the requested unit no longer converts to its unit. Update the unit setup first."
                 )
+        quantity_now = quoted_quantity if quoted_quantity is not None else rfq_line.quantity
+
+        full_requested = rfq_service.line_requested_in_material_units(rfq_line, material, units)
+        sourced_before = already_sourced.get(rfq_line.id, Decimal(0))
+        if sourced_before + quantity_now * ratio > full_requested + Decimal("0.0001"):
+            remaining = max(Decimal(0), full_requested - sourced_before)
+            raise BusinessRuleError(
+                f"{material.name}: only {remaining.quantize(Decimal('0.0001'))} "
+                f"{units[material.unit_of_measure_id].code} of this line remains unsourced."
+            )
+
         conversion_lines.append(
             rfq_service.RfqConversionLine(
                 raw_material=material,
-                quantity=rfq_line.quantity,
+                quantity=quantity_now,
                 unit_price=unit_price,
-                unit_of_measure_id=rfq_line.unit_of_measure_id,
+                unit_of_measure_id=effective_unit_id,
                 conversion_factor=ratio,
                 required_by_date=rfq_line.required_by_date,
                 remarks=rfq_line.remarks,
+                rfq_line_id=rfq_line.id,
             )
         )
 
@@ -1053,7 +1158,7 @@ def convert_rfq_to_purchase_order(
         supplier_reference=payload.supplier_reference,
         notes=payload.notes,
         lines=conversion_lines,
-        rfq_response_id=rfq.selected_response_id,
+        rfq_response_id=target_response_id,
         created_by_user_id=current_user.id,
     )
 

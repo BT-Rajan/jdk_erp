@@ -27,6 +27,7 @@ const PO = {
   final_amount: '1000.0000',
   paid_amount: '0',
   outstanding_amount: '1000.0000',
+  refundable_amount: '0.0000',
   payment_status: 'unpaid',
   lines: [{ material_name: 'Cement', quantity: '10.0000', unit_code: 'BAG', unit_price: '100.0000', line_total: '1000.0000' }],
   payments: [],

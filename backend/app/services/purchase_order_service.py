@@ -39,6 +39,7 @@ from app.models.purchase_order import (
     RECONCILIATION_REQUIRED,
     RECONCILIATION_RESOLVED,
     RESOLVE_ACCEPT_PAID_AMOUNT,
+    RESOLVE_ACCEPT_RECEIVED_QUANTITY,
     RESOLVE_CANCEL_REMAINING,
     RECEIPT_CANCELLED,
     RECEIPT_DRAFT,
@@ -88,6 +89,9 @@ class PurchaseOrderLineInput:
     conversion_factor: Decimal = Decimal(1)
     required_by_date: date | None = None
     remarks: str | None = None
+    # Which RFQ line this line was converted from -- None for a PO
+    # raised directly with no RFQ (gap-fix: split sourcing).
+    rfq_line_id: int | None = None
 
 
 def assert_transition_allowed(current_status: str, target_status: str) -> None:
@@ -217,6 +221,7 @@ def create_purchase_order_with_lines(
             PurchaseOrderLine(
                 purchase_order_id=purchase_order.id,
                 raw_material_id=line_input.raw_material.id,
+                rfq_line_id=line_input.rfq_line_id,
                 quantity=line_input.quantity,
                 unit_of_measure_id=line_input.unit_of_measure_id or line_input.raw_material.unit_of_measure_id,
                 conversion_factor=line_input.conversion_factor if line_input.unit_of_measure_id else Decimal(1),
@@ -367,13 +372,20 @@ def resolve_reconciliation(
         )
 
     lines = _lines(db, purchase_order)
-    if resolution == RESOLVE_CANCEL_REMAINING:
+    if resolution in (RESOLVE_CANCEL_REMAINING, RESOLVE_ACCEPT_RECEIVED_QUANTITY):
         if not any(line.received_quantity > 0 for line in lines):
             raise BusinessRuleError("Nothing has been received -- cancel the purchase order instead.")
+        before = final_amount(purchase_order, lines)
         for line in lines:
             line.cancelled_quantity = max(line.quantity - line.received_quantity, Decimal("0"))
             db.add(line)
         db.flush()
+        if resolution == RESOLVE_ACCEPT_RECEIVED_QUANTITY:
+            # Operationally accepted, never financially: the amount owed
+            # stays exactly what it was before the outstanding quantity
+            # was cancelled.
+            purchase_order.amount_adjustment += before - final_amount(purchase_order, lines)
+            db.add(purchase_order)
     elif resolution == RESOLVE_ACCEPT_PAID_AMOUNT:
         purchase_order.amount_adjustment += _paid(db, purchase_order) - final_amount(purchase_order, lines)
         db.add(purchase_order)

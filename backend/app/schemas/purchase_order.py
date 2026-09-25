@@ -169,6 +169,12 @@ class PurchaseOrderOut(BaseModel):
     revision_number: int
     order_date: date
     expected_delivery_date: date | None
+    # expected_delivery_date has passed and the PO is not fully received/
+    # closed/cancelled -- for the Purchase Executive to immediately spot
+    # a supplier running late (gap-fix: overdue PO visibility,
+    # docs/modules/purchase_orders.md). Never a status of its own.
+    is_overdue: bool = False
+    days_overdue: int = 0
     supplier_reference: str | None
     payment_terms: str | None
     currency: str
@@ -192,6 +198,11 @@ class PurchaseOrderOut(BaseModel):
     final_amount: Decimal
     paid_amount: Decimal
     outstanding_amount: Decimal
+    # What's already been paid toward a now-cancelled order -- 0 unless
+    # `status` is `cancelled` and a payment was recorded. Never an actual
+    # refund transaction, just the figure that one is owed (gap-fix:
+    # supplier-failure cancellation, docs/modules/purchase_orders.md).
+    refundable_amount: Decimal = Decimal("0.0000")
     payment_status: str
     lines: list[PurchaseOrderLineOut]
     revisions: list[PurchaseOrderRevisionOut]
@@ -418,9 +429,9 @@ class CancelPaymentRequest(BaseModel):
 
 
 class ResolveReconciliationRequest(BaseModel):
-    """Receipt discrepancy: `keep_pending` or `cancel_remaining`. Payment
-    discrepancy: `accept_paid_amount` or `correct_payment`. A documented
-    note is always required."""
+    """Receipt discrepancy: `keep_pending`, `accept_received_quantity`, or
+    `cancel_remaining`. Payment discrepancy: `accept_paid_amount` or
+    `correct_payment`. A documented note is always required."""
 
     resolution: str
     note: str = Field(min_length=1, max_length=4000)
@@ -551,6 +562,11 @@ class FinancePurchaseOrderOut(BaseModel):
     final_amount: Decimal
     paid_amount: Decimal
     outstanding_amount: Decimal
+    # What's already been paid toward a now-cancelled order -- 0 unless
+    # `status` is `cancelled` and a payment was recorded. Never an actual
+    # refund transaction, just the figure that one is owed (gap-fix:
+    # supplier-failure cancellation, docs/modules/purchase_orders.md).
+    refundable_amount: Decimal = Decimal("0.0000")
     payment_status: str
     lines: list[FinanceLineOut]
     payments: list[FinancePaymentOut]

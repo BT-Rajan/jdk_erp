@@ -219,6 +219,18 @@ def test_create_rejects_assignee_from_another_organisation(client, manager_user,
     assert response.status_code == 422
 
 
+def test_create_rejects_inactive_assignee(client, manager_user, inactive_user):
+    """The error message says "must be an active user" -- the lookup
+    must actually filter on is_active, not just organisation, or a
+    deactivated user could still be handed ownership of a new
+    customer."""
+    headers = _login_headers(client, "manager_person")
+    response = client.post(
+        "/api/customers", json={"name": "New Co", "assigned_to_user_id": inactive_user.id}, headers=headers
+    )
+    assert response.status_code == 422
+
+
 def test_create_rejects_duplicate_phone(client, active_user, db_session, organisation):
     _make_customer(db_session, organisation, name="Existing", phone="96512345678")
     headers = _login_headers(client, "ada")
@@ -360,6 +372,17 @@ def test_assign_rejects_assignee_from_another_organisation(client, admin_user, o
     headers = _login_headers(client, "admin_person")
     response = client.patch(
         f"/api/customers/{customer.id}/assign", json={"assigned_to_user_id": other_org_user.id}, headers=headers
+    )
+    assert response.status_code == 422
+
+
+def test_assign_rejects_inactive_assignee(client, admin_user, inactive_user, db_session, organisation):
+    """Same fix as create: the lookup must filter on is_active, not
+    just organisation membership."""
+    customer = _make_customer(db_session, organisation, name="Existing")
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/customers/{customer.id}/assign", json={"assigned_to_user_id": inactive_user.id}, headers=headers
     )
     assert response.status_code == 422
 

@@ -473,6 +473,31 @@ def test_edit_raw_material_rejects_adding_only_alternate_factor(client, admin_us
     assert response.status_code == 422
 
 
+def test_edit_raw_material_rejects_own_unit_changed_to_match_existing_alternate_unit(
+    client, admin_user, cement_raw_material, mass_kilogram_unit
+):
+    """Changing only unit_of_measure_id (not the alternate fields) must
+    still be checked against an already-configured alternate conversion
+    -- otherwise a material could end up with
+    alternate_conversion_unit_of_measure_id == unit_of_measure_id (e.g.
+    "1 BAG = 25 BAG"), the exact half-configured/self-referential state
+    create-time validation already rejects."""
+    headers = _login_headers(client, "admin_person")
+    add_alternate = client.patch(
+        f"/api/raw-materials/{cement_raw_material.id}",
+        json={"alternate_conversion_unit_of_measure_id": mass_kilogram_unit.id, "alternate_conversion_factor": "25"},
+        headers=headers,
+    )
+    assert add_alternate.status_code == 200
+
+    response = client.patch(
+        f"/api/raw-materials/{cement_raw_material.id}",
+        json={"unit_of_measure_id": mass_kilogram_unit.id},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
 # --- update ------------------------------------------------------------
 
 
@@ -503,6 +528,80 @@ def test_admin_can_edit_raw_material(client, db_session, admin_user, cement_raw_
         .one()
     )
     assert event.actor_user_id == admin_user.id
+
+
+def test_admin_can_change_unit_of_measure_when_no_history_exists(
+    client, admin_user, cement_raw_material, mass_kilogram_unit
+):
+    """Control case: unit_of_measure_id stays editable on a raw material
+    with no BOM component or stock movement recorded against it --
+    existing behaviour must be unaffected by the new guard."""
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/raw-materials/{cement_raw_material.id}",
+        json={"unit_of_measure_id": mass_kilogram_unit.id},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["unit_of_measure_id"] == mass_kilogram_unit.id
+
+
+def test_edit_raw_material_rejects_unit_change_once_used_in_a_bom(
+    client, admin_user, widget_product, cement_raw_material, mass_kilogram_unit
+):
+    """BomComponent.quantity stores no unit of its own -- it implicitly
+    means "in the material's own unit." Once this material is a BOM
+    component, changing its unit must be rejected, not silently
+    reinterpret every referencing component's quantity in the new unit.
+    (widget_product and cement_raw_material both use `kilogram_unit`, so
+    they convert trivially -- only the guard under test is exercised.)"""
+    headers = _login_headers(client, "admin_person")
+    create_bom = client.post(
+        "/api/boms", json={"product_id": widget_product.id, "base_quantity": "1"}, headers=headers
+    )
+    assert create_bom.status_code == 201
+    bom_id = create_bom.json()["id"]
+    add_component = client.post(
+        f"/api/boms/{bom_id}/components",
+        json={"raw_material_id": cement_raw_material.id, "quantity": "1"},
+        headers=headers,
+    )
+    assert add_component.status_code == 201
+
+    response = client.patch(
+        f"/api/raw-materials/{cement_raw_material.id}",
+        json={"unit_of_measure_id": mass_kilogram_unit.id},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
+def test_edit_raw_material_rejects_unit_change_once_a_stock_movement_exists(
+    client, admin_user, db_session, organisation, cement_raw_material, warehouse_1, mass_kilogram_unit
+):
+    """Same guard, for StockMovement/RawMaterialInventory's implicit
+    unit (docs/audit UOM risk: neither table stores its own unit)."""
+    from app.models.inventory import RECEIPT, StockMovement
+
+    movement = StockMovement(
+        organisation_id=organisation.id,
+        raw_material_id=cement_raw_material.id,
+        warehouse_id=warehouse_1.id,
+        movement_type=RECEIPT,
+        quantity=10,
+        reference_type="test",
+        reference_id=1,
+    )
+    db_session.add(movement)
+    db_session.commit()
+
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/raw-materials/{cement_raw_material.id}",
+        json={"unit_of_measure_id": mass_kilogram_unit.id},
+        headers=headers,
+    )
+    assert response.status_code == 422
 
 
 def test_edit_raw_material_code_is_not_accepted(client, admin_user, cement_raw_material):

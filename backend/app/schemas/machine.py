@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.validation import check_max_length
 
 
 class MachineOut(BaseModel):
@@ -25,9 +27,9 @@ class MachineCreateRequest(BaseModel):
 
     name: str
     production_line_id: int
-    capacity_quantity: Decimal
+    capacity_quantity: Decimal = Field(max_digits=12, decimal_places=4)
     capacity_unit_of_measure_id: int
-    capacity_period_hours: Decimal
+    capacity_period_hours: Decimal = Field(max_digits=6, decimal_places=2)
 
     @field_validator("name")
     @classmethod
@@ -35,7 +37,7 @@ class MachineCreateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("capacity_quantity", "capacity_period_hours")
     @classmethod
@@ -52,9 +54,9 @@ class MachineUpdateRequest(BaseModel):
 
     name: str | None = None
     production_line_id: int | None = None
-    capacity_quantity: Decimal | None = None
+    capacity_quantity: Decimal | None = Field(default=None, max_digits=12, decimal_places=4)
     capacity_unit_of_measure_id: int | None = None
-    capacity_period_hours: Decimal | None = None
+    capacity_period_hours: Decimal | None = Field(default=None, max_digits=6, decimal_places=2)
 
     @field_validator("name")
     @classmethod
@@ -64,7 +66,7 @@ class MachineUpdateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("capacity_quantity", "capacity_period_hours")
     @classmethod

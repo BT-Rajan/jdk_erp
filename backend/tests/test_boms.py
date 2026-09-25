@@ -558,17 +558,25 @@ def test_admin_can_activate_valid_bom(client, db_session, admin_user, product_to
 
 
 def test_activate_bom_rejects_status_when_a_component_conversion_is_no_longer_valid(
-    client, admin_user, product_tonne, material_m_kg, bag_unit
+    client, admin_user, product_tonne, material_m_kg, mass_kilogram_unit
 ):
     """Defensive re-check at activation time -- a component was valid
-    when added, but the material's own unit was changed afterward to one
-    with no resolvable conversion to the Product's unit."""
+    when added, but the material's *unit's own* dimension was changed
+    afterward, breaking the previously-valid universal conversion to the
+    Product's unit. Triggered via the UnitOfMeasure's own dimension
+    (still freely editable) rather than by repointing the material's
+    unit_of_measure_id itself -- that repoint is now rejected outright
+    (see test_raw_materials.py::
+    test_edit_raw_material_rejects_unit_change_once_used_in_a_bom), since
+    a stored BomComponent.quantity has no unit of its own and repointing
+    would silently change what it means rather than merely invalidate
+    it."""
     headers = _login_headers(client, "admin_person")
     bom = _create_bom(client, headers, product_tonne.id).json()
     _add_component(client, headers, bom["id"], material_m_kg.id, "600")
 
     repoint = client.patch(
-        f"/api/raw-materials/{material_m_kg.id}", json={"unit_of_measure_id": bag_unit.id}, headers=headers
+        f"/api/units-of-measure/{mass_kilogram_unit.id}", json={"dimension": "volume"}, headers=headers
     )
     assert repoint.status_code == 200
 

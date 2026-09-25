@@ -509,6 +509,38 @@ def test_admin_can_edit_product(client, db_session, admin_user, widget_product):
     assert "name:" in event.details
 
 
+def test_admin_can_change_unit_of_measure_when_no_bom_exists(client, admin_user, widget_product, mass_kilogram_unit):
+    """Control case: unit_of_measure_id stays editable on a product with
+    no BOM -- existing behaviour must be unaffected by the new guard."""
+    headers = _login_headers(client, "admin_person")
+    response = client.patch(
+        f"/api/products/{widget_product.id}",
+        json={"unit_of_measure_id": mass_kilogram_unit.id},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["unit_of_measure_id"] == mass_kilogram_unit.id
+
+
+def test_edit_product_rejects_unit_change_once_a_bom_exists(client, admin_user, product_tonne, mass_kilogram_unit):
+    """Bom.base_quantity stores no unit of its own -- it implicitly means
+    "in the product's own unit." Once a BOM exists, changing the
+    product's unit must be rejected, not silently reinterpret
+    base_quantity in the new unit."""
+    headers = _login_headers(client, "admin_person")
+    create = client.post(
+        "/api/boms", json={"product_id": product_tonne.id, "base_quantity": "1"}, headers=headers
+    )
+    assert create.status_code == 201
+
+    response = client.patch(
+        f"/api/products/{product_tonne.id}",
+        json={"unit_of_measure_id": mass_kilogram_unit.id},
+        headers=headers,
+    )
+    assert response.status_code == 422
+
+
 def test_edit_product_code_is_not_accepted(client, admin_user, widget_product):
     """ProductUpdateRequest has no `code` field at all -- sending one is
     silently ignored by pydantic (extra fields dropped), not an error."""

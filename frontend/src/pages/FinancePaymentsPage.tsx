@@ -51,6 +51,8 @@ interface FinancePo {
   final_amount: string
   paid_amount: string
   outstanding_amount: string
+  /** What's owed back on a cancelled order with a payment already made -- '0.0000' otherwise. */
+  refundable_amount: string
   payment_status: 'unpaid' | 'partially_paid' | 'paid'
   lines: FinanceLine[]
   payments: FinancePayment[]
@@ -75,10 +77,11 @@ const STATUS_LABELS: Record<string, string> = {
   received: 'Received',
   payment_reconciliation: 'Payment Reconciliation',
   closed: 'Closed',
+  cancelled: 'Cancelled',
 }
 
 const PAYMENT_STATUS_LABELS: Record<FinancePo['payment_status'], string> = {
-  unpaid: 'Unpaid',
+  unpaid: 'Pending',
   partially_paid: 'Partially Paid',
   paid: 'Paid',
 }
@@ -314,8 +317,18 @@ export function FinancePaymentsPage() {
               <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
                 <div><span className="text-gold-100/50">PO Amount: </span>{kwd(target.final_amount)}</div>
                 <div><span className="text-gold-100/50">Paid: </span>{kwd(target.paid_amount)}</div>
-                <div><span className="text-gold-100/50">Outstanding: </span><strong>{kwd(target.outstanding_amount)}</strong></div>
+                {target.status === 'cancelled' ? (
+                  <div><span className="text-gold-100/50">Refundable: </span><strong>{kwd(target.refundable_amount)}</strong></div>
+                ) : (
+                  <div><span className="text-gold-100/50">Outstanding: </span><strong>{kwd(target.outstanding_amount)}</strong></div>
+                )}
               </div>
+              {target.status === 'cancelled' && Number(target.refundable_amount) > 0 && (
+                <Alert variant="info">
+                  This order was cancelled with {kwd(target.refundable_amount)} already paid -- no further payment is
+                  due; this amount is owed back from the supplier.
+                </Alert>
+              )}
 
               {target.payments.length > 0 && (
                 <div>

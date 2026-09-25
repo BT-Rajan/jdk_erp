@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.core.validation import check_max_length
+
 
 class CategoryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -27,7 +29,7 @@ class CategoryCreateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 80, "Name")
 
 
 class CategoryUpdateRequest(BaseModel):
@@ -47,7 +49,7 @@ class CategoryUpdateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 80, "Name")
 
 
 class CategoryStatusChangeRequest(BaseModel):

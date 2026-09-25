@@ -459,6 +459,225 @@ def test_decline_is_a_flag_only(client, admin_headers, issued_rfq, acme_supplier
     assert _invitation_for(body, acme_supplier.id)["status"] == "sent"
 
 
+# --- gap fixes: quoted quantity, follow-up, quote history, cancellation retains history --------
+
+
+def _follow_up(client, headers, rfq_id, invitation_id, note="Called, will quote by Thursday."):
+    return client.post(
+        f"/api/rfqs/{rfq_id}/invitations/{invitation_id}/follow-ups", json={"note": note}, headers=headers
+    )
+
+
+def test_full_practical_scenario(client, admin_headers, issued_rfq, acme_supplier, beta_supplier):
+    """The complete practical scenario: RFQ issued to 2 suppliers -> one
+    remains awaiting -> follow up -> one supplier quotes (partial
+    quantity on one line) -> later revises price -> second supplier
+    declines -> select the first supplier's current quote -> cancel,
+    with history retained throughout."""
+    rfq, cement_id, sand_id = issued_rfq
+    acme = _invitation_for(rfq, acme_supplier.id)["id"]
+    beta = _invitation_for(rfq, beta_supplier.id)["id"]
+
+    # Both suppliers start "Awaiting Quote".
+    assert _invitation_for(rfq, acme_supplier.id)["status"] == "sent"
+    assert _invitation_for(rfq, beta_supplier.id)["status"] == "sent"
+
+    # Beta remains awaiting -- follow up with them.
+    followed_up = _follow_up(client, admin_headers, rfq["id"], beta).json()
+    beta_after_follow_up = _invitation_for(followed_up, beta_supplier.id)
+    assert beta_after_follow_up["status"] == "sent"
+    assert len(beta_after_follow_up["follow_ups"]) == 1
+    assert beta_after_follow_up["follow_ups"][0]["note"] == "Called, will quote by Thursday."
+    assert followed_up["status"] == "issued"  # a follow-up never changes the RFQ's own status
+
+    # Acme quotes: cement at the requested 100 KG (quantity omitted --
+    # never forced to re-enter it), sand at a partial 15 KG against the
+    # requested 20 KG.
+    first_quote = _capture(
+        client, admin_headers, rfq["id"], acme,
+        [
+            {"rfq_line_id": cement_id, "unit_price": "42.00"},
+            {"rfq_line_id": sand_id, "unit_price": "9.00", "quantity": "15"},
+        ],
+    ).json()
+    acme_inv = _invitation_for(first_quote, acme_supplier.id)
+    assert acme_inv["status"] == "quoted"
+    assert first_quote["status"] == "response_received"
+    first_response = acme_inv["responses"][0]
+    cement_line = next(l for l in first_response["lines"] if l["rfq_line_id"] == cement_id)
+    sand_line = next(l for l in first_response["lines"] if l["rfq_line_id"] == sand_id)
+    assert cement_line["quantity"] is None  # same as the 100 KG requested -- not forced
+    assert sand_line["quantity"] == "15.0000"  # partial: 15 of the 20 KG requested
+
+    # Acme later revises the price -- a new response, the earlier one untouched.
+    second_quote = _capture(
+        client, admin_headers, rfq["id"], acme,
+        [
+            {"rfq_line_id": cement_id, "unit_price": "39.50"},
+            {"rfq_line_id": sand_id, "unit_price": "9.00", "quantity": "15"},
+        ],
+    ).json()
+    acme_inv = _invitation_for(second_quote, acme_supplier.id)
+    assert len(acme_inv["responses"]) == 2
+    assert acme_inv["responses"][0]["lines"][0]["unit_price"] == "42.0000"  # previous quote preserved
+    assert acme_inv["responses"][1]["lines"][0]["unit_price"] == "39.5000"  # current quote
+    current_response_id = acme_inv["responses"][-1]["id"]
+
+    # Second supplier declines.
+    declined = client.post(f"/api/rfqs/{rfq['id']}/invitations/{beta}/decline", headers=admin_headers).json()
+    assert _invitation_for(declined, beta_supplier.id)["status"] == "declined"
+    # Beta's earlier follow-up is still there -- declining doesn't erase history.
+    assert len(_invitation_for(declined, beta_supplier.id)["follow_ups"]) == 1
+
+    # Select the first supplier's CURRENT quote (the revised one, not the superseded one).
+    selected = _accept(client, admin_headers, rfq["id"], current_response_id, [_upload(client, admin_headers)]).json()
+    assert selected["status"] == "selected"
+    assert selected["selected_response_id"] == current_response_id
+
+    # Cancel -- and every piece of history recorded along the way survives.
+    cancelled = client.patch(
+        f"/api/rfqs/{rfq['id']}/status",
+        json={"status": "cancelled", "cancel_reason": "Business need no longer exists."},
+        headers=admin_headers,
+    )
+    assert cancelled.status_code == 200
+    body = cancelled.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_reason"] == "Business need no longer exists."
+
+    refetched = client.get(f"/api/rfqs/{rfq['id']}", headers=admin_headers).json()
+    acme_inv = _invitation_for(refetched, acme_supplier.id)
+    beta_inv = _invitation_for(refetched, beta_supplier.id)
+    assert len(acme_inv["responses"]) == 2  # both quotes still there
+    assert acme_inv["responses"][0]["lines"][0]["unit_price"] == "42.0000"
+    assert acme_inv["responses"][1]["lines"][0]["unit_price"] == "39.5000"
+    assert len(beta_inv["follow_ups"]) == 1
+    assert beta_inv["status"] == "declined"
+    assert refetched["selected_response_id"] == current_response_id
+    assert refetched["status"] == "cancelled"
+
+
+def test_capture_response_rejects_non_positive_quoted_quantity(client, admin_headers, issued_rfq, acme_supplier):
+    rfq, cement_id, _ = issued_rfq
+    invitation = _invitation_for(rfq, acme_supplier.id)
+    response = _capture(
+        client, admin_headers, rfq["id"], invitation["id"],
+        [{"rfq_line_id": cement_id, "unit_price": "42", "quantity": "0"}],
+    )
+    assert response.status_code == 422
+
+
+# --- gap fix: supplier-quoted UOM -----------------------------------------------------------
+
+
+def test_quote_in_the_rfq_line_own_unit_needs_no_override(
+    client, admin_headers, acme_supplier, gravel_raw_material, mass_kilogram_unit, warehouse_1, db_session
+):
+    """Scenario 1: the supplier quotes in the same unit the RFQ line
+    asked for -- explicitly selecting it changes nothing, and the PO
+    still gets a plain 1:1 conversion factor."""
+    rfq = _create(
+        client, admin_headers, _form([acme_supplier.id], [_line(gravel_raw_material, mass_kilogram_unit.id, "100")])
+    ).json()
+    line_id = rfq["lines"][0]["id"]
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    body = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": line_id, "unit_price": "5", "quantity": "100", "unit_of_measure_id": mass_kilogram_unit.id}],
+    ).json()
+    response = _invitation_for(body, acme_supplier.id)["responses"][0]
+    assert response["lines"][0]["unit_of_measure_id"] == mass_kilogram_unit.id
+
+    accepted = _accept(client, admin_headers, rfq["id"], response["id"], [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    line = db_session.query(PurchaseOrderLine).one()
+    assert (line.unit_of_measure_id, line.conversion_factor, line.unit_price) == (
+        mass_kilogram_unit.id, Decimal("1.000000"), Decimal("5.0000"),
+    )
+
+
+def test_quote_in_a_different_compatible_unit_carries_through_to_the_po(
+    client, admin_headers, acme_supplier, gravel_raw_material, mass_kilogram_unit, tonne_unit, warehouse_1, db_session
+):
+    """Scenario 2: the RFQ asks for 1000 KG, the supplier quotes 1 TON @
+    85 KWD. Scenario 3: the original quoted unit and quantity remain
+    visible/auditable on the response, and the RFQ's own line is
+    untouched. Scenario 4: the selected quote is usable for the PO --
+    created in what the supplier actually quoted, not the RFQ's KG ask
+    (gap-fix: supplier UOM mismatch)."""
+    rfq = _create(
+        client, admin_headers, _form([acme_supplier.id], [_line(gravel_raw_material, mass_kilogram_unit.id, "1000")])
+    ).json()
+    line_id = rfq["lines"][0]["id"]
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    captured = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": line_id, "unit_price": "85", "quantity": "1", "unit_of_measure_id": tonne_unit.id}],
+    )
+    assert captured.status_code == 201, captured.text
+    body = captured.json()
+    response = _invitation_for(body, acme_supplier.id)["responses"][0]
+
+    quoted_line = response["lines"][0]
+    assert quoted_line["unit_of_measure_id"] == tonne_unit.id
+    assert quoted_line["quantity"] == "1.0000"
+    assert rfq["lines"][0]["quantity"] == "1000.0000"
+    assert rfq["lines"][0]["unit_of_measure_id"] == mass_kilogram_unit.id
+
+    accepted = _accept(client, admin_headers, rfq["id"], response["id"], [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    line = db_session.query(PurchaseOrderLine).one()
+    assert (line.quantity, line.unit_of_measure_id, line.unit_price, line.conversion_factor) == (
+        Decimal("1.0000"), tonne_unit.id, Decimal("85.0000"), Decimal("1000.000000"),
+    )
+
+
+def test_quote_unit_override_requires_a_quantity(client, admin_headers, issued_rfq, acme_supplier, tonne_unit):
+    rfq, cement_id, _ = issued_rfq
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    response = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": cement_id, "unit_price": "42", "unit_of_measure_id": tonne_unit.id}],
+    )
+    assert response.status_code == 422
+
+
+def test_quote_unit_must_convert_to_the_material_unit(client, admin_headers, issued_rfq, acme_supplier, tonne_unit):
+    """Cement is in plain KG (no dimension) -- a quote in tonnes cannot be
+    interpreted, the same rule the RFQ line's own unit is held to."""
+    rfq, cement_id, _ = issued_rfq
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    response = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": cement_id, "unit_price": "42", "quantity": "1", "unit_of_measure_id": tonne_unit.id}],
+    )
+    assert response.status_code == 422
+
+
+def test_add_follow_up_requires_a_non_blank_note(client, admin_headers, issued_rfq, beta_supplier):
+    rfq, _, _ = issued_rfq
+    beta = _invitation_for(rfq, beta_supplier.id)["id"]
+    assert _follow_up(client, admin_headers, rfq["id"], beta, note="   ").status_code == 422
+
+
+def test_add_follow_up_rejected_once_rfq_is_no_longer_live(
+    client, admin_headers, issued_rfq, acme_supplier, beta_supplier, cement_raw_material, sand_raw_material
+):
+    rfq, cement_id, sand_id = issued_rfq
+    accepted = _quote_and_accept(
+        client, admin_headers, rfq, acme_supplier.id, {cement_id: "42", sand_id: "9"}
+    )
+    assert accepted["status"] == "selected"
+    beta = _invitation_for(accepted, beta_supplier.id)["id"]
+    # The RFQ has moved on to a decision -- nothing left to follow up on.
+    assert _follow_up(client, admin_headers, rfq["id"], beta).status_code == 400
+
+
 # --- accept / reject -------------------------------------------------------------------------
 
 
@@ -592,6 +811,28 @@ def test_po_keeps_the_agreed_unit_and_price(
     assert po.rfq_response_id == converted.json()["selected_response_id"]
 
 
+def test_po_uses_the_quoted_quantity_when_it_differs_from_the_request(
+    client, admin_headers, acme_supplier, cement_raw_material, warehouse_1, db_session
+):
+    """Gap-fix: partial quotation must carry through to the PO -- a
+    supplier who quoted 15 of the 20 KG requested gets a PO for 15 KG,
+    not silently for the original 20."""
+    rfq = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material, quantity="20")])).json()
+    line_id = rfq["lines"][0]["id"]
+    invitation = _invitation_for(rfq, acme_supplier.id)["id"]
+    quoted = _capture(
+        client, admin_headers, rfq["id"], invitation, [{"rfq_line_id": line_id, "unit_price": "42", "quantity": "15"}]
+    ).json()
+    response_id = _invitation_for(quoted, acme_supplier.id)["responses"][0]["id"]
+    accepted = _accept(client, admin_headers, rfq["id"], response_id, [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    po_line = db_session.query(PurchaseOrderLine).one()
+    assert po_line.quantity == Decimal("15.0000")
+
+
 def test_convert_override_and_unquoted_lines(client, admin_headers, issued_rfq, acme_supplier, warehouse_1, cement_raw_material, db_session):
     rfq, cement_id, sand_id = issued_rfq
     _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {cement_id: "42"})
@@ -611,6 +852,203 @@ def test_convert_requires_the_accepted_quotation_upload(client, admin_headers, i
     record.selected_response_id = _invitation_for(body, acme_supplier.id)["responses"][0]["id"]
     db_session.commit()
     assert _convert(client, admin_headers, rfq["id"], warehouse_1.id, [{"rfq_line_id": cement_id}]).status_code == 400
+
+
+# --- gap fix: split sourcing -------------------------------------------------------------------
+
+
+def test_split_sourcing_fulfils_the_full_requirement_from_two_suppliers(
+    client, admin_headers, acme_supplier, beta_supplier, cement_raw_material, warehouse_1, db_session
+):
+    """Scenario: RFQ requirement = 1000 KG, Supplier A can supply 600 KG,
+    Supplier B can supply 400 KG -- the Purchase Executive sources the
+    full requirement from both suppliers, without a disconnected
+    replacement RFQ (gap-fix: split sourcing). Two POs are created and
+    the total sourced reaches the original 1000 KG."""
+    rfq = _create(
+        client, admin_headers,
+        _form([acme_supplier.id, beta_supplier.id], [_line(cement_raw_material, quantity="1000")]),
+    ).json()
+    line_id = rfq["lines"][0]["id"]
+    acme_invitation = _invitation_for(rfq, acme_supplier.id)["id"]
+    beta_invitation = _invitation_for(rfq, beta_supplier.id)["id"]
+
+    acme_quote = _capture(
+        client, admin_headers, rfq["id"], acme_invitation,
+        [{"rfq_line_id": line_id, "unit_price": "10", "quantity": "600"}],
+    ).json()
+    beta_quote = _capture(
+        client, admin_headers, rfq["id"], beta_invitation,
+        [{"rfq_line_id": line_id, "unit_price": "11", "quantity": "400"}],
+    ).json()
+    acme_response_id = _invitation_for(acme_quote, acme_supplier.id)["responses"][0]["id"]
+    beta_response_id = _invitation_for(beta_quote, beta_supplier.id)["responses"][0]["id"]
+
+    # Accept Acme's (partial) quote -- the RFQ's one explicit decision.
+    accepted = _accept(client, admin_headers, rfq["id"], acme_response_id, [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    # Source Acme's 600 KG (the decided response, no response_id needed).
+    first = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "selected"  # not fully sourced yet -- stays open
+
+    # Source the remaining 400 KG from Beta -- naming Beta's own captured
+    # response, no second "decide" and no replacement RFQ.
+    second = _convert(client, admin_headers, rfq["id"], warehouse_1.id, response_id=beta_response_id)
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["status"] == "converted"  # now fully sourced
+    assert second_body["lines"][0]["sourced_quantity"] == "1000.0000"
+
+    pos = db_session.query(PurchaseOrder).order_by(PurchaseOrder.id).all()
+    assert [po.supplier_id for po in pos] == [acme_supplier.id, beta_supplier.id]
+    lines_by_supplier = {
+        po.supplier_id: db_session.query(PurchaseOrderLine).filter(PurchaseOrderLine.purchase_order_id == po.id).one()
+        for po in pos
+    }
+    assert (lines_by_supplier[acme_supplier.id].quantity, lines_by_supplier[acme_supplier.id].unit_price) == (
+        Decimal("600.0000"), Decimal("10.0000"),
+    )
+    assert (lines_by_supplier[beta_supplier.id].quantity, lines_by_supplier[beta_supplier.id].unit_price) == (
+        Decimal("400.0000"), Decimal("11.0000"),
+    )
+    assert sum(l.quantity for l in lines_by_supplier.values()) == Decimal("1000.0000")
+    assert [ref["id"] for ref in second_body["purchase_orders"]] == [po.id for po in pos]
+
+    # The original RFQ quantity and both suppliers' quotation history are
+    # untouched -- fully traceable.
+    refetched = client.get(f"/api/rfqs/{rfq['id']}", headers=admin_headers).json()
+    assert refetched["lines"][0]["quantity"] == "1000.0000"
+    acme_inv = _invitation_for(refetched, acme_supplier.id)
+    beta_inv = _invitation_for(refetched, beta_supplier.id)
+    assert (acme_inv["responses"][0]["lines"][0]["quantity"], acme_inv["responses"][0]["lines"][0]["unit_price"]) == (
+        "600.0000", "10.0000",
+    )
+    assert (beta_inv["responses"][0]["lines"][0]["quantity"], beta_inv["responses"][0]["lines"][0]["unit_price"]) == (
+        "400.0000", "11.0000",
+    )
+
+
+def test_split_sourcing_shows_the_remaining_unsourced_quantity(
+    client, admin_headers, acme_supplier, cement_raw_material, warehouse_1
+):
+    """600 KG sourced -> the remaining 400 KG of the 1000 KG requirement
+    is clearly visible as unsourced, and the RFQ stays open (not
+    `converted`) so it can still be sourced further (gap-fix: split
+    sourcing)."""
+    rfq = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material, quantity="1000")])).json()
+    line_id = rfq["lines"][0]["id"]
+    assert rfq["lines"][0]["sourced_quantity"] == "0.0000"
+
+    invitation_id = _invitation_for(rfq, acme_supplier.id)["id"]
+    quoted = _capture(
+        client, admin_headers, rfq["id"], invitation_id,
+        [{"rfq_line_id": line_id, "unit_price": "10", "quantity": "600"}],
+    ).json()
+    response_id = _invitation_for(quoted, acme_supplier.id)["responses"][0]["id"]
+    accepted = _accept(client, admin_headers, rfq["id"], response_id, [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    body = converted.json()
+
+    line = body["lines"][0]
+    assert line["quantity"] == "1000.0000"
+    assert line["sourced_quantity"] == "600.0000"
+    remaining = Decimal(line["quantity"]) - Decimal(line["sourced_quantity"])
+    assert remaining == Decimal("400.0000")
+    assert body["status"] == "selected"  # partially sourced -- never silently closed
+
+
+# --- gap fix: PO cancellation on supplier failure ------------------------------------------
+
+
+def test_cancelling_a_po_with_a_payment_keeps_it_visible_and_the_rfq_traceable(
+    client, admin_headers, issued_rfq, acme_supplier, warehouse_1
+):
+    """Scenario: PO issued, a payment already recorded, the supplier then
+    says they cannot fulfil -- the PE cancels the PO. The payment must
+    stay fully visible (never silently removed or treated as a refund),
+    the cancellation reason is recorded, and the RFQ/selected quotation
+    this PO came from remain traceable (gap-fix: supplier-failure
+    cancellation, docs/modules/purchase_orders.md)."""
+    rfq, cement_id, sand_id = issued_rfq
+    _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {cement_id: "42", sand_id: "9"})
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    po_id = converted.json()["purchase_order_id"]
+
+    assert client.post(f"/api/purchase-orders/{po_id}/submit", headers=admin_headers).status_code == 200
+    assert client.post(f"/api/purchase-orders/{po_id}/approve", headers=admin_headers).status_code == 200
+    payment = client.post(
+        f"/api/purchase-orders/{po_id}/payments",
+        json={"payment_date": "2026-01-15", "amount": "500", "payment_method": "Bank Transfer", "reference_number": "TXN1"},
+        headers=admin_headers,
+    )
+    assert payment.status_code == 201, payment.text
+    payment_id = payment.json()["payments"][0]["id"]
+
+    cancelled = client.patch(
+        f"/api/purchase-orders/{po_id}/status",
+        json={"status": "cancelled", "cancel_reason": "Supplier confirmed they cannot fulfil this order."},
+        headers=admin_headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    body = cancelled.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_reason"] == "Supplier confirmed they cannot fulfil this order."
+    assert body["cancelled_at"] is not None
+
+    # The payment is still there, unmodified -- never auto-cancelled/refunded.
+    assert len(body["payments"]) == 1
+    assert body["payments"][0]["id"] == payment_id
+    assert body["payments"][0]["status"] == "recorded"
+    assert body["payments"][0]["amount"] == "500.0000"
+
+    # Nothing more is owed to pay; the 500 already paid is now refundable,
+    # not still "outstanding" (which would wrongly suggest more is owed).
+    assert body["outstanding_amount"] == "0.0000"
+    assert body["refundable_amount"] == "500.0000"
+
+    # The original RFQ and selected quotation remain traceable.
+    assert body["rfq_id"] == rfq["id"]
+    assert body["rfq_number"] == rfq["rfq_number"]
+    assert body["rfq_response_id"] is not None
+    refetched_rfq = client.get(f"/api/rfqs/{rfq['id']}", headers=admin_headers).json()
+    assert refetched_rfq["status"] == "converted"
+    assert refetched_rfq["purchase_order_id"] == po_id
+    assert refetched_rfq["selected_response_id"] == body["rfq_response_id"]
+
+
+def test_cancelling_a_po_with_no_payment_still_works_normally(
+    client, admin_headers, issued_rfq, acme_supplier, warehouse_1
+):
+    """A PO with no payment recorded cancels exactly as before -- no
+    refundable amount, no payments to preserve, existing behaviour
+    unchanged."""
+    rfq, cement_id, sand_id = issued_rfq
+    _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {cement_id: "42", sand_id: "9"})
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    po_id = converted.json()["purchase_order_id"]
+    assert client.post(f"/api/purchase-orders/{po_id}/submit", headers=admin_headers).status_code == 200
+    assert client.post(f"/api/purchase-orders/{po_id}/approve", headers=admin_headers).status_code == 200
+
+    cancelled = client.patch(
+        f"/api/purchase-orders/{po_id}/status",
+        json={"status": "cancelled", "cancel_reason": "Supplier confirmed they cannot fulfil this order."},
+        headers=admin_headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    body = cancelled.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_reason"] == "Supplier confirmed they cannot fulfil this order."
+    assert body["payments"] == []
+    assert body["outstanding_amount"] == "0.0000"
+    assert body["refundable_amount"] == "0"  # Decimal("0") -- no payments to add precision from
+    assert body["rfq_id"] == rfq["id"]
 
 
 # --- cancel / list / isolation / permissions ------------------------------------------------

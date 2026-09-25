@@ -1,6 +1,8 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.validation import check_max_length
 
 
 class WarehouseOut(BaseModel):
@@ -22,7 +24,7 @@ class WarehouseCreateRequest(BaseModel):
     module will reference should not silently change."""
 
     name: str
-    total_usable_storage_area: Decimal
+    total_usable_storage_area: Decimal = Field(max_digits=12, decimal_places=2)
     storage_area_unit_of_measure_id: int
 
     @field_validator("name")
@@ -31,7 +33,7 @@ class WarehouseCreateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("total_usable_storage_area")
     @classmethod
@@ -47,7 +49,7 @@ class WarehouseUpdateRequest(BaseModel):
     own endpoint below."""
 
     name: str | None = None
-    total_usable_storage_area: Decimal | None = None
+    total_usable_storage_area: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
     storage_area_unit_of_measure_id: int | None = None
 
     @field_validator("name")
@@ -58,7 +60,7 @@ class WarehouseUpdateRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("Name is required.")
-        return value
+        return check_max_length(value, 150, "Name")
 
     @field_validator("total_usable_storage_area")
     @classmethod
