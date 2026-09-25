@@ -78,7 +78,7 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 const PAYMENT_STATUS_LABELS: Record<FinancePo['payment_status'], string> = {
-  unpaid: 'Unpaid',
+  unpaid: 'Pending',
   partially_paid: 'Partially Paid',
   paid: 'Paid',
 }

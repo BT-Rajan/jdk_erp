@@ -269,7 +269,7 @@ const COMMUNICATION_LABELS: Record<PurchaseOrderCommunication['kind'], string> =
   note: 'Supplier reply / note',
 }
 
-const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = { unpaid: 'Unpaid', partially_paid: 'Partially Paid', paid: 'Paid' }
+const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = { unpaid: 'Pending', partially_paid: 'Partially Paid', paid: 'Paid' }
 const PAYMENT_STATUS_TONES: Record<PaymentStatus, BadgeTone> = { unpaid: 'neutral', partially_paid: 'warning', paid: 'success' }
 
 const CANCELLABLE: PurchaseOrderStatus[] = ['draft', 'pending_approval', 'approved', 'sent', 'partially_received']
