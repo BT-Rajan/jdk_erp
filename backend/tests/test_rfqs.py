@@ -719,6 +719,28 @@ def test_po_keeps_the_agreed_unit_and_price(
     assert po.rfq_response_id == converted.json()["selected_response_id"]
 
 
+def test_po_uses_the_quoted_quantity_when_it_differs_from_the_request(
+    client, admin_headers, acme_supplier, cement_raw_material, warehouse_1, db_session
+):
+    """Gap-fix: partial quotation must carry through to the PO -- a
+    supplier who quoted 15 of the 20 KG requested gets a PO for 15 KG,
+    not silently for the original 20."""
+    rfq = _create(client, admin_headers, _form([acme_supplier.id], [_line(cement_raw_material, quantity="20")])).json()
+    line_id = rfq["lines"][0]["id"]
+    invitation = _invitation_for(rfq, acme_supplier.id)["id"]
+    quoted = _capture(
+        client, admin_headers, rfq["id"], invitation, [{"rfq_line_id": line_id, "unit_price": "42", "quantity": "15"}]
+    ).json()
+    response_id = _invitation_for(quoted, acme_supplier.id)["responses"][0]["id"]
+    accepted = _accept(client, admin_headers, rfq["id"], response_id, [_upload(client, admin_headers)])
+    assert accepted.status_code == 200, accepted.text
+
+    converted = _convert(client, admin_headers, rfq["id"], warehouse_1.id)
+    assert converted.status_code == 200, converted.text
+    po_line = db_session.query(PurchaseOrderLine).one()
+    assert po_line.quantity == Decimal("15.0000")
+
+
 def test_convert_override_and_unquoted_lines(client, admin_headers, issued_rfq, acme_supplier, warehouse_1, cement_raw_material, db_session):
     rfq, cement_id, sand_id = issued_rfq
     _quote_and_accept(client, admin_headers, rfq, acme_supplier.id, {cement_id: "42"})

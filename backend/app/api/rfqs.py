@@ -1059,9 +1059,11 @@ def convert_rfq_to_purchase_order(
 
     # PO lines keep the RFQ line's unit, quantity and price exactly as
     # agreed; the unit's ratio to the material's own unit is stored on the
-    # line so receiving posts stock correctly.
+    # line so receiving posts stock correctly. `quoted_quantity` overrides
+    # the RFQ line's own requested quantity when the selected response
+    # quoted a different one (gap-fix: partial quotation).
     conversion_lines = []
-    for rfq_line, unit_price in priced_lines:
+    for rfq_line, unit_price, quoted_quantity in priced_lines:
         material = _resolve_active_raw_material(db, rfq_line.raw_material_id, current_user.organisation_id)
         ratio = Decimal(1)
         if rfq_line.unit_of_measure_id != material.unit_of_measure_id:
@@ -1082,7 +1084,7 @@ def convert_rfq_to_purchase_order(
         conversion_lines.append(
             rfq_service.RfqConversionLine(
                 raw_material=material,
-                quantity=rfq_line.quantity,
+                quantity=quoted_quantity if quoted_quantity is not None else rfq_line.quantity,
                 unit_price=unit_price,
                 unit_of_measure_id=rfq_line.unit_of_measure_id,
                 conversion_factor=ratio,

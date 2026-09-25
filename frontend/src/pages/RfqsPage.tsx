@@ -645,6 +645,17 @@ export function RfqsPage() {
     return undefined
   }, [detailTarget])
 
+  /** The quantity actually agreed for the PO -- the approved quote's own
+   * quantity when it quoted one (partial quotation), otherwise the RFQ
+   * line's requested quantity. Never guessed beyond that. */
+  const convertQuantities = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const l of selectedResponse?.response.lines ?? []) {
+      if (l.quantity !== null) map.set(l.rfq_line_id, l.quantity)
+    }
+    return map
+  }, [selectedResponse])
+
   /** Prices pre-filled from the accepted quotation -- editable, never
    * locked. */
   function openConvert(rfq: Rfq | null = detailTarget) {
@@ -1228,8 +1239,9 @@ export function RfqsPage() {
           <div className="flex flex-col gap-4">
             <Alert variant="danger">{convertError}</Alert>
             <p className="text-sm text-gold-100/70">
-              Supplier{selectedResponse ? ` (${supplierName(selectedResponse.invitation.supplier_id)})` : ''}, items and quantities come from
-              the approved RFQ ({detailTarget.rfq_number}). Prices and terms are pre-filled from the approved quotation and can be changed.
+              Supplier{selectedResponse ? ` (${supplierName(selectedResponse.invitation.supplier_id)})` : ''} and items come from
+              the approved RFQ ({detailTarget.rfq_number}). Quantities, prices and terms are pre-filled from the approved
+              quotation (falling back to the requested quantity where the quote didn't specify one) and can be changed.
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
               <DateField label="Expected Delivery Date" required min={todayIso()} value={convertExpectedDate} onChange={(e) => setConvertExpectedDate(e.target.value)} />
@@ -1249,7 +1261,8 @@ export function RfqsPage() {
               <tbody>
                 {detailTarget.lines.map((line) => {
                   const draft = convertLines[line.id] ?? { include: true, unit_price: '' }
-                  const lineTotal = draft.include && isPositiveDecimal(draft.unit_price) ? Number(line.quantity) * Number(draft.unit_price) : null
+                  const quantity = convertQuantities.get(line.id) ?? line.quantity
+                  const lineTotal = draft.include && isPositiveDecimal(draft.unit_price) ? Number(quantity) * Number(draft.unit_price) : null
                   return (
                     <tr key={line.id} className="border-t border-ink-700">
                       <td className="py-2 pr-3">
@@ -1261,7 +1274,12 @@ export function RfqsPage() {
                         />
                       </td>
                       <td className="py-2 pr-3">{materialName(line.raw_material_id)}</td>
-                      <td className="py-2 pr-3">{formatNumber(line.quantity)} {unitCode(line.unit_of_measure_id)}</td>
+                      <td className="py-2 pr-3">
+                        {formatNumber(quantity)} {unitCode(line.unit_of_measure_id)}
+                        {convertQuantities.has(line.id) && (
+                          <span className="block text-xs text-gold-100/50">Requested {formatNumber(line.quantity)}</span>
+                        )}
+                      </td>
                       <td className="py-2 pr-3">
                         <input
                           type="number"
@@ -1285,7 +1303,8 @@ export function RfqsPage() {
                       String(
                         detailTarget.lines.reduce((sum, line) => {
                           const draft = convertLines[line.id]
-                          return draft?.include && isPositiveDecimal(draft.unit_price) ? sum + Number(line.quantity) * Number(draft.unit_price) : sum
+                          const quantity = convertQuantities.get(line.id) ?? line.quantity
+                          return draft?.include && isPositiveDecimal(draft.unit_price) ? sum + Number(quantity) * Number(draft.unit_price) : sum
                         }, 0),
                       ),
                     )}

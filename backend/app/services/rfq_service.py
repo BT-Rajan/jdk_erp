@@ -255,12 +255,19 @@ def get_selected_invitation(db: Session, rfq: Rfq) -> RfqSupplierInvitation:
 
 def resolve_conversion_prices(
     db: Session, *, rfq: Rfq, overrides: dict[int, Decimal | None] | None
-) -> list[tuple[RfqLine, Decimal]]:
+) -> list[tuple[RfqLine, Decimal, Decimal | None]]:
     """docs/modules/rfq.md #8. `overrides is None` -> every RFQ line, at
     the selected response's quoted price. Otherwise exactly the listed
     lines, each at its override price, or the quoted one when no override
     is given. A line with neither is rejected, naming the line -- a price
-    is never guessed."""
+    is never guessed.
+
+    Also resolves each line's quoted quantity (the third tuple element) --
+    None when the selected response quoted no explicit quantity for that
+    line (the RFQ line's own requested quantity applies), otherwise the
+    quantity the supplier actually agreed to (gap-fix: partial
+    quotation must carry through to the PO, not just be recorded and
+    ignored)."""
     rfq_lines = db.query(RfqLine).filter(RfqLine.rfq_id == rfq.id).order_by(RfqLine.id).all()
     if overrides is not None:
         lines_by_id = {line.id: line for line in rfq_lines}
@@ -270,21 +277,22 @@ def resolve_conversion_prices(
     if not rfq_lines:
         raise BusinessRuleError("This RFQ has no lines to convert.")
 
-    quoted = {
-        row.rfq_line_id: row.unit_price
-        for row in db.query(RfqResponseLine.rfq_line_id, RfqResponseLine.unit_price)
+    quoted_rows = (
+        db.query(RfqResponseLine.rfq_line_id, RfqResponseLine.unit_price, RfqResponseLine.quantity)
         .filter(RfqResponseLine.response_id == rfq.selected_response_id)
         .all()
-    }
+    )
+    quoted_prices = {row.rfq_line_id: row.unit_price for row in quoted_rows}
+    quoted_quantities = {row.rfq_line_id: row.quantity for row in quoted_rows}
 
-    resolved: list[tuple[RfqLine, Decimal]] = []
+    resolved: list[tuple[RfqLine, Decimal, Decimal | None]] = []
     missing: list[int] = []
     for line in rfq_lines:
-        price = (overrides or {}).get(line.id) or quoted.get(line.id)
+        price = (overrides or {}).get(line.id) or quoted_prices.get(line.id)
         if price is None:
             missing.append(line.id)
         else:
-            resolved.append((line, price))
+            resolved.append((line, price, quoted_quantities.get(line.id)))
     if missing:
         raise ValidationError(
             "Enter a unit price for every line the selected supplier did not quote.",
