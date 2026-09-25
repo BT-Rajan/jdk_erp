@@ -16,6 +16,7 @@ from app.models.audit_event import (
     PRODUCT_STATUS_CHANGED,
     PRODUCT_UPDATED,
 )
+from app.models.bom import Bom
 from app.models.category import Category
 from app.models.product import Product
 from app.models.unit import UnitOfMeasure
@@ -77,6 +78,14 @@ def _resolve_active_category(db: Session, category_id: int, organisation_id: int
             fields={"category_id": "Not a valid active category in your organisation."},
         )
     return category
+
+
+def _has_bom(db: Session, product_id: int) -> bool:
+    """`unit_of_measure_id` is never stored on `Bom.base_quantity` -- it
+    implicitly means "in this product's own unit" (see Bom's own
+    docstring). Once a BOM exists for this product, changing the
+    product's unit would silently change what base_quantity means."""
+    return db.query(Bom.id).filter(Bom.product_id == product_id).first() is not None
 
 
 def _resolve_active_unit(db: Session, unit_of_measure_id: int, organisation_id: int) -> UnitOfMeasure:
@@ -208,6 +217,11 @@ def update_product(
         _resolve_active_category(db, updates["category_id"], admin.organisation_id)
     if "unit_of_measure_id" in updates:
         _resolve_active_unit(db, updates["unit_of_measure_id"], admin.organisation_id)
+        if updates["unit_of_measure_id"] != product.unit_of_measure_id and _has_bom(db, product.id):
+            raise ValidationError(
+                "unit_of_measure_id cannot be changed once this product has a BOM.",
+                fields={"unit_of_measure_id": "Cannot change once a BOM exists for this product."},
+            )
 
     before = {field: getattr(product, field) for field in updates}
     for field, value in updates.items():

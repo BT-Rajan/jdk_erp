@@ -16,7 +16,9 @@ from app.models.audit_event import (
     RAW_MATERIAL_STATUS_CHANGED,
     RAW_MATERIAL_UPDATED,
 )
+from app.models.bom import BomComponent
 from app.models.category import Category
+from app.models.inventory import StockMovement
 from app.models.raw_material import RawMaterial
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
@@ -74,6 +76,22 @@ def _resolve_active_category(db: Session, category_id: int, organisation_id: int
             fields={"category_id": "Not a valid active category in your organisation."},
         )
     return category
+
+
+def _has_recorded_quantity(db: Session, raw_material_id: int) -> bool:
+    """`unit_of_measure_id` is never stored on a BomComponent row or a
+    StockMovement/RawMaterialInventory row -- each implicitly means "in
+    this material's own unit." Once any such row exists, changing the
+    material's unit would silently change what every already-recorded
+    quantity means, with no conversion and no warning. RawMaterialInventory
+    is not checked separately -- app/services/inventory_service.py never
+    creates one without a StockMovement in the same call."""
+    has_component = (
+        db.query(BomComponent.id).filter(BomComponent.raw_material_id == raw_material_id).first() is not None
+    )
+    if has_component:
+        return True
+    return db.query(StockMovement.id).filter(StockMovement.raw_material_id == raw_material_id).first() is not None
 
 
 def _resolve_active_unit(
@@ -214,6 +232,16 @@ def update_raw_material(
         _resolve_active_category(db, updates["category_id"], admin.organisation_id)
     if "unit_of_measure_id" in updates:
         _resolve_active_unit(db, updates["unit_of_measure_id"], admin.organisation_id)
+        if updates["unit_of_measure_id"] != raw_material.unit_of_measure_id and _has_recorded_quantity(
+            db, raw_material.id
+        ):
+            raise ValidationError(
+                "unit_of_measure_id cannot be changed once this raw material has BOM components or "
+                "stock movements recorded against it.",
+                fields={
+                    "unit_of_measure_id": "Cannot change once quantities have been recorded in the current unit."
+                },
+            )
     if updates.get("alternate_conversion_unit_of_measure_id") is not None:
         _resolve_active_unit(
             db,
