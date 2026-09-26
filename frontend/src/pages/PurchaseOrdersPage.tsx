@@ -728,6 +728,7 @@ export function PurchaseOrdersPage() {
   const isOpen = !!detailTarget && !['draft', 'pending_approval', 'closed', 'cancelled'].includes(detailTarget.status)
   const openToReceiving = (id: number) => navigate('/receiving', { state: { openPurchaseOrderId: id } })
   const openToPayments = (id: number) => navigate(`/finance/payments/${id}`)
+  const openToRfq = (id: number) => navigate(`/rfqs/${id}`)
 
   const columns: DataTableColumn<PurchaseOrder>[] = [
     { key: 'po_number', label: 'PO Number', render: (po) => po.po_number },
@@ -870,7 +871,22 @@ export function PurchaseOrdersPage() {
                   <div><span className="text-gold-100/50">Status: </span><Badge tone={STATUS_TONES[detailTarget.status]}>{STATUS_LABELS[detailTarget.status]}</Badge></div>
                   <div><span className="text-gold-100/50">Revision: </span>{detailTarget.revision_number || '—'}</div>
                   {detailTarget.supplier_reference && <div><span className="text-gold-100/50">Supplier Reference: </span>{detailTarget.supplier_reference}</div>}
-                  {detailTarget.rfq_number && <div><span className="text-gold-100/50">RFQ: </span>{detailTarget.rfq_number}</div>}
+                  {detailTarget.rfq_number && (
+                    <div>
+                      <span className="text-gold-100/50">RFQ: </span>
+                      {detailTarget.rfq_id ? (
+                        <button
+                          type="button"
+                          onClick={() => openToRfq(detailTarget.rfq_id!)}
+                          className="text-gold-300 underline-offset-2 hover:underline"
+                        >
+                          {detailTarget.rfq_number}
+                        </button>
+                      ) : (
+                        detailTarget.rfq_number
+                      )}
+                    </div>
+                  )}
                   {detailTarget.delivery_instructions && <div className="col-span-2"><span className="text-gold-100/50">Delivery Instructions: </span>{detailTarget.delivery_instructions}</div>}
                   {detailTarget.notes && <div className="col-span-2"><span className="text-gold-100/50">Notes: </span>{detailTarget.notes}</div>}
                   {detailTarget.cancel_reason && <div className="col-span-2"><span className="text-gold-100/50">Cancel Reason: </span>{detailTarget.cancel_reason}</div>}
