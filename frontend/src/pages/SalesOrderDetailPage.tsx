@@ -288,6 +288,7 @@ export function SalesOrderDetailPage() {
                 <th className="py-2 pr-3">Product</th>
                 <th className="py-2 pr-3 text-right">Quantity</th>
                 <th className="py-2 pr-3">Unit</th>
+                <th className="py-2 pr-3 text-right">Allocated</th>
                 <th className="py-2 pr-3 text-right">Delivered</th>
                 <th className="py-2 pr-3 text-right">Remaining</th>
                 <th className="py-2 pr-3 text-right">Unit Price</th>
@@ -301,6 +302,7 @@ export function SalesOrderDetailPage() {
                   <td className="py-2 pr-3">{productsById.get(line.product_id)?.name ?? `Product ${line.product_id}`}</td>
                   <td className="py-2 pr-3 text-right">{formatNumber(line.quantity, { maximumFractionDigits: 4 })}</td>
                   <td className="py-2 pr-3">{unitsById.get(line.unit_of_measure_id)?.code ?? '—'}</td>
+                  <td className="py-2 pr-3 text-right">{formatNumber(line.allocated_quantity ?? '0', { maximumFractionDigits: 4 })}</td>
                   <td className="py-2 pr-3 text-right">{formatNumber(line.fulfilled_quantity ?? '0', { maximumFractionDigits: 4 })}</td>
                   <td className="py-2 pr-3 text-right">
                     {line.remaining_quantity == null ? '—' : formatNumber(line.remaining_quantity, { maximumFractionDigits: 4 })}

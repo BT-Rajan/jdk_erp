@@ -2,11 +2,13 @@
 production demand (Sales S15.2, per the S15.1 decisions).
 
 For each line, in line order and independently of the others:
-- Finished Goods first: the product's on-hand quantity across every
-  warehouse, as Inventory reports it (finished_goods_inventory_service),
-  less what earlier lines of this same order already took;
-- the covered part is recorded; any remainder becomes one Production
-  Requirement for that line, in the product's own unit;
+- Finished Goods first: the product's *free* FG -- physical on hand less
+  every open allocation, including earlier lines of this same order
+  (fg_allocation_service) -- is allocated to the line up to its quantity
+  (the S15.1 rule: allocation starts at hand-off), so the same stock is
+  never counted for two orders;
+- the covered (allocated) part is recorded; any remainder becomes one
+  Production Requirement for that line, in the product's own unit;
 - the requirement snapshots the product's active BOM (base quantity and
   components, each in its raw material's own unit at that moment); with
   no active BOM it is recorded as `bom_required`, without a snapshot.
@@ -14,8 +16,9 @@ For each line, in line order and independently of the others:
 A line whose unit is not the product's stock unit is refused: FG stock
 and the BOM base are both in that unit, and nothing is converted here.
 
-Records only. Nothing is reserved, allocated, moved or issued; nothing
-is scheduled, planned or produced; the Sales Order is never changed.
+Nothing is moved or issued (allocation is a claim, not a movement);
+nothing is scheduled, planned or produced; the Sales Order is never
+changed.
 
 Lifecycle (Production P1) -- a requirement stays a demand/reference
 record, never a production command:
@@ -54,7 +57,7 @@ from app.models.production_requirement import (
 )
 from app.models.raw_material import RawMaterial
 from app.models.sales_order import HANDED_OFF, SalesOrder, SalesOrderLine
-from app.services import finished_goods_inventory_service
+from app.services import fg_allocation_service
 
 _ZERO = Decimal("0")
 
@@ -94,7 +97,6 @@ def create_for_order(db: Session, order: SalesOrder) -> list[SalesOrderLineFulfi
     if db.query(SalesOrderLineFulfilment.id).filter(SalesOrderLineFulfilment.sales_order_line_id.in_(line_ids)).first():
         raise ConflictError("This Sales Order's fulfilment has already been assessed.")
 
-    remaining: dict[int, Decimal] = {}
     results: list[SalesOrderLineFulfilment] = []
     for line in order.lines:
         product = db.get(Product, line.product_id)
@@ -105,15 +107,8 @@ def create_for_order(db: Session, order: SalesOrder) -> list[SalesOrderLineFulfi
             )
         if line.quantity is None or line.quantity <= _ZERO:
             raise ValidationError(f"Line {line.line_number} has no positive quantity.", fields={"lines": "Quantity must be positive."})
-        if product.id not in remaining:
-            on_hand = finished_goods_inventory_service.get_organisation_quantity_on_hand(
-                db, organisation_id=order.organisation_id, product_id=product.id
-            )
-            remaining[product.id] = max(Decimal(on_hand or 0), _ZERO)
-        available = remaining[product.id]
-        covered = min(available, line.quantity)
+        available, covered = fg_allocation_service.allocate_free_up_to(db, order, line, line.quantity)
         shortfall = line.quantity - covered
-        remaining[product.id] = available - covered
 
         fulfilment = SalesOrderLineFulfilment(
             organisation_id=order.organisation_id,

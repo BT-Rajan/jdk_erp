@@ -28,6 +28,8 @@ class SalesOrderLineOut(BaseModel):
     # Instructions; the ordered `quantity` itself never changes.
     fulfilled_quantity: Decimal = Decimal("0")
     remaining_quantity: Decimal | None = None
+    # Open claim on physical FG (Reservation + FG Allocation foundation).
+    allocated_quantity: Decimal = Decimal("0")
 
 
 class SalesOrderOut(BaseModel):

@@ -36,7 +36,7 @@ from app.models.organisation import Organisation
 from app.models.product import Product
 from app.models.sales_order import CANCELLED, COMPLETED, HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
 from app.models.unit import UnitOfMeasure
-from app.services import document_numbering, finished_goods_inventory_service, purchase_order_service, uom_conversion
+from app.services import document_numbering, fg_allocation_service, finished_goods_inventory_service, purchase_order_service, uom_conversion
 
 DELIVERABLE_STATUSES = (HANDED_OFF, PARTIALLY_DELIVERED)
 _HUNDRED = Decimal("100")
@@ -362,7 +362,7 @@ def check_fulfilment(db: Session, instruction: DeliveryInstruction) -> None:
 FG_REFERENCE_TYPE = "delivery_instruction_line"
 
 
-def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> tuple[list, tuple[str, str] | None]:
+def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> tuple[list, tuple[str, str] | None, list]:
     """pending -> fulfilled, after check_fulfilment, and each line's shipment
     quantity issued from Finished Goods through the existing single writer
     (finished_goods_inventory_service.issue_finished_goods), in the
@@ -372,8 +372,14 @@ def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> tuple
     instruction always has exactly its movements and never more. The status
     moves first, as a conditional update, so a concurrent second request
     stops before issuing anything. Then the Sales Order's delivery status
-    moves forward if this fulfilment changed it (Delivery D6). Returns the
-    movements and the order's (old, new) status, if it changed."""
+    moves forward if this fulfilment changed it (Delivery D6).
+
+    FG allocation: each line may use its own order line's allocation and
+    free FG, never FG allocated to another Sales Order
+    (fg_allocation_service.check_delivery, under the product's stock lock);
+    after the physical issue the line's own allocation shrinks by what was
+    delivered. Returns the movements, the order's (old, new) status if it
+    changed, and the allocation changes."""
     check_fulfilment(db, instruction)
     for line in instruction.lines:
         product = db.get(Product, line.product_id)
@@ -381,22 +387,28 @@ def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> tuple
             raise ConflictError("A product's stock unit has changed since this delivery was created; nothing is converted.")
     _transition(db, instruction, PENDING, {"status": FULFILLED, "fulfilled_at": datetime.utcnow(), "fulfilled_by_user_id": user_id})
     warehouse = purchase_order_service.default_warehouse(db, instruction.organisation_id)
-    movements = [
-        finished_goods_inventory_service.issue_finished_goods(
-            db,
-            organisation_id=instruction.organisation_id,
-            product_id=line.product_id,
-            warehouse_id=warehouse.id,
-            quantity=line.quantity,
-            unit_of_measure_id=line.unit_of_measure_id,
-            reference_type=FG_REFERENCE_TYPE,
-            reference_id=line.id,
-            created_by_user_id=user_id,
+    movements, allocation_changes = [], []
+    for line in instruction.lines:
+        order_line = db.get(SalesOrderLine, line.sales_order_line_id)
+        fg_allocation_service.check_delivery(db, instruction.organisation_id, order_line, line.quantity)
+        movements.append(
+            finished_goods_inventory_service.issue_finished_goods(
+                db,
+                organisation_id=instruction.organisation_id,
+                product_id=line.product_id,
+                warehouse_id=warehouse.id,
+                quantity=line.quantity,
+                unit_of_measure_id=line.unit_of_measure_id,
+                reference_type=FG_REFERENCE_TYPE,
+                reference_id=line.id,
+                created_by_user_id=user_id,
+            )
         )
-        for line in instruction.lines
-    ]
+        consumed = fg_allocation_service.consume_for_delivery(db, order_line, line.quantity)
+        if consumed is not None:
+            allocation_changes.append(consumed)
     status_change = refresh_order_delivery_status(db, db.get(SalesOrder, instruction.sales_order_id))
-    return movements, status_change
+    return movements, status_change, allocation_changes
 
 
 def mark_not_fulfilled(db: Session, instruction: DeliveryInstruction, user_id: int, reason: str) -> None:

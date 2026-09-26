@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.api import fg_allocations as fg_allocations_api
 from app.api import production_requirements as production_requirements_api
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -48,6 +49,7 @@ from app.services import (
     inventory_scope,
     production_requirement_service,
     sales_document_service,
+    sales_reservation_service,
 )
 
 router = APIRouter(prefix="/api/delivery-instructions", tags=["delivery-instructions"])
@@ -296,7 +298,7 @@ def fulfil_delivery_instruction(
     request is a 409 and changes nothing."""
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     instruction = _get_instruction(db, current_user, instruction_id)
-    movements, status_change = delivery_instruction_service.fulfil(db, instruction, current_user.id)
+    movements, status_change, allocation_changes = delivery_instruction_service.fulfil(db, instruction, current_user.id)
     issued = "; ".join(
         f"line {line.sales_order_line_id}: {line.quantity} (finished goods movement {movement.id})"
         for line, movement in zip(instruction.lines, movements)
@@ -308,6 +310,10 @@ def fulfil_delivery_instruction(
     delivered = {line.id: delivery_instruction_service.fulfilled_quantity(db, line.id) for line in order.lines}
     requirement_changes = production_requirement_service.mark_satisfied(db, order, delivered)
     production_requirements_api.audit_changes(db, request, current_user, requirement_changes, order.order_number)
+    context = f"sales_order: {order.order_number}; delivery {instruction.delivery_number}"
+    fg_allocations_api.audit_allocation_changes(db, request, current_user, allocation_changes, context)
+    reservations = sales_reservation_service.mark_fulfilled(db, order, delivered)
+    fg_allocations_api.audit_reservation_changes(db, request, current_user, reservations, context)
     if status_change is not None:
         audit_service.log_event(
             db,

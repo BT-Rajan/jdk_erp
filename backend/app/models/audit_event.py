@@ -122,6 +122,14 @@ SALES_ORDER_CANCELLED = "sales_order_cancelled"
 SALES_ORDER_HANDED_OFF = "sales_order_handed_off"
 FULFILMENT_ASSESSED = "fulfilment_assessed"
 # Production Requirement lifecycle (Production P1), module "production".
+# Reservation + FG Allocation foundation, module "inventory" (allocation)
+# and "sales" (reservation).
+RESERVATION_CREATED = "reservation_created"
+RESERVATION_CHANGED = "reservation_changed"
+RESERVATION_RELEASED = "reservation_released"
+FG_ALLOCATED = "fg_allocated"
+FG_ALLOCATION_RELEASED = "fg_allocation_released"
+FG_ALLOCATION_CONSUMED = "fg_allocation_consumed"
 PRODUCTION_REQUIREMENT_CREATED = "requirement_created"
 PRODUCTION_REQUIREMENT_BOM_RESOLVED = "requirement_bom_resolved"
 PRODUCTION_REQUIREMENT_QUANTITY_CHANGED = "requirement_quantity_changed"
