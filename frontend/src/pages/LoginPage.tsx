@@ -3,9 +3,10 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { useLocation, useNavigate, type Location } from 'react-router-dom'
 import { z } from 'zod'
+import { AuthLayout } from '@/components/layout/AuthLayout'
 import { Alert } from '@/components/ui/Alert'
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
+import { PasswordField } from '@/components/forms/PasswordField'
 import { TextField } from '@/components/forms/TextField'
 import { ApiError } from '@/lib/apiClient'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -47,35 +48,41 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
-      <Card className="w-full max-w-sm space-y-6 p-8">
-        <div className="space-y-1 text-center">
-          <p className="font-display text-2xl text-gold-400">JDK ERP</p>
-          <p className="text-sm text-gold-100/60">Sign in to your workspace</p>
-        </div>
+    <AuthLayout title="Welcome back" subtitle="Sign in to your workspace">
+      <form onSubmit={handleSubmit(onSubmit)} noValidate>
+        <Alert variant="danger">{formError}</Alert>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
-          <Alert variant="danger">{formError}</Alert>
+        <div className="flex flex-col gap-5">
           <TextField
             label="Username"
             autoComplete="username"
+            autoFocus
             required
+            disabled={isSubmitting}
+            aria-invalid={Boolean(formError) || undefined}
             {...register('username')}
             error={errors.username?.message}
           />
-          <TextField
+
+          <PasswordField
             label="Password"
-            type="password"
             autoComplete="current-password"
             required
+            disabled={isSubmitting}
+            aria-invalid={Boolean(formError) || undefined}
             {...register('password')}
             error={errors.password?.message}
           />
-          <Button type="submit" className="w-full" isLoading={isSubmitting}>
-            Sign in
-          </Button>
-        </form>
-      </Card>
-    </div>
+        </div>
+
+        <Button type="submit" variant="gradient" className="mt-8 w-full" isLoading={isSubmitting}>
+          Sign in
+        </Button>
+
+        <p className="mt-5 text-center text-xs text-gold-100/40">
+          Forgotten your password? Contact your admin to have it reset.
+        </p>
+      </form>
+    </AuthLayout>
   )
 }

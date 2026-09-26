@@ -69,6 +69,26 @@ over a dark background) for cards, headers and modals. Reuse the idea, but
 implement it once as a shared UI primitive (e.g. a `Panel`/`Card`
 component) — not copy-pasted CSS per page.
 
+In-app panels use the `Card` component's own (lighter) `backdrop-blur-sm`
+treatment. For heavier, full-bleed glass moments — currently the auth
+screens (`AuthLayout`) — three Tailwind `@utility` classes defined once in
+`index.css` cover it instead of per-page CSS:
+
+| Utility               | Use                                              |
+| ---------------------- | ------------------------------------------------- |
+| `glass-panel-strong`   | The main card surface on an auth screen            |
+| `glass-inset`          | A recessed surface inside a glass panel (e.g. `TextField`'s input well on those screens) |
+| `text-gradient-gold`   | Gold-gradient text accent within a headline        |
+
+## Buttons
+
+`Button`'s `primary` variant (flat `gold-400`) is the one used for every
+everyday action across the app — don't introduce per-page one-offs for
+that. A `gradient` variant (gradient fill + `shadow-glow-gold`) also
+exists, reserved for hero moments such as an auth screen's primary CTA;
+it's a different visual weight for a rarer kind of button, not a second
+"primary."
+
 ## Accessibility
 
 - Focus is always visible: a 2px `gold-400` outline on every interactive
