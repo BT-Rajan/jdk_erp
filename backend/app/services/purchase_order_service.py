@@ -519,6 +519,7 @@ def create_receipt(
     entries: list[tuple[int, Decimal]],
     created_by_user_id: int | None,
     remarks: dict[int, str | None] | None = None,
+    client_reference: str | None = None,
 ) -> PurchaseOrderReceipt:
     """docs/modules/purchase_orders.md #37/#39. `entries` is a list of
     (purchase_order_line_id, quantity) pairs, all belonging to
@@ -571,6 +572,7 @@ def create_receipt(
             supplier_delivery_reference=supplier_delivery_reference,
             notes=notes,
             created_by_user_id=created_by_user_id,
+            client_reference=client_reference,
         )
         try:
             # A SAVEPOINT, not db.rollback(): a number collision undoes only
@@ -599,6 +601,37 @@ def create_receipt(
         )
     db.flush()
     return receipt
+
+
+def lock_purchase_order(db: Session, purchase_order: PurchaseOrder) -> PurchaseOrder:
+    """Row lock on the PO: receipts and payments for one PO run one at a
+    time, so a repeated submission always finds the first one's record."""
+    return db.query(PurchaseOrder).filter(PurchaseOrder.id == purchase_order.id).with_for_update().one()
+
+
+def _existing_by_reference(db: Session, model, organisation_id: int, purchase_order_id: int, reference: str | None):
+    if not reference:
+        return None
+    row = db.query(model).filter(model.organisation_id == organisation_id, model.client_reference == reference).first()
+    if row is not None and row.purchase_order_id != purchase_order_id:
+        raise ConflictError("This submission reference was already used for a different purchase order.")
+    return row
+
+
+def existing_receipt(db: Session, organisation_id: int, purchase_order_id: int, reference: str | None) -> PurchaseOrderReceipt | None:
+    """The receipt already recorded for this submission, if any."""
+    return _existing_by_reference(db, PurchaseOrderReceipt, organisation_id, purchase_order_id, reference)
+
+
+def existing_payment(
+    db: Session, organisation_id: int, purchase_order_id: int, reference: str | None, amount: Decimal
+) -> PurchaseOrderPayment | None:
+    """The payment already recorded for this submission, if any (a
+    different amount under the same reference is refused, not merged)."""
+    payment = _existing_by_reference(db, PurchaseOrderPayment, organisation_id, purchase_order_id, reference)
+    if payment is not None and payment.amount != amount:
+        raise ConflictError("This submission reference was already used for a different payment.")
+    return payment
 
 
 def post_receipt(db: Session, *, receipt: PurchaseOrderReceipt, purchase_order: PurchaseOrder, posted_by_user_id: int | None) -> None:
@@ -797,16 +830,18 @@ def record_payment(
     notes: str | None,
     created_by_user_id: int | None,
     is_final: bool = False,
+    client_reference: str | None = None,
 ) -> PurchaseOrderPayment:
     """docs/modules/purchase_orders.md #33 -- only valid once the PO has
     been issued (its total is no longer a moving target) and isn't
-    cancelled. Rejects a payment that would push total recorded payments
-    beyond the PO's *current* total_amount (docs/audit/PROCUREMENT_AUDIT.md
-    Revision 3 #5 -- no overpayment tolerance, no audited evidence
-    permits one). A plain validate-then-insert, not the atomic
-    conditional-UPDATE receive_lines uses -- payments are human-paced,
-    low-concurrency finance entries, not a high-contention counter, so
-    that extra mechanism would be disproportionate here."""
+    cancelled. A payment that takes the total paid above the PO amount is
+    still recorded -- Finance records what was actually paid -- and
+    check_payment_discrepancy (called by the API afterwards) opens a
+    payment reconciliation for the PO creator; it is not rejected here.
+    A repeated submission is not a second payment: the API looks the
+    `client_reference` up first (existing_payment) under the PO row lock
+    and returns the recorded payment, and the column is unique per
+    organisation."""
     if purchase_order.status not in _PAYABLE_STATUSES:
         raise BusinessRuleError("Payments can only be recorded against an approved, open purchase order.")
     if amount <= 0:
@@ -828,6 +863,7 @@ def record_payment(
             status=PAYMENT_RECORDED,
             is_final=is_final,
             created_by_user_id=created_by_user_id,
+            client_reference=client_reference,
         )
         try:
             # A SAVEPOINT, not db.rollback(): a number collision undoes only

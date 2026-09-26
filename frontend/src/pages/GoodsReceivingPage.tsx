@@ -13,6 +13,7 @@ import { FileUploadField } from '@/components/forms/FileUploadField'
 import { TextField } from '@/components/forms/TextField'
 import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
+import { useSubmissionReference } from '@/lib/useSubmissionReference'
 import { formatDate, formatNumber } from '@/lib/format'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
@@ -152,6 +153,8 @@ export function GoodsReceivingPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Duplicate protection: one reference per receipt submission.
+  const submission = useSubmissionReference()
 
   const isFirstSearch = useRef(true)
   useEffect(() => {
@@ -163,6 +166,7 @@ export function GoodsReceivingPage() {
   }, [debouncedSearch])
 
   const open = useCallback((po: ReceivingPo) => {
+    submission.reset()
     setTarget(po)
     setQuantities(Object.fromEntries(po.lines.map((line) => [line.id, String(Number(line.remaining_quantity))])))
     setRemarks({})
@@ -236,7 +240,9 @@ export function GoodsReceivingPage() {
         notes: notes.trim() || null,
         lines,
         file_ids: fileIds,
+        client_reference: submission.get(),
       })
+      submission.reset()
       table.refetch()
       open(data)
       setNotice(
