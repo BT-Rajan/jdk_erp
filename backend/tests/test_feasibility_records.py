@@ -100,7 +100,10 @@ def test_results_are_persisted_with_their_inputs_and_reasons(client, db_session,
     later = _run(client, _quote(client, customer, widget, "999", date(2026, 10, 5)))
     assert (later["state"], later["reason_codes"]) == ("calculated", ["no_check_required"])
     friday = _run(client, _quote(client, customer, widget, "1", date(2026, 10, 2)))
-    assert (friday["state"], friday["result"]) == ("not_servable", "not_servable")
+    # S11.1: a non-working date waits for Admin; the calculated result stays not_servable.
+    assert (friday["state"], friday["result"], friday["reason_codes"]) == (
+        "admin_override_required", "not_servable", ["requested_date_non_working"]
+    )
     assert db_session.query(AuditEvent).filter(AuditEvent.action == FEASIBILITY_RECORDED).count() == 3
 
 

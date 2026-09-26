@@ -33,6 +33,9 @@ export interface Quotation {
   subtotal_amount: string
   total_amount: string
   price_approval_required: boolean
+  price_decision: string | null
+  price_decision_reason: string | null
+  price_decision_at: string | null
   delivery_window: string | null
   readiness_status: string | null
   created_at: string
@@ -90,7 +93,7 @@ export const READINESS_TONES: Record<string, BadgeTone> = {
 export const REASON_LABELS: Record<string, string> = {
   requested_date_missing: 'No requested delivery date -- edit the quotation to add one.',
   requested_date_passed: 'The requested delivery date has passed -- edit the quotation to change it.',
-  requested_date_non_working: 'The requested date is a non-working day -- an Admin decision is required.',
+  requested_date_non_working: 'The requested date is a non-working day -- an Admin decision is required on the feasibility check.',
   feasibility_required: 'Feasibility has not been checked yet.',
   feasibility_stale: 'The quotation changed since the last feasibility check -- run it again.',
   feasibility_rejected: 'Admin rejected the feasibility exception.',
@@ -103,6 +106,7 @@ export const REASON_LABELS: Record<string, string> = {
   manpower_insufficient: 'Not enough production staff available.',
   price_outside_range: 'A price is outside the permitted range -- price approval required.',
   price_range_not_set: 'A product has no permitted price range -- price approval required.',
+  price_approval_rejected: 'Admin rejected the quoted prices.',
 }
 
 export function reasonLabel(code: string): string {

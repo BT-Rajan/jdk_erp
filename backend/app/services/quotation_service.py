@@ -5,7 +5,7 @@ runs; nothing here reserves stock, touches inventory, production or
 payment, or moves a quotation beyond draft."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -160,8 +160,7 @@ def update_quotation(
 
     A change to customer, requested date or lines makes any earlier
     feasibility result stale automatically (feasibility_record_service.
-    is_current compares against these inputs) and clears the S6
-    same-day override decision, which belonged to the old request."""
+    is_current compares against these inputs)."""
     if quotation.status != DRAFT:
         raise ConflictError("Only a draft quotation can be edited.")
     changed: list[str] = []
@@ -188,14 +187,32 @@ def update_quotation(
             quotation.total_amount = subtotal
             quotation.price_approval_required = any(v["price_approval_required"] for v in line_values)
             changed.append("lines")
-
-    if changed and quotation.same_day_override_decision is not None:
-        quotation.same_day_override_decision = None
-        quotation.same_day_override_reason = None
-        quotation.same_day_override_by_user_id = None
-        quotation.same_day_override_at = None
-        changed.append("same_day_override_cleared")
+            if quotation.price_decision is not None:
+                # The decision was about the old prices.
+                quotation.price_decision = None
+                quotation.price_decision_reason = None
+                quotation.price_decision_by_user_id = None
+                quotation.price_decision_at = None
+                changed.append("price_decision_cleared")
 
     db.add(quotation)
     db.flush()
     return changed
+
+
+def decide_price(db: Session, quotation: Quotation, decision: str, reason: str, user_id: int) -> str | None:
+    """Admin's approve/reject of the quotation's prices (Sales S11.1) --
+    only while some line needs price approval, i.e. is outside its
+    product's permitted range or the product has no full range. Same
+    shape as the S8 feasibility decision; an existing decision is
+    replaced the same way S8 allows. Returns the previous decision; the
+    caller audits and commits."""
+    if not quotation.price_approval_required:
+        raise ConflictError("No line on this quotation needs price approval.")
+    previous = quotation.price_decision
+    quotation.price_decision = decision
+    quotation.price_decision_reason = reason
+    quotation.price_decision_by_user_id = user_id
+    quotation.price_decision_at = datetime.utcnow()
+    db.add(quotation)
+    return previous

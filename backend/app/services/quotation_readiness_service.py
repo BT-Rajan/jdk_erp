@@ -16,8 +16,11 @@ Operational rules:
 - no requested delivery date              -> operational_assessment_required
 - requested date already passed           -> operational_assessment_required
 - more_than_2_working_days                -> no feasibility needed
-- not_servable (Fri/Sat/holiday date)     -> admin_override_required; the
-                                             date is never changed
+- not_servable (Fri/Sat/holiday date)     -> admin_override_required until
+                                             Admin approves it on a current
+                                             S8 record (rejected -> not
+                                             servable); the date is never
+                                             changed
 - same_day / within_2_working_days        -> needs a current S8 record:
     none                                  -> operational_assessment_required
     not current (inputs changed / newer)  -> operational_assessment_required
@@ -27,7 +30,8 @@ Operational rules:
     rejected                              -> not_servable
 
 Commercial rule: any line needing price approval -> commercial approval
-required. No approval mechanism exists yet, so nothing can clear it.
+required until Admin approves the prices (quotation.price_decision);
+rejected prices stay blocked.
 
 Status precedence when several conditions apply (all are reported in
 `conditions` and `reason_codes`): not_servable, admin_override_required,
@@ -47,7 +51,7 @@ from app.models.feasibility_check import (
     REJECTED,
     FeasibilityCheck,
 )
-from app.models.quotation import Quotation
+from app.models.quotation import PRICE_APPROVED, PRICE_REJECTED, Quotation
 from app.services import feasibility_record_service, working_calendar_service
 
 READY = "ready"
@@ -67,6 +71,7 @@ FEASIBILITY_STALE = "feasibility_stale"
 FEASIBILITY_REJECTED = "feasibility_rejected"
 PRICE_OUTSIDE_RANGE = "price_outside_range"
 PRICE_RANGE_NOT_SET = "price_range_not_set"
+PRICE_APPROVAL_REJECTED = "price_approval_rejected"
 
 _WINDOWS_NEEDING_FEASIBILITY = (working_calendar_service.SAME_DAY, working_calendar_service.WITHIN_2_WORKING_DAYS)
 
@@ -91,7 +96,7 @@ def _operational(db: Session, quotation: Quotation, window: str | None, readines
         block(OPERATIONAL_ASSESSMENT_REQUIRED, REQUESTED_DATE_MISSING)
         return
     if window == working_calendar_service.NOT_SERVABLE:
-        block(ADMIN_OVERRIDE_REQUIRED, REQUESTED_DATE_NON_WORKING)
+        _non_working_date(db, quotation, window, readiness, block)
         return
     if window not in _WINDOWS_NEEDING_FEASIBILITY:
         return
@@ -114,7 +119,42 @@ def _operational(db: Session, quotation: Quotation, window: str | None, readines
         block(OPERATIONAL_ASSESSMENT_REQUIRED, FEASIBILITY_STALE)
 
 
+def _non_working_date(db: Session, quotation: Quotation, window: str, readiness: Readiness, block) -> None:
+    """A Friday/Saturday/holiday requested date needs Admin's decision on
+    a current S8 record (S11.1): approved -> satisfied, rejected -> not
+    servable. Until then it stays admin_override_required; with no
+    current record yet, a feasibility check must be run first so Admin
+    has something to decide on."""
+    record = feasibility_record_service.latest_for_quotation(db, quotation.id)
+    current = (
+        record is not None
+        and record.delivery_window == window
+        and record.state in (CHECK_OVERRIDE_REQUIRED, APPROVED, REJECTED)
+        and feasibility_record_service.is_current(db, record, quotation)
+    )
+    if record is not None:
+        readiness.feasibility_check_id = record.id
+        readiness.feasibility_state = record.state
+    if current and record.state == APPROVED:
+        return
+    if current and record.state == REJECTED:
+        block(NOT_SERVABLE, FEASIBILITY_REJECTED)
+        return
+    block(ADMIN_OVERRIDE_REQUIRED, REQUESTED_DATE_NON_WORKING)
+    if record is None:
+        block(OPERATIONAL_ASSESSMENT_REQUIRED, FEASIBILITY_REQUIRED)
+    elif not current:
+        block(OPERATIONAL_ASSESSMENT_REQUIRED, FEASIBILITY_STALE)
+
+
 def _commercial(quotation: Quotation, readiness: Readiness) -> None:
+    if quotation.price_decision == PRICE_APPROVED:
+        return
+    if quotation.price_decision == PRICE_REJECTED:
+        readiness.commercial_approval_required = True
+        readiness.conditions.append(COMMERCIAL_APPROVAL_REQUIRED)
+        readiness.reason_codes.append(PRICE_APPROVAL_REJECTED)
+        return
     codes = []
     for line in quotation.lines:
         if not line.price_approval_required:

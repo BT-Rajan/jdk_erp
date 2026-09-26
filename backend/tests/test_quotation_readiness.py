@@ -131,7 +131,8 @@ def test_more_than_two_days_needs_no_feasibility_and_non_working_dates_stay_put(
     assert db_session.query(FeasibilityCheck).count() == 0
 
     friday = _quote(client, customers[0], widget, "1", date(2026, 10, 2))
-    assert _readiness(client, friday) == ("admin_override_required", ["requested_date_non_working"])
+    # S11.1: Admin decides a non-working date on an S8 record, so one must be run first.
+    assert _readiness(client, friday) == ("admin_override_required", ["requested_date_non_working", "feasibility_required"])
     db_session.expire_all()
     assert db_session.get(Quotation, friday).requested_delivery_date == date(2026, 10, 2)
 

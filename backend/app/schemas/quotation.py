@@ -78,10 +78,10 @@ class QuotationOut(BaseModel):
     total_amount: Decimal
     price_approval_required: bool
     requested_delivery_date: date | None
-    same_day_override_decision: str | None
-    same_day_override_reason: str | None
-    same_day_override_by_user_id: int | None
-    same_day_override_at: datetime | None
+    price_decision: str | None
+    price_decision_reason: str | None
+    price_decision_by_user_id: int | None
+    price_decision_at: datetime | None
     created_at: datetime
     updated_at: datetime
     customer_name: str | None = None
@@ -115,19 +115,6 @@ class SameDayGateOut(BaseModel):
     applies: bool
     decision: str | None
     shortages: list[SameDayShortageOut]
-
-
-class SameDayOverrideRequest(BaseModel):
-    decision: Literal["approved", "rejected"]
-    reason: str = Field(min_length=1, max_length=2000)
-
-    @field_validator("reason")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("A reason is required.")
-        return value
 
 
 class FeasibilityStageOut(BaseModel):

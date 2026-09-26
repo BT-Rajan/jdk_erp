@@ -5,7 +5,8 @@ called, never copied:
 - same_day              -> same_day_fg_service.check_same_day_fg_availability (S6)
 - within_2_working_days -> feasibility_service.calculate (S7)
 - more_than_2_working_days -> no check required (business rule)
-- not_servable          -> the calendar's answer stands
+- not_servable          -> result not_servable, waiting for an Admin
+                           decision like any other exception
 
 Each run stores a new FeasibilityCheck; earlier ones are never rewritten.
 A record is authoritative only while it is the quotation's latest record
@@ -27,7 +28,6 @@ from app.models.feasibility_check import (
     APPROVED,
     CALCULATED,
     DECIDABLE_STATES,
-    NOT_SERVABLE,
     REJECTED,
     FeasibilityCheck,
     FeasibilityCheckLine,
@@ -41,7 +41,8 @@ WITHIN_2_BASIS = "within_2_feasibility/v1"
 CALENDAR_BASIS = "working_calendar/v1"
 
 NO_CHECK_REQUIRED = "no_check_required"
-NON_WORKING_REQUESTED_DATE = "non_working_requested_date"
+# Same code the readiness gate reports for this condition.
+NON_WORKING_REQUESTED_DATE = "requested_date_non_working"
 
 DECISION_STATES = {"approved": APPROVED, "rejected": REJECTED}
 
@@ -100,10 +101,11 @@ def run_check(db: Session, quotation: Quotation, user_id: int, now: datetime | N
     else:
         basis, result, reason_codes = CALENDAR_BASIS, same_day_fg_service.NOT_SERVABLE, [NON_WORKING_REQUESTED_DATE]
 
-    if result == same_day_fg_service.ADMIN_OVERRIDE_REQUIRED:
+    # A non-working requested date is not servable as calculated, but the
+    # business rule sends it to Admin (S0.2): it waits for the same S8
+    # decision as any other exception. The calculated result is kept.
+    if result in (same_day_fg_service.ADMIN_OVERRIDE_REQUIRED, same_day_fg_service.NOT_SERVABLE):
         state = ADMIN_OVERRIDE_REQUIRED
-    elif result == same_day_fg_service.NOT_SERVABLE:
-        state = NOT_SERVABLE
     else:
         state = CALCULATED
 

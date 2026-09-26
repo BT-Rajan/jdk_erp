@@ -14,10 +14,12 @@ from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 DRAFT = "draft"
 QUOTATION_STATUSES = (DRAFT,)
 
-# Admin's decision on a same-day Finished Goods shortage (Sales S6).
-OVERRIDE_APPROVED = "approved"
-OVERRIDE_REJECTED = "rejected"
-SAME_DAY_OVERRIDE_DECISIONS = (OVERRIDE_APPROVED, OVERRIDE_REJECTED)
+# Admin's decision on the quotation's prices when any line needs price
+# approval (Sales S11.1). Same approve/reject vocabulary as the S8
+# feasibility decision.
+PRICE_APPROVED = "approved"
+PRICE_REJECTED = "rejected"
+PRICE_DECISIONS = (PRICE_APPROVED, PRICE_REJECTED)
 
 
 class Quotation(Base, TimestampMixin, OrganisationScopedMixin):
@@ -50,22 +52,23 @@ class Quotation(Base, TimestampMixin, OrganisationScopedMixin):
     subtotal_amount: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     # True when any line's price needs Admin approval (see QuotationLine).
-    # Derived from the lines at creation; the approval workflow itself is
-    # a later pass.
+    # Derived from the lines whenever they are priced; Admin's answer is
+    # price_decision below.
     price_approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # The customer's requested delivery date, as asked -- never moved by
     # the system. Its delivery window is always classified live
     # (app/services/working_calendar_service.py), never stored.
     requested_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    # Admin's current decision on a same-day FG shortage
-    # (app/services/same_day_fg_service.py). Admin may change it; every
-    # decision is kept in the audit trail, so only the latest lives here.
-    same_day_override_decision: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    same_day_override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    same_day_override_by_user_id: Mapped[int | None] = mapped_column(
+    # Admin's decision on the lines' prices while price_approval_required
+    # (app/api/quotations.py decide_price). It belongs to the lines as
+    # priced: replacing the lines clears it (quotation_service.
+    # update_quotation). Every decision is audited.
+    price_decision: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    price_decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    price_decision_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    same_day_override_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    price_decision_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     lines: Mapped[list["QuotationLine"]] = relationship(
         back_populates="quotation", cascade="all, delete-orphan", order_by="QuotationLine.line_number"

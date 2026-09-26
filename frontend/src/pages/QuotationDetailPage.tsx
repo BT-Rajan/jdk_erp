@@ -24,7 +24,9 @@ import {
   type Readiness,
 } from './quotationShared'
 
-const FEASIBILITY_WINDOWS = new Set(['same_day', 'within_2_working_days'])
+// Windows where an S8 feasibility record carries the operational decision
+// (a non-working date is decided by Admin on that record too).
+const FEASIBILITY_WINDOWS = new Set(['same_day', 'within_2_working_days', 'not_servable'])
 const DECIDABLE_STATES = new Set(['admin_override_required', 'approved', 'rejected'])
 const CHECK_STATE_LABELS: Record<string, string> = {
   calculated: 'Calculated',
@@ -58,12 +60,14 @@ export function QuotationDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [decisionReason, setDecisionReason] = useState('')
+  const [priceReason, setPriceReason] = useState('')
 
   const load = useCallback(async () => {
     const base = `/api/quotations/${quotationId}`
     const [q, r, c] = await Promise.all([
       apiClient.get<Quotation>(base),
-      apiClient.get<Readiness>(`${base}/readiness`),
+      // The audited readiness assessment (S9) -- never an unrecorded read.
+      apiClient.post<Readiness>(`${base}/readiness`),
       apiClient.get<FeasibilityCheck[]>(`${base}/feasibility-checks`),
     ])
     setQuotation(q.data)
@@ -94,6 +98,7 @@ export function QuotationDetailPage() {
     try {
       await action()
       setDecisionReason('')
+      setPriceReason('')
       await load()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
@@ -109,6 +114,11 @@ export function QuotationDetailPage() {
         decision,
         reason: decisionReason,
       }),
+    )
+
+  const decidePrice = (decision: 'approved' | 'rejected') =>
+    act(`price-${decision}`, () =>
+      apiClient.put(`/api/quotations/${quotationId}/price-decision`, { decision, reason: priceReason }),
     )
 
   if (loadError) {
@@ -212,6 +222,37 @@ export function QuotationDetailPage() {
                 </Button>
                 <Button variant="danger" onClick={() => decide('rejected')} isLoading={busy === 'rejected'} disabled={busy !== null || !decisionReason.trim()}>
                   Reject Exception
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {quotation.price_approval_required && (
+        <Card className="space-y-3 p-6">
+          <FormSectionHeading>Price Approval</FormSectionHeading>
+          <p className="text-sm">
+            <span className="text-gold-100/50">Decision: </span>
+            {quotation.price_decision === 'approved'
+              ? 'Approved by Admin'
+              : quotation.price_decision === 'rejected'
+                ? 'Rejected by Admin'
+                : 'Awaiting Admin decision'}
+            {quotation.price_decision_reason && <span className="text-gold-100/70"> — {quotation.price_decision_reason}</span>}
+          </p>
+          {!isAdmin && !quotation.price_decision && (
+            <Alert variant="warning">An Admin must approve or reject the quoted prices.</Alert>
+          )}
+          {isAdmin && (
+            <div className="space-y-2 border-t border-ink-700 pt-3">
+              <TextareaField label="Price decision reason" required value={priceReason} onChange={(e) => setPriceReason(e.target.value)} />
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => decidePrice('approved')} isLoading={busy === 'price-approved'} disabled={busy !== null || !priceReason.trim()}>
+                  Approve Prices
+                </Button>
+                <Button variant="danger" onClick={() => decidePrice('rejected')} isLoading={busy === 'price-rejected'} disabled={busy !== null || !priceReason.trim()}>
+                  Reject Prices
                 </Button>
               </div>
             </div>

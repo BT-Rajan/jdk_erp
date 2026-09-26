@@ -127,18 +127,16 @@ def test_edit_is_revalidated_and_repriced_on_the_server(client, db_session, orga
     assert db_session.query(AuditEvent).filter(AuditEvent.action == QUOTATION_UPDATED).count() == 1
 
 
-def test_material_edit_makes_feasibility_stale_and_clears_the_same_day_decision(client, db_session, setup):
+def test_material_edit_makes_feasibility_stale(client, db_session, setup):
     users, customers, widget = setup
     quotation = _quote(client, customers["a"], widget, quantity="12")  # same day, FG short
     url, a, admin = f"/api/quotations/{quotation['id']}", _headers(client, "salesman_a"), _headers(client, "boss")
     check = client.post(f"{url}/feasibility-checks", headers=a).json()
     client.put(f"{url}/feasibility-checks/{check['id']}/decision", json={"decision": "approved", "reason": "ok"}, headers=admin)
-    client.put(f"{url}/same-day-override", json={"decision": "approved", "reason": "ok"}, headers=admin)
-    assert client.get(f"{url}/readiness", headers=a).json()["status"] == "ready"
+    assert client.post(f"{url}/readiness", headers=a).json()["status"] == "ready"
 
-    edited = client.patch(url, json={"lines": [_line(widget, "11")]}, headers=a).json()
-    assert edited["same_day_override_decision"] is None
-    readiness = client.get(f"{url}/readiness", headers=a).json()
+    client.patch(url, json={"lines": [_line(widget, "11")]}, headers=a)
+    readiness = client.post(f"{url}/readiness", headers=a).json()
     assert (readiness["status"], readiness["reason_codes"]) == ("operational_assessment_required", ["feasibility_stale"])
     assert client.get(f"{url}/feasibility-checks/{check['id']}", headers=a).json()["is_current"] is False
 
@@ -155,7 +153,7 @@ def test_client_cannot_set_server_owned_fields(client, db_session, setup):
             "status": "accepted",
             "price_approval_required": False,
             "readiness_status": "ready",
-            "same_day_override_decision": "approved",
+            "price_decision": "approved",
             "created_by_user_id": users["admin"].id,
         },
         headers=_headers(client, "salesman_a"),
@@ -163,7 +161,7 @@ def test_client_cannot_set_server_owned_fields(client, db_session, setup):
     for field in ("quotation_number", "total_amount", "subtotal_amount", "status", "created_by_user_id"):
         assert response[field] == quotation[field]
     assert response["price_approval_required"] is True
-    assert response["same_day_override_decision"] is None
+    assert response["price_decision"] is None
     assert response["readiness_status"] != "ready"
 
 
@@ -187,5 +185,5 @@ def test_list_rows_carry_server_readiness_and_scope(client, setup):
     CLOCK["now"] = datetime(2026, 9, 29, 9, 0, tzinfo=JDK_TIMEZONE)
     row = client.get(f"/api/quotations/{needs_check['id']}", headers=_headers(client, "salesman_a")).json()
     assert row["readiness_status"] == "operational_assessment_required"
-    reasons = client.get(f"/api/quotations/{needs_check['id']}/readiness", headers=_headers(client, "salesman_a")).json()["reason_codes"]
+    reasons = client.post(f"/api/quotations/{needs_check['id']}/readiness", headers=_headers(client, "salesman_a")).json()["reason_codes"]
     assert reasons == ["requested_date_passed"]

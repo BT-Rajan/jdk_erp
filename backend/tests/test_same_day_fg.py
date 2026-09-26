@@ -10,7 +10,6 @@ from app.api import quotations as quotations_api
 from app.core.roles import ADMIN, MANAGER, TEAM_MEMBER
 from app.core.security import hash_password
 from app.core.timezone import JDK_TIMEZONE
-from app.models.audit_event import QUOTATION_SAME_DAY_OVERRIDE_DECIDED, AuditEvent
 from app.models.customer import Customer
 from app.models.finished_goods_inventory import FinishedGoodsInventory, FinishedGoodsMovement
 from app.models.product import Product
@@ -18,7 +17,7 @@ from app.models.team import Team
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
 from app.models.user_team import UserTeam
-from app.services import finished_goods_inventory_service, working_calendar_service
+from app.services import feasibility_record_service, finished_goods_inventory_service, working_calendar_service
 
 MONDAY = date(2026, 9, 28)
 MONDAY_9AM_KUWAIT = datetime(2026, 9, 28, 9, 0, tzinfo=JDK_TIMEZONE)
@@ -50,6 +49,7 @@ def setup(db_session, organisation, widget_product, kilogram_unit, electronics_c
     Widget has 10 kg and Gadget 5 kg in stock."""
     monkeypatch.setattr(working_calendar_service, "now_jdk", lambda: MONDAY_9AM_KUWAIT)
     monkeypatch.setattr(quotations_api, "now_jdk", lambda: MONDAY_9AM_KUWAIT)
+    monkeypatch.setattr(feasibility_record_service, "now_jdk", lambda: MONDAY_9AM_KUWAIT)
 
     team = Team(organisation_id=organisation.id, name="Sales", code="SALES", is_active=True)
     db_session.add(team)
@@ -138,25 +138,27 @@ def test_any_short_line_requires_admin_override(client, setup):
     assert Decimal(gate["shortages"][0]["requested"]) == Decimal("12")
 
 
-def test_only_admin_decides_and_can_change_the_decision(client, db_session, setup):
+def test_only_admin_decides_and_the_gate_follows_the_s8_decision(client, db_session, setup):
+    """S11.1: the S8 feasibility record is the one same-day Admin decision;
+    /same-day-fg reflects it and never holds a decision of its own."""
     users, customer, widget, gadget, unit = setup
     quotation_id = _quote(client, customer, [(gadget, "6")])
-    url = f"/api/quotations/{quotation_id}/same-day-override"
+    base = f"/api/quotations/{quotation_id}"
     before = _stock_state(db_session)
+    check = client.post(f"{base}/feasibility-checks", headers=_headers(client, "salesman_a")).json()
+    url = f"{base}/feasibility-checks/{check['id']}/decision"
 
     for username in ("salesman_a", "head"):
         denied = client.put(url, json={"decision": "approved", "reason": "please"}, headers=_headers(client, username))
         assert denied.status_code == 403
+    gate = lambda: client.get(f"{base}/same-day-fg", headers=_headers(client, "salesman_a")).json()["decision"]
+    assert gate() == "admin_override_required"
 
     admin = _headers(client, "boss")
-    approved = client.put(url, json={"decision": "approved", "reason": "Customer accepts partial stock risk"}, headers=admin)
-    assert approved.status_code == 200 and approved.json()["decision"] == "servable"
-    rejected = client.put(url, json={"decision": "rejected", "reason": "Reconsidered"}, headers=admin)
-    assert rejected.status_code == 200 and rejected.json()["decision"] == "not_servable"
-
-    events = db_session.query(AuditEvent).filter(AuditEvent.action == QUOTATION_SAME_DAY_OVERRIDE_DECIDED).order_by(AuditEvent.id).all()
-    assert [e.actor_user_id for e in events] == [users["admin"].id, users["admin"].id]
-    assert "None -> approved" in events[0].details and "approved -> rejected" in events[1].details
+    assert client.put(url, json={"decision": "approved", "reason": "Customer accepts risk"}, headers=admin).status_code == 200
+    assert gate() == "servable"
+    assert client.put(url, json={"decision": "rejected", "reason": "Reconsidered"}, headers=admin).status_code == 200
+    assert gate() == "not_servable"
     assert _stock_state(db_session) == before
 
 
@@ -171,13 +173,13 @@ def test_gate_applies_only_to_same_day_requests(client, setup):
     # Friday is not a delivery day at all; the calendar decision stands.
     friday = _quote(client, customer, [(gadget, "99")], requested=date(2026, 10, 2))
     assert client.get(f"/api/quotations/{friday}/same-day-fg", headers=headers).json()["delivery_window"] == "not_servable"
-    # Nothing to override when the gate doesn't apply.
+    # The retired S6 quotation-level decision endpoint no longer exists.
     override = client.put(
         f"/api/quotations/{wednesday}/same-day-override",
         json={"decision": "approved", "reason": "x"},
         headers=_headers(client, "boss"),
     )
-    assert override.status_code == 409
+    assert override.status_code in (404, 405)
 
 
 def test_unit_changed_since_quotation_is_refused_not_converted(client, db_session, organisation, setup):

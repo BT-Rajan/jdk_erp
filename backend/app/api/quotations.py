@@ -5,7 +5,6 @@ is outside the caller's scope is a 404, exactly like the customer
 itself. There is no quotation-specific ownership or permission key."""
 
 import json
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import or_
@@ -13,16 +12,16 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import NotFoundError, ValidationError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
 from app.models.audit_event import (
     FEASIBILITY_DECIDED,
     FEASIBILITY_RECORDED,
     QUOTATION_CREATED,
+    QUOTATION_PRICE_DECIDED,
     QUOTATION_READINESS_ASSESSED,
     QUOTATION_UPDATED,
-    QUOTATION_SAME_DAY_OVERRIDE_DECIDED,
     SALES_MODULE,
 )
 from app.models.customer import Customer
@@ -42,7 +41,6 @@ from app.schemas.quotation import (
     QuotationReadinessOut,
     QuotationUpdateRequest,
     SameDayGateOut,
-    SameDayOverrideRequest,
 )
 from app.services import (
     audit_service,
@@ -172,13 +170,40 @@ def update_quotation(
     return _list_row(db, _get_visible_quotation(db, quotation_id, current_user))
 
 
-@router.get("/{quotation_id}/readiness", response_model=QuotationReadinessOut)
-def get_readiness(
-    quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> quotation_readiness_service.Readiness:
-    """Current readiness for display, read-only and not audited. POST to
-    the same path records an audited assessment."""
-    return quotation_readiness_service.assess(db, _get_visible_quotation(db, quotation_id, current_user))
+@router.put("/{quotation_id}/price-decision", response_model=QuotationListRowOut)
+def decide_price(
+    quotation_id: int,
+    payload: FeasibilityDecisionRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> QuotationListRowOut:
+    """Admin/Super Admin only: approve or reject the quotation's prices
+    while any line is outside its product's permitted range (or the
+    product has no full range). A reason is required and every decision
+    is audited. Replacing the lines clears it. Refused when no line needs
+    price approval."""
+    quotation = _get_visible_quotation(db, quotation_id, admin)
+    previous = quotation_service.decide_price(db, quotation, payload.decision, payload.reason, admin.id)
+    flagged = [str(line.line_number) for line in quotation.lines if line.price_approval_required]
+    audit_service.log_event(
+        db,
+        action=QUOTATION_PRICE_DECIDED,
+        module=SALES_MODULE,
+        organisation_id=admin.organisation_id,
+        actor_user_id=admin.id,
+        entity_type="quotation",
+        entity_id=quotation.id,
+        result="success",
+        details=(
+            f"number: {quotation.quotation_number}, decision: {previous} -> {payload.decision}; "
+            f"reason: {payload.reason}; lines needing approval: {', '.join(flagged)}"
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.expire_all()
+    return _list_row(db, _get_visible_quotation(db, quotation_id, admin))
 
 
 @router.get("/{quotation_id}/lines", response_model=list[QuotationLineOut])
@@ -248,50 +273,11 @@ def get_same_day_fg_gate(
     quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> same_day_fg_service.SameDayGate:
     """Read-only same-day Finished Goods gate (Sales S6), evaluated now in
-    Kuwait time. Changes nothing -- no reservation, no stock movement."""
+    Kuwait time. Any Admin decision shown is the current S8 feasibility
+    record's -- decided via .../feasibility-checks/{id}/decision. Changes
+    nothing -- no reservation, no stock movement."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
     return same_day_fg_service.evaluate_quotation(db, quotation)
-
-
-@router.put("/{quotation_id}/same-day-override", response_model=SameDayGateOut)
-def decide_same_day_override(
-    quotation_id: int,
-    payload: SameDayOverrideRequest,
-    request: Request,
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-) -> same_day_fg_service.SameDayGate:
-    """Admin/Super Admin only: approve or reject serving a same-day
-    request despite a Finished Goods shortage. Refused unless the gate
-    currently applies and stock is actually short. Admin may change an
-    earlier decision; every decision is audited. Moves no stock."""
-    quotation = _get_visible_quotation(db, quotation_id, admin)
-    gate = same_day_fg_service.evaluate_quotation(db, quotation)
-    if not gate.applies or not gate.shortages:
-        raise ConflictError("This quotation has no same-day Finished Goods shortage to decide.")
-
-    previous = quotation.same_day_override_decision
-    quotation.same_day_override_decision = payload.decision
-    quotation.same_day_override_reason = payload.reason
-    quotation.same_day_override_by_user_id = admin.id
-    quotation.same_day_override_at = datetime.utcnow()
-    db.add(quotation)
-
-    shortages = "; ".join(f"product {s.product_id}: requested {s.requested}, available {s.available}" for s in gate.shortages)
-    audit_service.log_event(
-        db,
-        action=QUOTATION_SAME_DAY_OVERRIDE_DECIDED,
-        module=SALES_MODULE,
-        organisation_id=admin.organisation_id,
-        actor_user_id=admin.id,
-        entity_type="quotation",
-        entity_id=quotation.id,
-        result="success",
-        details=f"decision: {previous} -> {payload.decision}; reason: {payload.reason}; shortages: {shortages}",
-        ip_address=request.client.host if request.client else None,
-    )
-    db.commit()
-    return same_day_fg_service.evaluate_quotation(db, _get_visible_quotation(db, quotation_id, admin))
 
 
 @router.get("/{quotation_id}/feasibility", response_model=FeasibilityCalculationOut)

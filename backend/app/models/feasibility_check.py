@@ -7,10 +7,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
-# Lifecycle (Sales S8). `calculated` and `not_servable` are final results
-# of the calculation itself; `admin_override_required` waits for Admin,
-# who moves it to `approved` or `rejected` (and may change that decision
-# later -- each decision is audited).
+# Lifecycle (Sales S8). `calculated` is a final result of the calculation
+# itself; `admin_override_required` waits for Admin, who moves it to
+# `approved` or `rejected` (and may change that decision later -- each
+# decision is audited). Since S11.1 a non-working requested date also
+# waits for Admin (result `not_servable`, state `admin_override_required`);
+# the `not_servable` state remains only on records written before that.
 CALCULATED = "calculated"
 ADMIN_OVERRIDE_REQUIRED = "admin_override_required"
 APPROVED = "approved"
