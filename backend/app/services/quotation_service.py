@@ -62,12 +62,21 @@ def create_quotation(
     created_by_user_id: int,
     quotation_date: date,
     lines: list[LineInput],
+    requested_delivery_date: date | None = None,
     currency: str = DEFAULT_CURRENCY,
 ) -> Quotation:
-    """Validates every line, then inserts the numbered header with its
+    """`requested_delivery_date`, if given, must not be before
+    `quotation_date`; it is stored exactly as requested. Validates every
+    line, then inserts the numbered header with its
     lines in one flush. Amounts are always derived here, from quantity x
     unit price rounded to the currency's minor unit; nothing the client
     sends about amounts is read. The caller commits."""
+    if requested_delivery_date is not None and requested_delivery_date < quotation_date:
+        raise ValidationError(
+            "The requested delivery date is in the past.",
+            fields={"requested_delivery_date": "Must be today or later."},
+        )
+
     line_values: list[dict] = []
     for index, line in enumerate(lines, start=1):
         product = _resolve_product(db, organisation_id, line, index)
@@ -101,6 +110,7 @@ def create_quotation(
             subtotal_amount=subtotal,
             total_amount=subtotal,
             price_approval_required=any(values["price_approval_required"] for values in line_values),
+            requested_delivery_date=requested_delivery_date,
         )
         quotation.lines = [QuotationLine(**values) for values in line_values]
         return quotation

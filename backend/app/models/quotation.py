@@ -1,7 +1,7 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -13,6 +13,11 @@ from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 # not guessed now.
 DRAFT = "draft"
 QUOTATION_STATUSES = (DRAFT,)
+
+# Admin's decision on a same-day Finished Goods shortage (Sales S6).
+OVERRIDE_APPROVED = "approved"
+OVERRIDE_REJECTED = "rejected"
+SAME_DAY_OVERRIDE_DECISIONS = (OVERRIDE_APPROVED, OVERRIDE_REJECTED)
 
 
 class Quotation(Base, TimestampMixin, OrganisationScopedMixin):
@@ -48,6 +53,19 @@ class Quotation(Base, TimestampMixin, OrganisationScopedMixin):
     # Derived from the lines at creation; the approval workflow itself is
     # a later pass.
     price_approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # The customer's requested delivery date, as asked -- never moved by
+    # the system. Its delivery window is always classified live
+    # (app/services/working_calendar_service.py), never stored.
+    requested_delivery_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Admin's current decision on a same-day FG shortage
+    # (app/services/same_day_fg_service.py). Admin may change it; every
+    # decision is kept in the audit trail, so only the latest lives here.
+    same_day_override_decision: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    same_day_override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    same_day_override_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    same_day_override_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     lines: Mapped[list["QuotationLine"]] = relationship(
         back_populates="quotation", cascade="all, delete-orphan", order_by="QuotationLine.line_number"

@@ -111,6 +111,7 @@ INVENTORY_OPENING_STOCK_RECORDED = "inventory_opening_stock_recorded"
 # already documents for Finished Goods Inventory's authorization.
 FINISHED_GOODS_ADJUSTMENT_CREATED = "finished_goods_adjustment_created"
 QUOTATION_CREATED = "quotation_created"
+QUOTATION_SAME_DAY_OVERRIDE_DECIDED = "same_day_override_decided"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"

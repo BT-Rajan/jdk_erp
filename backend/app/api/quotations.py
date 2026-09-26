@@ -4,20 +4,28 @@ it back. Every path is scoped through the quotation's customer
 is outside the caller's scope is a 404, exactly like the customer
 itself. There is no quotation-specific ownership or permission key."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
-from app.models.audit_event import QUOTATION_CREATED, SALES_MODULE
+from app.models.audit_event import QUOTATION_CREATED, QUOTATION_SAME_DAY_OVERRIDE_DECIDED, SALES_MODULE
 from app.models.quotation import Quotation
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
-from app.schemas.quotation import QuotationCreateRequest, QuotationLineOut, QuotationOut
-from app.services import audit_service, customer_scope, quotation_service
+from app.schemas.quotation import (
+    QuotationCreateRequest,
+    QuotationLineOut,
+    QuotationOut,
+    SameDayGateOut,
+    SameDayOverrideRequest,
+)
+from app.services import audit_service, customer_scope, quotation_service, same_day_fg_service
 
 router = APIRouter(prefix="/api/quotations", tags=["quotations"])
 
@@ -95,6 +103,7 @@ def create_quotation(
             )
             for line in payload.lines
         ],
+        requested_delivery_date=payload.requested_delivery_date,
     )
 
     audit_service.log_event(
@@ -109,9 +118,61 @@ def create_quotation(
         details=(
             f"number: {quotation.quotation_number}, customer_id: {customer.id}, "
             f"lines: {len(quotation.lines)}, total: {quotation.total_amount} {quotation.currency}, "
-            f"price_approval_required: {quotation.price_approval_required}"
+            f"price_approval_required: {quotation.price_approval_required}, "
+            f"requested_delivery_date: {quotation.requested_delivery_date}"
         ),
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
     return _get_visible_quotation(db, quotation.id, current_user)
+
+
+@router.get("/{quotation_id}/same-day-fg", response_model=SameDayGateOut)
+def get_same_day_fg_gate(
+    quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> same_day_fg_service.SameDayGate:
+    """Read-only same-day Finished Goods gate (Sales S6), evaluated now in
+    Kuwait time. Changes nothing -- no reservation, no stock movement."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    return same_day_fg_service.evaluate_quotation(db, quotation)
+
+
+@router.put("/{quotation_id}/same-day-override", response_model=SameDayGateOut)
+def decide_same_day_override(
+    quotation_id: int,
+    payload: SameDayOverrideRequest,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> same_day_fg_service.SameDayGate:
+    """Admin/Super Admin only: approve or reject serving a same-day
+    request despite a Finished Goods shortage. Refused unless the gate
+    currently applies and stock is actually short. Admin may change an
+    earlier decision; every decision is audited. Moves no stock."""
+    quotation = _get_visible_quotation(db, quotation_id, admin)
+    gate = same_day_fg_service.evaluate_quotation(db, quotation)
+    if not gate.applies or not gate.shortages:
+        raise ConflictError("This quotation has no same-day Finished Goods shortage to decide.")
+
+    previous = quotation.same_day_override_decision
+    quotation.same_day_override_decision = payload.decision
+    quotation.same_day_override_reason = payload.reason
+    quotation.same_day_override_by_user_id = admin.id
+    quotation.same_day_override_at = datetime.utcnow()
+    db.add(quotation)
+
+    shortages = "; ".join(f"product {s.product_id}: requested {s.requested}, available {s.available}" for s in gate.shortages)
+    audit_service.log_event(
+        db,
+        action=QUOTATION_SAME_DAY_OVERRIDE_DECIDED,
+        module=SALES_MODULE,
+        organisation_id=admin.organisation_id,
+        actor_user_id=admin.id,
+        entity_type="quotation",
+        entity_id=quotation.id,
+        result="success",
+        details=f"decision: {previous} -> {payload.decision}; reason: {payload.reason}; shortages: {shortages}",
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    return same_day_fg_service.evaluate_quotation(db, _get_visible_quotation(db, quotation_id, admin))

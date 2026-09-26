@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -34,6 +35,8 @@ class QuotationCreateRequest(BaseModel):
 
     customer_id: int
     lines: list[QuotationLineCreateRequest] = Field(min_length=1, max_length=200)
+    # Optional; checked server-side not to be before today (Kuwait).
+    requested_delivery_date: date | None = None
 
 
 class QuotationLineOut(BaseModel):
@@ -64,6 +67,44 @@ class QuotationOut(BaseModel):
     subtotal_amount: Decimal
     total_amount: Decimal
     price_approval_required: bool
+    requested_delivery_date: date | None
+    same_day_override_decision: str | None
+    same_day_override_reason: str | None
+    same_day_override_by_user_id: int | None
+    same_day_override_at: datetime | None
     created_at: datetime
     updated_at: datetime
     lines: list[QuotationLineOut]
+
+
+class SameDayShortageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    product_id: int
+    requested: Decimal
+    available: Decimal
+
+
+class SameDayGateOut(BaseModel):
+    """`applies` is False (and `decision` null) unless the requested
+    delivery date classifies as same_day right now."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    delivery_window: str | None
+    applies: bool
+    decision: str | None
+    shortages: list[SameDayShortageOut]
+
+
+class SameDayOverrideRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A reason is required.")
+        return value
