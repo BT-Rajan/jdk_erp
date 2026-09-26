@@ -132,3 +132,51 @@ class FeasibilityCalculationOut(BaseModel):
     reason_codes: list[str]
     working_days_available: int | None
     stages: list[FeasibilityStageOut]
+
+
+class FeasibilityCheckLineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    product_id: int
+    quantity: Decimal
+    unit_of_measure_id: int
+
+
+class FeasibilityCheckOut(BaseModel):
+    """A stored feasibility result (Sales S8). `result`, `failed_stage`,
+    `reason_codes` and `stages` are the calculation as it was made;
+    `state` and the decision fields carry the lifecycle. `is_current` is
+    False once a newer check exists or the quotation's inputs changed."""
+
+    id: int
+    quotation_id: int
+    customer_id: int
+    requested_delivery_date: date
+    delivery_window: str
+    calculation_basis: str
+    calculated_at: datetime
+    result: str
+    failed_stage: str | None
+    reason_codes: list[str]
+    stages: list[dict]
+    state: str
+    created_by_user_id: int | None
+    created_at: datetime
+    decision_reason: str | None
+    decided_by_user_id: int | None
+    decided_at: datetime | None
+    lines: list[FeasibilityCheckLineOut]
+    is_current: bool
+
+
+class FeasibilityDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A reason is required.")
+        return value

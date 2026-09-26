@@ -112,6 +112,8 @@ INVENTORY_OPENING_STOCK_RECORDED = "inventory_opening_stock_recorded"
 FINISHED_GOODS_ADJUSTMENT_CREATED = "finished_goods_adjustment_created"
 QUOTATION_CREATED = "quotation_created"
 QUOTATION_SAME_DAY_OVERRIDE_DECIDED = "same_day_override_decided"
+FEASIBILITY_RECORDED = "feasibility_recorded"
+FEASIBILITY_DECIDED = "feasibility_decided"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"
