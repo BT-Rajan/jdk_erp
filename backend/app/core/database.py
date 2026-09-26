@@ -47,3 +47,20 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def savepoint(db: Session):
+    """`db.begin_nested()` that is safe on SQLite too -- use it for any
+    insert-and-retry that must not disturb the rest of the transaction.
+
+    MySQL always runs a SAVEPOINT inside the open transaction. SQLite's
+    Python driver (legacy mode) only opens a transaction at the first
+    write, so a SAVEPOINT issued first would itself become the
+    transaction and its RELEASE would commit -- a later failure in the
+    same request could then no longer roll that insert back. Opening the
+    transaction explicitly first keeps SQLite behaving like MySQL."""
+    if IS_SQLITE:
+        connection = db.connection()
+        if not connection.connection.dbapi_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN")
+    return db.begin_nested()

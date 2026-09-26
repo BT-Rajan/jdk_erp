@@ -27,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import BusinessRuleError, ConflictError
+from app.core.database import savepoint
 from app.models.inventory import (
     ADJUSTMENT,
     ADJUSTMENT_REFERENCE,
@@ -518,7 +519,7 @@ def _increment_inventory(db: Session, *, organisation_id: int, raw_material_id: 
         _reject_negative(db, raw_material_id=raw_material_id, warehouse_id=warehouse_id, quantity=quantity)
 
     try:
-        with db.begin_nested():
+        with savepoint(db):
             db.add(
                 RawMaterialInventory(
                     organisation_id=organisation_id,
