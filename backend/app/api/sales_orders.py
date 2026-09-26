@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
+from app.core.entity_access import register_entity_access_check
 from app.core.errors import AccessDeniedError, NotFoundError
 from app.core.list_query import paginate
 from app.core.roles import ADMIN_ROLES
@@ -21,10 +22,18 @@ from app.models.customer import Customer
 from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
 from app.models.sales_order import HANDED_OFF, SalesOrder
 from app.models.user import User
+from app.schemas.file import FileOut
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.production_requirement import LineFulfilmentOut, ProductionRequirementOut
 from app.schemas.sales_order import SalesOrderCancelRequest, SalesOrderOut, SalesOrderUpdateRequest
-from app.services import audit_service, customer_scope, delivery_instruction_service, quotation_service, sales_order_service
+from app.services import (
+    audit_service,
+    customer_scope,
+    delivery_instruction_service,
+    quotation_service,
+    sales_document_service,
+    sales_order_service,
+)
 
 router = APIRouter(prefix="/api/sales-orders", tags=["sales-orders"])
 
@@ -50,13 +59,16 @@ def _admin_may_act(order: SalesOrder, user: User) -> bool:
     return order.status == HANDED_OFF and user.role in ADMIN_ROLES
 
 
-def order_out(db: Session, order: SalesOrder, user: User) -> SalesOrderOut:
+def order_out(db: Session, order: SalesOrder, user: User, *, with_pdf: bool = False) -> SalesOrderOut:
     out = SalesOrderOut.model_validate(order)
     for line in out.lines:
         line.fulfilled_quantity = delivery_instruction_service.fulfilled_quantity(db, line.id)
         line.remaining_quantity = line.quantity - line.fulfilled_quantity
     out.can_cancel = _admin_may_act(order, user)
     out.can_edit = _admin_may_act(order, user)
+    if with_pdf:
+        record = sales_document_service.latest_pdf(db, sales_document_service.SALES_ORDER_PDF, order.id)
+        out.pdf_file = FileOut.model_validate(record) if record is not None else None
     return out
 
 
@@ -98,7 +110,7 @@ def list_sales_orders(
 def get_sales_order(
     order_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> SalesOrderOut:
-    return order_out(db, _get_visible_order(db, order_id, current_user), current_user)
+    return order_out(db, _get_visible_order(db, order_id, current_user), current_user, with_pdf=True)
 
 
 @router.get("/{order_id}/fulfilment", response_model=list[LineFulfilmentOut])
@@ -147,7 +159,7 @@ def cancel_sales_order(
     _audit(db, request, current_user, SALES_ORDER_CANCELLED, order, f"reason: {payload.reason}")
     db.commit()
     db.expire_all()
-    return order_out(db, _get_visible_order(db, order_id, current_user), current_user)
+    return order_out(db, _get_visible_order(db, order_id, current_user), current_user, with_pdf=True)
 
 
 @router.patch("/{order_id}", response_model=SalesOrderOut)
@@ -182,6 +194,17 @@ def update_sales_order(
     )
     if changes:
         _audit(db, request, admin, SALES_ORDER_UPDATED, order, f"changes: {'; '.join(changes)}; reason: {payload.reason}")
-    db.commit()
+        # A new Order Confirmation PDF for the changed order (commits).
+        sales_document_service.store_sales_order_pdf(db, order, admin.id)
+    else:
+        db.commit()
     db.expire_all()
-    return order_out(db, _get_visible_order(db, order_id, admin), admin)
+    return order_out(db, _get_visible_order(db, order_id, admin), admin, with_pdf=True)
+
+
+def _check_sales_order_pdf_access(db: Session, user: User, order_id: int) -> bool:
+    """An Order Confirmation PDF follows the order's own visibility (customer scope)."""
+    return _scoped_query(db, user).filter(SalesOrder.id == order_id).first() is not None
+
+
+register_entity_access_check(sales_document_service.SALES_ORDER_PDF, _check_sales_order_pdf_access)

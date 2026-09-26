@@ -3,6 +3,7 @@
  * limits, stock, transitions) is the server's -- nothing here decides one. */
 
 import type { BadgeTone } from '@/components/ui/Badge'
+import type { StoredFile } from '@/lib/downloadFile'
 
 export interface DeliveryLine {
   id: number
@@ -33,6 +34,8 @@ export interface DeliveryInstruction {
   created_by_user_id: number | null
   created_at: string
   lines: DeliveryLine[]
+  /** The latest Delivery Note (detail responses only). */
+  pdf_file?: StoredFile | null
 }
 
 export interface DeliveryLinePosition {

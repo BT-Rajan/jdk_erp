@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.entity_access import register_entity_access_check
 from app.core.errors import NotFoundError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
@@ -38,10 +39,19 @@ from app.schemas.delivery_instruction import (
     DeliveryPositionOut,
     DeliveryShipmentUpdateRequest,
 )
+from app.schemas.file import FileOut
 from app.schemas.pagination import PaginatedResponse
-from app.services import audit_service, delivery_instruction_service, inventory_scope
+from app.services import audit_service, delivery_instruction_service, inventory_scope, sales_document_service
 
 router = APIRouter(prefix="/api/delivery-instructions", tags=["delivery-instructions"])
+
+
+def _out(db: Session, instruction: DeliveryInstruction) -> DeliveryInstructionOut:
+    """Detail responses carry the latest Delivery Note PDF (list rows do not)."""
+    out = DeliveryInstructionOut.model_validate(instruction)
+    record = sales_document_service.latest_pdf(db, sales_document_service.DELIVERY_NOTE_PDF, instruction.id)
+    out.pdf_file = FileOut.model_validate(record) if record is not None else None
+    return out
 
 
 def _query(db: Session, user: User):
@@ -124,12 +134,12 @@ def get_delivery_position(
 @router.get("/{instruction_id}", response_model=DeliveryInstructionOut)
 def get_delivery_instruction(
     instruction_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> DeliveryInstruction:
+) -> DeliveryInstructionOut:
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     instruction = _query(db, current_user).filter(DeliveryInstruction.id == instruction_id).first()
     if instruction is None:
         raise NotFoundError("Delivery instruction not found.")
-    return instruction
+    return _out(db, instruction)
 
 
 @router.post("", response_model=DeliveryInstructionOut, status_code=status.HTTP_201_CREATED)
@@ -138,7 +148,7 @@ def create_delivery_instruction(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> DeliveryInstruction:
+) -> DeliveryInstructionOut:
     """One shipment tranche of an eligible (handed-off or partially
     delivered) Sales Order; several may exist per order. The order's
     allowance % is locked by its first instruction. Audited."""
@@ -173,9 +183,10 @@ def create_delivery_instruction(
         ),
         ip_address=request.client.host if request.client else None,
     )
-    db.commit()
+    # The Delivery Note PDF; upload_file is the single commit point.
+    sales_document_service.store_delivery_note_pdf(db, instruction, current_user.id)
     db.expire_all()
-    return _query(db, current_user).filter(DeliveryInstruction.id == instruction.id).one()
+    return _out(db, _query(db, current_user).filter(DeliveryInstruction.id == instruction.id).one())
 
 
 def _get_line(db: Session, user: User, instruction_id: int, line_id: int):
@@ -200,7 +211,7 @@ def update_shipment_line(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> DeliveryInstruction:
+) -> DeliveryInstructionOut:
     """Changes a pending line's shipment quantity and/or pallet count
     (Delivery D3). Above the order line's remaining permitted quantity
     only an Admin, with a reason. Audited old -> new. Moves no stock."""
@@ -231,9 +242,12 @@ def update_shipment_line(
             details=f"number: {instruction.delivery_number}; " + "; ".join(changes),
             ip_address=request.client.host if request.client else None,
         )
-    db.commit()
+        # A new Delivery Note for the changed shipment (commits).
+        sales_document_service.store_delivery_note_pdf(db, instruction, current_user.id)
+    else:
+        db.commit()
     db.expire_all()
-    return _query(db, current_user).filter(DeliveryInstruction.id == instruction_id).one()
+    return _out(db, _query(db, current_user).filter(DeliveryInstruction.id == instruction_id).one())
 
 
 def _get_instruction(db: Session, user: User, instruction_id: int) -> DeliveryInstruction:
@@ -258,16 +272,16 @@ def _audit_transition(db: Session, request: Request, user: User, action: str, in
     )
 
 
-def _reload(db: Session, user: User, instruction_id: int) -> DeliveryInstruction:
+def _reload(db: Session, user: User, instruction_id: int) -> DeliveryInstructionOut:
     db.commit()
     db.expire_all()
-    return _query(db, user).filter(DeliveryInstruction.id == instruction_id).one()
+    return _out(db, _query(db, user).filter(DeliveryInstruction.id == instruction_id).one())
 
 
 @router.post("/{instruction_id}/fulfil", response_model=DeliveryInstructionOut)
 def fulfil_delivery_instruction(
     instruction_id: int, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> DeliveryInstruction:
+) -> DeliveryInstructionOut:
     """pending -> fulfilled, issuing each line's quantity from Finished
     Goods in the same transaction (Delivery D4/D5). Refused unless every
     line is within its order line's remaining permitted quantity (or
@@ -307,7 +321,7 @@ def mark_delivery_not_fulfilled(
     request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> DeliveryInstruction:
+) -> DeliveryInstructionOut:
     """pending -> not_fulfilled with a mandatory reason (Delivery D4)."""
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     instruction = _get_instruction(db, current_user, instruction_id)
@@ -319,10 +333,20 @@ def mark_delivery_not_fulfilled(
 @router.post("/{instruction_id}/retry", response_model=DeliveryInstructionOut)
 def retry_delivery_instruction(
     instruction_id: int, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> DeliveryInstruction:
+) -> DeliveryInstructionOut:
     """not_fulfilled -> pending: attempt the same instruction again (Delivery D4)."""
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     instruction = _get_instruction(db, current_user, instruction_id)
     delivery_instruction_service.retry(db, instruction)
     _audit_transition(db, request, current_user, DELIVERY_RETRIED, instruction, "not_fulfilled -> pending")
     return _reload(db, current_user, instruction_id)
+
+
+def _check_delivery_note_access(db: Session, user: User, instruction_id: int) -> bool:
+    """A Delivery Note follows its Delivery Instruction: same organisation
+    and the inventory:deliver grant."""
+    organisation_id = db.query(DeliveryInstruction.organisation_id).filter(DeliveryInstruction.id == instruction_id).scalar()
+    return organisation_id == user.organisation_id and inventory_scope.can_perform(db, user, inventory_scope.DELIVER)
+
+
+register_entity_access_check(sales_document_service.DELIVERY_NOTE_PDF, _check_delivery_note_access)

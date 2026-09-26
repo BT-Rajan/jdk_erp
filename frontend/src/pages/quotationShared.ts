@@ -4,6 +4,7 @@
  * turn its codes into words; nothing here derives a state. */
 
 import type { BadgeTone } from '@/components/ui/Badge'
+import type { StoredFile } from '@/lib/downloadFile'
 
 export interface QuotationLine {
   id: number
@@ -40,6 +41,8 @@ export interface Quotation {
   readiness_status: string | null
   /** Server's answer: only the salesman owning the customer may edit a draft. */
   can_edit: boolean
+  /** The latest generated PDF (detail responses only). */
+  pdf_file?: StoredFile | null
   valid_until: string
   accepted_at: string | null
   rejected_at: string | null
@@ -178,6 +181,8 @@ export interface SalesOrder {
   /** Server's answer for the current user. */
   can_cancel: boolean
   can_edit: boolean
+  /** The latest generated PDF (detail responses only). */
+  pdf_file?: StoredFile | null
 }
 
 export const ORDER_STATUS_LABELS: Record<string, string> = {

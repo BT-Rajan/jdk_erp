@@ -203,4 +203,27 @@ describe('Delivery pages', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry Delivery' }))
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/api/delivery-instructions/11/retry'))
   })
+
+  it('downloads the latest Delivery Note through the files endpoint', async () => {
+    instruction = { ...INSTRUCTION, pdf_file: { id: 99, original_filename: 'Delivery-Note-2680001.pdf' } }
+    const createObjectURL = vi.fn(() => 'blob:x')
+    const revokeObjectURL = vi.fn()
+    Object.assign(window.URL, { createObjectURL, revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    const base = getMock.getMockImplementation()!
+    getMock.mockImplementation((url: string, config?: unknown) =>
+      url === '/api/files/99' ? Promise.resolve({ data: new Blob(['%PDF']) }) : base(url, config),
+    )
+    renderAt('/deliveries/11')
+    await userEvent.click(await screen.findByRole('button', { name: 'Delivery Note PDF' }))
+    await waitFor(() => expect(click).toHaveBeenCalled())
+    expect(getMock).toHaveBeenCalledWith('/api/files/99', { responseType: 'blob' })
+    click.mockRestore()
+  })
+
+  it('offers no Delivery Note download before one exists', async () => {
+    renderAt('/deliveries/11')
+    await screen.findByRole('button', { name: 'Fulfil' })
+    expect(screen.queryByRole('button', { name: 'Delivery Note PDF' })).not.toBeInTheDocument()
+  })
 })

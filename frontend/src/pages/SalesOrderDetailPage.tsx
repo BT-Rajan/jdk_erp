@@ -11,6 +11,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { DateField } from '@/components/forms/DateField'
 import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
+import { downloadFile } from '@/lib/downloadFile'
 import { formatDate, formatDateTime, formatNumber } from '@/lib/format'
 import type { LookupOption, PaginatedResponse } from './rfqShared'
 import { HANDOFF_SOURCE_LABELS, ORDER_STATUS_LABELS, ORDER_STATUS_TONES, type SalesOrder } from './quotationShared'
@@ -143,6 +144,11 @@ export function SalesOrderDetailPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => navigate('/sales/orders')}>All Sales Orders</Button>
+            {order.pdf_file && (
+              <Button variant="secondary" onClick={() => downloadFile(order.pdf_file!).catch(() => setActionError('Failed to download the PDF.'))}>
+                Order Confirmation PDF
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => navigate(`/sales/quotations/${order.quotation_id}`)}>View Quotation</Button>
             {order.can_edit && !editing && <Button variant="secondary" onClick={startEdit}>Edit (Admin)</Button>}
             {order.can_cancel && !cancelling && (

@@ -14,6 +14,7 @@ import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
+import { downloadFile } from '@/lib/downloadFile'
 import { formatDateTime, formatNumber } from '@/lib/format'
 import type { LookupOption, PaginatedResponse } from './rfqShared'
 import {
@@ -172,6 +173,11 @@ export function DeliveryInstructionPage() {
             <Button variant="secondary" onClick={() => navigate(`/deliveries/orders/${instruction.sales_order_id}`)}>
               Order Deliveries
             </Button>
+            {instruction.pdf_file && (
+              <Button variant="secondary" onClick={() => downloadFile(instruction.pdf_file!).catch(() => setActionError('Failed to download the PDF.'))}>
+                Delivery Note PDF
+              </Button>
+            )}
             {pending && !editing && !failing && (
               <>
                 <Button variant="secondary" onClick={startEdit}>Edit Shipment</Button>

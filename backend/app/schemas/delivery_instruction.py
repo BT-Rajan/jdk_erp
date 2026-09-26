@@ -3,6 +3,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.file import FileOut
+
 
 class DeliveryInstructionLineCreate(BaseModel):
     sales_order_line_id: int
@@ -50,6 +52,8 @@ class DeliveryInstructionOut(BaseModel):
     created_by_user_id: int | None
     created_at: datetime
     lines: list[DeliveryInstructionLineOut]
+    # The latest Delivery Note (detail responses only).
+    pdf_file: FileOut | None = None
 
 
 class DeliveryLinePositionOut(BaseModel):
