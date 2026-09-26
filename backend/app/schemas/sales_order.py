@@ -23,6 +23,10 @@ class SalesOrderLineOut(BaseModel):
     unit_of_measure_id: int
     unit_price: Decimal
     line_amount: Decimal
+    # Delivery progress (Delivery D6), derived from fulfilled Delivery
+    # Instructions; the ordered `quantity` itself never changes.
+    fulfilled_quantity: Decimal = Decimal("0")
+    remaining_quantity: Decimal | None = None
 
 
 class SalesOrderOut(BaseModel):

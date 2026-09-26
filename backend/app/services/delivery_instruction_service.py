@@ -34,7 +34,7 @@ from app.core.errors import ConflictError, ValidationError
 from app.models.delivery_instruction import FULFILLED, NOT_FULFILLED, PENDING, DeliveryInstruction, DeliveryInstructionLine
 from app.models.organisation import Organisation
 from app.models.product import Product
-from app.models.sales_order import CANCELLED, HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
+from app.models.sales_order import CANCELLED, COMPLETED, HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
 from app.models.unit import UnitOfMeasure
 from app.services import document_numbering, finished_goods_inventory_service, purchase_order_service, uom_conversion
 
@@ -65,13 +65,20 @@ def ceiling(ordered: Decimal, allowance_percent: Decimal) -> Decimal:
     return ordered * (_HUNDRED + allowance_percent) / _HUNDRED
 
 
-def fulfilled_quantity(db: Session, sales_order_line_id: int) -> Decimal:
-    total = Decimal("0")
-    for (quantity,) in (
+def fulfilled_quantity(db: Session, sales_order_line_id: int, *, locking: bool = False) -> Decimal:
+    """Sum of this order line's quantities on fulfilled instructions --
+    the one source of delivery progress; nothing else stores it. `locking`
+    (inside fulfilment, after the Sales Order row lock) reads the latest
+    committed rows rather than the transaction's snapshot."""
+    query = (
         db.query(DeliveryInstructionLine.quantity)
         .join(DeliveryInstruction, DeliveryInstruction.id == DeliveryInstructionLine.delivery_instruction_id)
         .filter(DeliveryInstructionLine.sales_order_line_id == sales_order_line_id, DeliveryInstruction.status == FULFILLED)
-    ):
+    )
+    if locking:
+        query = query.with_for_update(read=True)
+    total = Decimal("0")
+    for (quantity,) in query:
         total += quantity
     return total
 
@@ -86,8 +93,8 @@ class LinePosition:
     remaining_permitted_quantity: Decimal
 
 
-def line_position(db: Session, line: SalesOrderLine, allowance_percent: Decimal) -> LinePosition:
-    fulfilled = fulfilled_quantity(db, line.id)
+def line_position(db: Session, line: SalesOrderLine, allowance_percent: Decimal, *, locking: bool = False) -> LinePosition:
+    fulfilled = fulfilled_quantity(db, line.id, locking=locking)
     top = ceiling(line.quantity, allowance_percent)
     return LinePosition(line.id, line.quantity, fulfilled, line.quantity - fulfilled, top, top - fulfilled)
 
@@ -326,11 +333,16 @@ def check_fulfilment(db: Session, instruction: DeliveryInstruction) -> None:
     recorded when its quantity was set above it (Delivery D3)."""
     if instruction.status != PENDING:
         raise _conflict_for(instruction.status)
-    order = db.get(SalesOrder, instruction.sales_order_id)
+    # Serialise fulfilments of the same Sales Order (row lock until commit),
+    # so two instructions fulfilled at once can't both pass the cumulative
+    # limit or leave a stale order status. SQLite ignores it (one writer).
+    order = db.query(SalesOrder).filter(SalesOrder.id == instruction.sales_order_id).with_for_update().one_or_none()
     if order is None or order.status == CANCELLED:
         raise ConflictError("The Sales Order is cancelled; this delivery can't be fulfilled.")
     for line in instruction.lines:
-        position = line_position(db, db.get(SalesOrderLine, line.sales_order_line_id), instruction.scrap_allowance_percent)
+        position = line_position(
+            db, db.get(SalesOrderLine, line.sales_order_line_id), instruction.scrap_allowance_percent, locking=True
+        )
         if exceeds_permitted(position, line.quantity) and not line.quantity_override_reason:
             permitted = format(position.remaining_permitted_quantity.normalize(), "f")
             raise ConflictError(
@@ -346,7 +358,7 @@ def check_fulfilment(db: Session, instruction: DeliveryInstruction) -> None:
 FG_REFERENCE_TYPE = "delivery_instruction_line"
 
 
-def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> list:
+def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> tuple[list, tuple[str, str] | None]:
     """pending -> fulfilled, after check_fulfilment, and each line's shipment
     quantity issued from Finished Goods through the existing single writer
     (finished_goods_inventory_service.issue_finished_goods), in the
@@ -355,7 +367,9 @@ def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> list:
     stock (never clamped or split) -- nothing is committed, so a fulfilled
     instruction always has exactly its movements and never more. The status
     moves first, as a conditional update, so a concurrent second request
-    stops before issuing anything. Returns the movements."""
+    stops before issuing anything. Then the Sales Order's delivery status
+    moves forward if this fulfilment changed it (Delivery D6). Returns the
+    movements and the order's (old, new) status, if it changed."""
     check_fulfilment(db, instruction)
     for line in instruction.lines:
         product = db.get(Product, line.product_id)
@@ -363,7 +377,7 @@ def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> list:
             raise ConflictError("A product's stock unit has changed since this delivery was created; nothing is converted.")
     _transition(db, instruction, PENDING, {"status": FULFILLED, "fulfilled_at": datetime.utcnow(), "fulfilled_by_user_id": user_id})
     warehouse = purchase_order_service.default_warehouse(db, instruction.organisation_id)
-    return [
+    movements = [
         finished_goods_inventory_service.issue_finished_goods(
             db,
             organisation_id=instruction.organisation_id,
@@ -377,6 +391,8 @@ def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> list:
         )
         for line in instruction.lines
     ]
+    status_change = refresh_order_delivery_status(db, db.get(SalesOrder, instruction.sales_order_id))
+    return movements, status_change
 
 
 def mark_not_fulfilled(db: Session, instruction: DeliveryInstruction, user_id: int, reason: str) -> None:
@@ -402,3 +418,38 @@ def retry(db: Session, instruction: DeliveryInstruction) -> None:
         NOT_FULFILLED,
         {"status": PENDING, "not_fulfilled_reason": None, "not_fulfilled_at": None, "not_fulfilled_by_user_id": None},
     )
+
+
+# --- Sales Order delivery progress (Delivery D6) ---------------------------------
+
+
+def order_delivery_status(db: Session, order: SalesOrder) -> str:
+    """handed_off (nothing fulfilled), partially_delivered (something, not
+    every line), completed (every line's fulfilled >= its ordered quantity
+    -- the allowance is a ceiling, never a target). Per line: one
+    product's quantity never counts for another. Only fulfilled
+    instructions count."""
+    fulfilled = [fulfilled_quantity(db, line.id, locking=True) for line in order.lines]
+    if all(done >= line.quantity for done, line in zip(fulfilled, order.lines)):
+        return COMPLETED
+    if any(done > 0 for done in fulfilled):
+        return PARTIALLY_DELIVERED
+    return HANDED_OFF
+
+
+_FORWARD = {HANDED_OFF: (PARTIALLY_DELIVERED, COMPLETED), PARTIALLY_DELIVERED: (COMPLETED,)}
+
+
+def refresh_order_delivery_status(db: Session, order: SalesOrder) -> tuple[str, str] | None:
+    """Called only inside a successful fulfilment (same transaction, order
+    row already locked). Moves the order forward -- handed_off ->
+    partially_delivered -> completed -- never back, and never touches a
+    cancelled or completed order. Returns (old, new) when it changed."""
+    old = order.status
+    new = order_delivery_status(db, order)
+    if new not in _FORWARD.get(old, ()):
+        return None
+    order.status = new
+    db.add(order)
+    db.flush()
+    return old, new

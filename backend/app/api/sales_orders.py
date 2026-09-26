@@ -24,7 +24,7 @@ from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.production_requirement import LineFulfilmentOut, ProductionRequirementOut
 from app.schemas.sales_order import SalesOrderCancelRequest, SalesOrderOut, SalesOrderUpdateRequest
-from app.services import audit_service, customer_scope, quotation_service, sales_order_service
+from app.services import audit_service, customer_scope, delivery_instruction_service, quotation_service, sales_order_service
 
 router = APIRouter(prefix="/api/sales-orders", tags=["sales-orders"])
 
@@ -52,6 +52,9 @@ def _admin_may_act(order: SalesOrder, user: User) -> bool:
 
 def order_out(db: Session, order: SalesOrder, user: User) -> SalesOrderOut:
     out = SalesOrderOut.model_validate(order)
+    for line in out.lines:
+        line.fulfilled_quantity = delivery_instruction_service.fulfilled_quantity(db, line.id)
+        line.remaining_quantity = line.quantity - line.fulfilled_quantity
     out.can_cancel = _admin_may_act(order, user)
     out.can_edit = _admin_may_act(order, user)
     return out

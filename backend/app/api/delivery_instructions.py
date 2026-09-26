@@ -21,6 +21,8 @@ from app.models.audit_event import (
     DELIVERY_NOT_FULFILLED,
     DELIVERY_RETRIED,
     DELIVERY_SHIPMENT_UPDATED,
+    SALES_MODULE,
+    SALES_ORDER_DELIVERY_STATUS,
 )
 from app.models.delivery_instruction import DeliveryInstruction, DeliveryInstructionLine
 from app.models.sales_order import SalesOrder
@@ -241,12 +243,28 @@ def fulfil_delivery_instruction(
     request is a 409 and changes nothing."""
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     instruction = _get_instruction(db, current_user, instruction_id)
-    movements = delivery_instruction_service.fulfil(db, instruction, current_user.id)
+    movements, status_change = delivery_instruction_service.fulfil(db, instruction, current_user.id)
     issued = "; ".join(
         f"line {line.sales_order_line_id}: {line.quantity} (finished goods movement {movement.id})"
         for line, movement in zip(instruction.lines, movements)
     )
     _audit_transition(db, request, current_user, DELIVERY_FULFILLED, instruction, f"pending -> fulfilled; {issued}")
+    if status_change is not None:
+        audit_service.log_event(
+            db,
+            action=SALES_ORDER_DELIVERY_STATUS,
+            module=SALES_MODULE,
+            organisation_id=current_user.organisation_id,
+            actor_user_id=current_user.id,
+            entity_type="sales_order",
+            entity_id=instruction.sales_order_id,
+            result="success",
+            details=(
+                f"number: {instruction.sales_order_number}, status: {status_change[0]} -> {status_change[1]}; "
+                f"by delivery instruction {instruction.delivery_number}"
+            ),
+            ip_address=request.client.host if request.client else None,
+        )
     return _reload(db, current_user, instruction_id)
 
 
