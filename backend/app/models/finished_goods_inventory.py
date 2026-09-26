@@ -72,7 +72,7 @@ class FinishedGoodsMovement(Base, OrganisationScopedMixin):
         # hardening pass.
         UniqueConstraint(
             "reference_type", "reference_id", "movement_type",
-            name="uq_finished_goods_movements_reference_type_reference_id_movement_type",
+            name="uq_finished_goods_movements_reference_movement_type",
         ),
     )
 

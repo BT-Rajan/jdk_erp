@@ -5,7 +5,7 @@ their exact shape for a Product instead of a Raw Material.
 
 finished_goods_movements -- the append-only ledger (StockMovement's own
 equivalent), including the duplicate-source-transaction guard
-(uq_finished_goods_movements_reference_type_reference_id_movement_type)
+(uq_finished_goods_movements_reference_movement_type)
 built in from this table's first migration, since Raw Material
 Inventory only gained that guard later as a hardening pass (0040) --
 Finished Goods Inventory starts with it already in place.
@@ -78,7 +78,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.UniqueConstraint(
             "reference_type", "reference_id", "movement_type",
-            name="uq_finished_goods_movements_reference_type_reference_id_movement_type",
+            name="uq_finished_goods_movements_reference_movement_type",
         ),
     )
     op.create_index("ix_finished_goods_movements_organisation_id", "finished_goods_movements", ["organisation_id"])

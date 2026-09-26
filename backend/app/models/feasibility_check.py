@@ -66,7 +66,9 @@ class FeasibilityCheckLine(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     feasibility_check_id: Mapped[int] = mapped_column(
-        ForeignKey("feasibility_checks.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("feasibility_checks.id", ondelete="CASCADE", name="fk_feasibility_check_lines_feasibility_check_id"),
+        nullable=False,
+        index=True,
     )
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), nullable=False, index=True)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)

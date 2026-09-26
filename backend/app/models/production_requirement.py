@@ -46,15 +46,22 @@ class SalesOrderLineFulfilment(Base, OrganisationScopedMixin):
     __tablename__ = "sales_order_line_fulfilments"
     __table_args__ = (
         UniqueConstraint("sales_order_line_id", name="uq_sales_order_line_fulfilments_sales_order_line_id"),
-        CheckConstraint("fg_available_quantity >= 0", name="ck_sales_order_line_fulfilments_fg_available"),
-        CheckConstraint("fg_covered_quantity >= 0", name="ck_sales_order_line_fulfilments_fg_covered"),
-        CheckConstraint("production_quantity >= 0", name="ck_sales_order_line_fulfilments_production"),
+        CheckConstraint("fg_available_quantity >= 0", name="fg_available"),
+        CheckConstraint("fg_covered_quantity >= 0", name="fg_covered"),
+        CheckConstraint("production_quantity >= 0", name="production"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sales_order_id: Mapped[int] = mapped_column(ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=False, index=True)
-    sales_order_line_id: Mapped[int] = mapped_column(ForeignKey("sales_order_lines.id", ondelete="RESTRICT"), nullable=False)
-    unit_of_measure_id: Mapped[int] = mapped_column(ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=False)
+    # Explicit short FK names: MySQL identifiers are limited to 64 chars.
+    sales_order_line_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_lines.id", ondelete="RESTRICT", name="fk_sales_order_line_fulfilments_sales_order_line_id"),
+        nullable=False,
+    )
+    unit_of_measure_id: Mapped[int] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT", name="fk_sales_order_line_fulfilments_unit_of_measure_id"),
+        nullable=False,
+    )
     # What Inventory reported as still available for this line (after
     # earlier lines of the same order took theirs) -- kept for the record.
     fg_available_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
@@ -72,7 +79,7 @@ class ProductionRequirement(Base, TimestampMixin, OrganisationScopedMixin):
     __tablename__ = "production_requirements"
     __table_args__ = (
         UniqueConstraint("sales_order_line_id", name="uq_production_requirements_sales_order_line_id"),
-        CheckConstraint("quantity > 0", name="ck_production_requirements_quantity_positive"),
+        CheckConstraint("quantity > 0", name="quantity_positive"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -114,8 +121,16 @@ class ProductionRequirementComponent(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     production_requirement_id: Mapped[int] = mapped_column(
-        ForeignKey("production_requirements.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("production_requirements.id", ondelete="CASCADE", name="fk_production_requirement_components_requirement_id"),
+        nullable=False,
+        index=True,
     )
-    raw_material_id: Mapped[int] = mapped_column(ForeignKey("raw_materials.id", ondelete="RESTRICT"), nullable=False)
+    raw_material_id: Mapped[int] = mapped_column(
+        ForeignKey("raw_materials.id", ondelete="RESTRICT", name="fk_production_requirement_components_raw_material_id"),
+        nullable=False,
+    )
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
-    unit_of_measure_id: Mapped[int] = mapped_column(ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=False)
+    unit_of_measure_id: Mapped[int] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT", name="fk_production_requirement_components_unit_of_measure_id"),
+        nullable=False,
+    )
