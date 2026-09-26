@@ -22,12 +22,14 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.errors import ValidationError
 from app.models.audit_event import FINISHED_GOODS_ADJUSTMENT_CREATED, INVENTORY_MODULE
+from app.models.category import Category
 from app.models.product import Product
 from app.models.unit import UnitOfMeasure
 from app.models.user import User
 from app.models.warehouse import Warehouse
 from app.schemas.finished_goods_inventory import (
     IN_STOCK,
+    NO_RECORD,
     OUT_OF_STOCK,
     AdjustFinishedGoodsStockRequest,
     FinishedGoodsAdjustmentOut,
@@ -71,43 +73,76 @@ def _resolve_active_warehouse(db: Session, warehouse_id: int, organisation_id: i
 def list_stock_positions(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[FinishedGoodsStockPositionOut]:
-    """The Stock Position screen's own data source -- every (Product,
-    Warehouse) pair this organisation has a Finished Goods snapshot for,
-    each with its product/warehouse/unit names resolved and a simple
-    in_stock/out_of_stock status (rule 5)."""
+    """The Stock Position screen's own data source. Every Product in
+    the organisation is represented -- not just the ones with a
+    Finished Goods snapshot -- so a Product that has never been
+    produced, delivered or adjusted still shows (status `no_record`,
+    with no warehouse/quantity to report), distinguishable from a real
+    ledger that nets to zero (`out_of_stock`). Balances themselves are
+    never computed here: each snapshot row's quantity_on_hand is read
+    as-is from finished_goods_inventory_service.list_stock_positions,
+    the same authoritative source the movement-history endpoint below
+    reconciles against."""
     inventory_scope.require_permission(db, current_user, inventory_scope.VIEW)
 
     positions = finished_goods_inventory_service.list_stock_positions(db, organisation_id=current_user.organisation_id)
-    if not positions:
-        return []
+    all_products = db.query(Product).filter(Product.organisation_id == current_user.organisation_id).all()
+    products = {p.id: p for p in all_products}
 
-    product_ids = {p.product_id for p in positions}
     warehouse_ids = {p.warehouse_id for p in positions}
-    products = {p.id: p for p in db.query(Product).filter(Product.id.in_(product_ids))}
-    warehouses = {w.id: w for w in db.query(Warehouse).filter(Warehouse.id.in_(warehouse_ids))}
-    unit_ids = {p.unit_of_measure_id for p in products.values()}
-    units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids))}
+    warehouses = {w.id: w for w in db.query(Warehouse).filter(Warehouse.id.in_(warehouse_ids))} if warehouse_ids else {}
+    category_ids = {p.category_id for p in all_products}
+    categories = {c.id: c for c in db.query(Category).filter(Category.id.in_(category_ids))} if category_ids else {}
+    unit_ids = {p.unit_of_measure_id for p in all_products}
+    units = {u.id: u for u in db.query(UnitOfMeasure).filter(UnitOfMeasure.id.in_(unit_ids))} if unit_ids else {}
+
+    def _row(
+        product: Product,
+        *,
+        warehouse: Warehouse | None,
+        quantity_on_hand,
+        status: str,
+    ) -> FinishedGoodsStockPositionOut:
+        unit = units.get(product.unit_of_measure_id)
+        category = categories.get(product.category_id)
+        return FinishedGoodsStockPositionOut(
+            product_id=product.id,
+            product_code=product.code,
+            product_name=product.name,
+            product_is_active=product.is_active,
+            category_id=product.category_id,
+            category_name=category.name if category is not None else "",
+            warehouse_id=warehouse.id if warehouse is not None else None,
+            warehouse_name=warehouse.name if warehouse is not None else None,
+            unit_of_measure_id=product.unit_of_measure_id,
+            unit_code=unit.code if unit is not None else "",
+            quantity_on_hand=quantity_on_hand,
+            status=status,
+        )
 
     out: list[FinishedGoodsStockPositionOut] = []
+    products_with_record: set[int] = set()
     for position in positions:
         product = products.get(position.product_id)
         warehouse = warehouses.get(position.warehouse_id)
         if product is None or warehouse is None:
             continue
-        unit = units.get(product.unit_of_measure_id)
+        products_with_record.add(product.id)
         out.append(
-            FinishedGoodsStockPositionOut(
-                product_id=product.id,
-                product_code=product.code,
-                product_name=product.name,
-                warehouse_id=warehouse.id,
-                warehouse_name=warehouse.name,
-                unit_of_measure_id=product.unit_of_measure_id,
-                unit_code=unit.code if unit is not None else "",
+            _row(
+                product,
+                warehouse=warehouse,
                 quantity_on_hand=position.quantity_on_hand,
                 status=IN_STOCK if position.quantity_on_hand > 0 else OUT_OF_STOCK,
             )
         )
+
+    for product in all_products:
+        if product.id in products_with_record:
+            continue
+        out.append(_row(product, warehouse=None, quantity_on_hand=None, status=NO_RECORD))
+
+    out.sort(key=lambda row: (row.product_name, row.warehouse_name or ""))
     return out
 
 

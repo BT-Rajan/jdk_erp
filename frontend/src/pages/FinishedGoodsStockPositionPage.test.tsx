@@ -15,6 +15,9 @@ const STOCK_POSITIONS = [
     product_id: 1,
     product_code: 'PRD001',
     product_name: 'Widget',
+    product_is_active: true,
+    category_id: 3,
+    category_name: 'Electronics',
     warehouse_id: 5,
     warehouse_name: 'Factory Warehouse',
     unit_of_measure_id: 10,
@@ -58,7 +61,7 @@ beforeEach(() => {
 })
 
 describe('FinishedGoodsStockPositionPage', () => {
-  it('fetches and lists stock positions with product, code, warehouse, UOM, quantity and status', async () => {
+  it('fetches and lists stock positions with product, code, category, warehouse, UOM, quantity, status and active flag', async () => {
     getMock.mockResolvedValue({ data: STOCK_POSITIONS })
 
     render(<FinishedGoodsStockPositionPage />)
@@ -66,10 +69,12 @@ describe('FinishedGoodsStockPositionPage', () => {
     expect(await screen.findByText('Widget')).toBeInTheDocument()
     expect(getMock).toHaveBeenCalledWith('/api/finished-goods-inventory')
     expect(screen.getByText('PRD001')).toBeInTheDocument()
+    expect(screen.getByText('Electronics')).toBeInTheDocument()
     expect(screen.getByText('Factory Warehouse')).toBeInTheDocument()
     expect(screen.getByText('PCS')).toBeInTheDocument()
-    expect(screen.getByText('250')).toBeInTheDocument()
+    expect(screen.getByText('250 PCS')).toBeInTheDocument()
     expect(screen.getByText('In Stock')).toBeInTheDocument()
+    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
   })
 
   it('shows Out of Stock once quantity on hand is zero', async () => {
@@ -82,6 +87,45 @@ describe('FinishedGoodsStockPositionPage', () => {
     expect(await screen.findByText('Out of Stock')).toBeInTheDocument()
   })
 
+  it('flags an inactive Product without hiding its stock', async () => {
+    getMock.mockResolvedValue({ data: [{ ...STOCK_POSITIONS[0], product_is_active: false }] })
+
+    render(<FinishedGoodsStockPositionPage />)
+
+    expect(await screen.findByText('Widget')).toBeInTheDocument()
+    expect(screen.getByText('Inactive')).toBeInTheDocument()
+    expect(screen.getByText('250 PCS')).toBeInTheDocument()
+  })
+
+  it('shows a Product with no Finished Goods movement yet as No Stock Record, with no warehouse or quantity to view history against', async () => {
+    getMock.mockResolvedValue({
+      data: [
+        {
+          product_id: 2,
+          product_code: 'PRD-TON',
+          product_name: 'Product A',
+          product_is_active: true,
+          category_id: 3,
+          category_name: 'Electronics',
+          warehouse_id: null,
+          warehouse_name: null,
+          unit_of_measure_id: 11,
+          unit_code: 'TON',
+          quantity_on_hand: null,
+          status: 'no_record',
+        },
+      ],
+    })
+
+    render(<FinishedGoodsStockPositionPage />)
+
+    expect(await screen.findByText('Product A')).toBeInTheDocument()
+    expect(screen.getByText('No Stock Record')).toBeInTheDocument()
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'View History' })).not.toBeInTheDocument()
+    expect(screen.getByText('No movements yet')).toBeInTheDocument()
+  })
+
   it('shows a load error when stock positions fail to load', async () => {
     const { ApiError } = await import('@/lib/apiClient')
     getMock.mockRejectedValue(new ApiError({ code: 'FORBIDDEN', message: 'You do not have permission to view this.' }, 403))
@@ -91,12 +135,12 @@ describe('FinishedGoodsStockPositionPage', () => {
     expect(await screen.findByText('You do not have permission to view this.')).toBeInTheDocument()
   })
 
-  it('shows an empty state when no Finished Goods stock has been recorded', async () => {
+  it('shows an empty state when no Finished Goods Products exist', async () => {
     getMock.mockResolvedValue({ data: [] })
 
     render(<FinishedGoodsStockPositionPage />)
 
-    expect(await screen.findByText('No Finished Goods stock yet')).toBeInTheDocument()
+    expect(await screen.findByText('No Finished Goods Products yet')).toBeInTheDocument()
   })
 
   it('opens a movement history drawer for a row, newest first, with the resulting balance', async () => {

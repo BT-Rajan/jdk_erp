@@ -213,6 +213,65 @@ def test_stock_position_list_is_empty_when_nothing_has_moved_yet(client, admin_h
     assert response.json() == []
 
 
+def test_stock_position_includes_category_and_active_status(
+    client, admin_headers, organisation, db_session, widget_product, electronics_category, warehouse_1
+):
+    _seed_stock(db_session, organisation, widget_product, warehouse_1, "77")
+
+    response = client.get(STOCK_POSITIONS_URL, headers=admin_headers)
+    row = response.json()[0]
+    assert row["category_id"] == electronics_category.id
+    assert row["category_name"] == electronics_category.name
+    assert row["product_is_active"] is True
+
+
+def test_a_product_with_no_finished_goods_movement_shows_as_no_record_not_omitted(
+    client, admin_headers, organisation, db_session, widget_product, product_tonne, warehouse_1
+):
+    """widget_product has real stock; product_tonne has never had a
+    Finished Goods movement recorded anywhere. Both must appear -- the
+    untouched Product distinguishable from real zero stock, per this
+    view's own field list, rather than silently missing from the list."""
+    _seed_stock(db_session, organisation, widget_product, warehouse_1, "5")
+
+    response = client.get(STOCK_POSITIONS_URL, headers=admin_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+
+    by_product = {row["product_id"]: row for row in body}
+    untouched = by_product[product_tonne.id]
+    assert untouched["status"] == "no_record"
+    assert untouched["warehouse_id"] is None
+    assert untouched["warehouse_name"] is None
+    assert untouched["quantity_on_hand"] is None
+    # Still fully identified, so the row is usable even with no stock yet.
+    assert untouched["product_code"] == product_tonne.code
+    assert untouched["unit_of_measure_id"] == product_tonne.unit_of_measure_id
+
+    moved = by_product[widget_product.id]
+    assert moved["status"] == "in_stock"
+    assert moved["warehouse_id"] == warehouse_1.id
+
+
+def test_an_inactive_product_with_stock_is_still_listed_and_flagged(
+    client, admin_headers, organisation, db_session, widget_product, warehouse_1
+):
+    """Deactivating a Product must not hide any stock it still has --
+    this view only reports what's on hand, it doesn't gate on
+    Product.is_active (rule 8's own permission independence, applied to
+    visibility too: an inactive Product can still carry real stock)."""
+    _seed_stock(db_session, organisation, widget_product, warehouse_1, "12")
+    widget_product.is_active = False
+    db_session.commit()
+
+    response = client.get(STOCK_POSITIONS_URL, headers=admin_headers)
+    row = response.json()[0]
+    assert row["product_is_active"] is False
+    assert row["status"] == "in_stock"
+    assert row["quantity_on_hand"] == "12.0000"
+
+
 # --- movement history reconciles with the stored balance -------------------------------------------
 
 

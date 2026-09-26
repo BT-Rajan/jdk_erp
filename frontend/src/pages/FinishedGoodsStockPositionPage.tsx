@@ -10,17 +10,34 @@ import { ApiError, apiClient } from '@/lib/apiClient'
 import { formatDateTime, formatNumber } from '@/lib/format'
 
 /** Mirrors backend/app/schemas/finished_goods_inventory.py's
- * FinishedGoodsStockPositionOut. */
+ * FinishedGoodsStockPositionOut. warehouse_id/warehouse_name/
+ * quantity_on_hand are only null for a `no_record` row -- a Product
+ * that has never had a Finished Goods movement recorded anywhere. */
 interface StockPosition {
   product_id: number
   product_code: string
   product_name: string
-  warehouse_id: number
-  warehouse_name: string
+  product_is_active: boolean
+  category_id: number
+  category_name: string
+  warehouse_id: number | null
+  warehouse_name: string | null
   unit_of_measure_id: number
   unit_code: string
-  quantity_on_hand: string
-  status: 'in_stock' | 'out_of_stock'
+  quantity_on_hand: string | null
+  status: 'in_stock' | 'out_of_stock' | 'no_record'
+}
+
+const STATUS_LABELS: Record<StockPosition['status'], string> = {
+  in_stock: 'In Stock',
+  out_of_stock: 'Out of Stock',
+  no_record: 'No Stock Record',
+}
+
+const STATUS_TONES: Record<StockPosition['status'], BadgeTone> = {
+  in_stock: 'success',
+  out_of_stock: 'neutral',
+  no_record: 'neutral',
 }
 
 /** Mirrors FinishedGoodsMovementOut. */
@@ -55,11 +72,15 @@ const MOVEMENT_TYPE_TONES: Record<string, BadgeTone> = {
  * list_stock_positions) -- a read-only report, the same "plain list,
  * fetch and render, no pagination" shape InventoryReconciliationPage
  * already established for a per-organisation Inventory listing of this
- * size. "View History" opens each row's own movement history in a
- * Drawer (rule 6) rather than navigating away -- this screen is
- * primarily for viewing and control, not direct quantity editing: there
- * is no inline-edit path on any cell here at all. Correcting a balance
- * is a separate, deliberate action on FinishedGoodsAdjustmentsPage. */
+ * size. Every Product in the organisation is listed, not just ones
+ * with recorded stock -- a Product that has never moved shows with a
+ * `No Stock Record` status and no warehouse/quantity, distinguishable
+ * from a real ledger that nets to zero (`Out of Stock`). "View History"
+ * opens each row's own movement history in a Drawer (rule 6) rather
+ * than navigating away -- this screen is primarily for viewing and
+ * control, not direct quantity editing: there is no inline-edit path on
+ * any cell here at all. Correcting a balance is a separate, deliberate
+ * action on FinishedGoodsAdjustmentsPage. */
 export function FinishedGoodsStockPositionPage() {
   const [positions, setPositions] = useState<StockPosition[] | null>(null)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -90,21 +111,26 @@ export function FinishedGoodsStockPositionPage() {
   const columns: DataTableColumn<StockPosition>[] = [
     { key: 'product_code', label: 'Product Code', render: (p) => p.product_code },
     { key: 'product_name', label: 'Product', render: (p) => p.product_name },
-    { key: 'warehouse_name', label: 'Warehouse', render: (p) => p.warehouse_name },
+    { key: 'category_name', label: 'Category', hideBelow: 'sm', render: (p) => p.category_name },
+    { key: 'warehouse_name', label: 'Warehouse', render: (p) => p.warehouse_name ?? '—' },
     { key: 'unit_code', label: 'Stock UOM', hideBelow: 'sm', render: (p) => p.unit_code },
     {
       key: 'quantity_on_hand',
       label: 'Quantity on Hand',
       align: 'right',
-      render: (p) => formatNumber(p.quantity_on_hand),
+      render: (p) => (p.quantity_on_hand !== null ? `${formatNumber(p.quantity_on_hand)} ${p.unit_code}` : '—'),
     },
     {
       key: 'status',
       label: 'Status',
+      render: (p) => <Badge tone={STATUS_TONES[p.status]}>{STATUS_LABELS[p.status]}</Badge>,
+    },
+    {
+      key: 'product_is_active',
+      label: 'Active',
+      hideBelow: 'md',
       render: (p) => (
-        <Badge tone={p.status === 'in_stock' ? 'success' : 'neutral'}>
-          {p.status === 'in_stock' ? 'In Stock' : 'Out of Stock'}
-        </Badge>
+        <Badge tone={p.product_is_active ? 'success' : 'neutral'}>{p.product_is_active ? 'Active' : 'Inactive'}</Badge>
       ),
     },
     {
@@ -112,11 +138,14 @@ export function FinishedGoodsStockPositionPage() {
       label: '',
       alwaysVisible: true,
       align: 'right',
-      render: (p) => (
-        <Button variant="secondary" size="sm" onClick={() => openHistory(p)}>
-          View History
-        </Button>
-      ),
+      render: (p) =>
+        p.warehouse_id !== null ? (
+          <Button variant="secondary" size="sm" onClick={() => openHistory(p)}>
+            View History
+          </Button>
+        ) : (
+          <span className="text-xs text-gold-100/40">No movements yet</span>
+        ),
     },
   ]
 
@@ -131,15 +160,15 @@ export function FinishedGoodsStockPositionPage() {
       <DataTable
         columns={columns}
         rows={positions ?? []}
-        rowKey={(p) => `${p.product_id}-${p.warehouse_id}`}
+        rowKey={(p) => `${p.product_id}-${p.warehouse_id ?? 'none'}`}
         loading={positions === null}
-        emptyTitle="No Finished Goods stock yet"
-        emptyMessage="Stock appears here once a production completion, delivery or adjustment is recorded for a Product."
+        emptyTitle="No Finished Goods Products yet"
+        emptyMessage="Products will appear here as soon as they exist -- quantities populate once a production completion, delivery or adjustment is recorded."
       />
 
       <Drawer
         open={historyTarget !== null}
-        title={historyTarget ? `${historyTarget.product_name} @ ${historyTarget.warehouse_name}` : 'Movement History'}
+        title={historyTarget ? `${historyTarget.product_name} @ ${historyTarget.warehouse_name ?? '—'}` : 'Movement History'}
         onClose={() => setHistoryTarget(null)}
       >
         <Alert variant="danger">{historyError}</Alert>

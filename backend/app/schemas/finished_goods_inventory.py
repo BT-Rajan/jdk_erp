@@ -5,25 +5,38 @@ from pydantic import BaseModel, Field, field_validator
 
 IN_STOCK = "in_stock"
 OUT_OF_STOCK = "out_of_stock"
+NO_RECORD = "no_record"
 
 
 class FinishedGoodsStockPositionOut(BaseModel):
-    """One row of the Stock Position screen -- Product, warehouse,
-    stock UOM, quantity on hand and a simple available/current status,
-    exactly rule 5's own field list. `status` is a plain two-value
-    read: `out_of_stock` once quantity_on_hand reaches zero (it can
-    never go negative -- rule 4), `in_stock` otherwise. No reorder
-    point/minimum-stock concept exists on Product, so there is no
-    third "low stock" state to compute (rule 9: no scope expansion)."""
+    """One row of the Stock Position screen -- Product, category, stock
+    UOM, warehouse, quantity on hand, active/inactive status and a
+    simple stock status, per this view's own field list. `status` is a
+    plain three-value read: `no_record` for a Product with no Finished
+    Goods movement anywhere yet (never received/produced/adjusted --
+    genuinely distinct from a ledger that exists and nets to zero),
+    `out_of_stock` once a real ledger's quantity_on_hand reaches zero
+    (it can never go negative -- rule 4), `in_stock` otherwise. No
+    reorder point/minimum-stock concept exists on Product, so there is
+    no fourth "low stock" state to compute (rule 9: no scope
+    expansion). `warehouse_id`/`warehouse_name`/`quantity_on_hand` are
+    only null for a `no_record` row -- no movement has ever named a
+    warehouse for that Product, so there is nothing to report a
+    warehouse-scoped quantity against; inventing a zero balance across
+    every warehouse would misrepresent a Product that simply hasn't
+    been produced, delivered or adjusted yet."""
 
     product_id: int
     product_code: str
     product_name: str
-    warehouse_id: int
-    warehouse_name: str
+    product_is_active: bool
+    category_id: int
+    category_name: str
+    warehouse_id: int | None
+    warehouse_name: str | None
     unit_of_measure_id: int
     unit_code: str
-    quantity_on_hand: Decimal
+    quantity_on_hand: Decimal | None
     status: str
 
 
