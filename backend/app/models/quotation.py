@@ -17,7 +17,10 @@ from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 DRAFT = "draft"
 ACCEPTED = "accepted"
 REJECTED = "rejected"
-QUOTATION_STATUSES = (DRAFT, ACCEPTED, REJECTED)
+# Set when the owning salesman converts an accepted quotation into its
+# Sales Order (S13.1); the quotation is then locked for good.
+CONVERTED = "converted"
+QUOTATION_STATUSES = (DRAFT, ACCEPTED, REJECTED, CONVERTED)
 
 # A quotation is valid for 7 calendar days from its quotation date
 # (S12.1); renewal restarts the 7 days from the renewal date.

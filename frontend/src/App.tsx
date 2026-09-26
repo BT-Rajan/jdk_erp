@@ -11,6 +11,8 @@ import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { QuotationDetailPage } from '@/pages/QuotationDetailPage'
 import { QuotationFormPage } from '@/pages/QuotationFormPage'
 import { QuotationsPage } from '@/pages/QuotationsPage'
+import { SalesOrderDetailPage } from '@/pages/SalesOrderDetailPage'
+import { SalesOrdersPage } from '@/pages/SalesOrdersPage'
 import { WorkingCalendarSettingsPage } from '@/pages/WorkingCalendarSettingsPage'
 import { FinancePaymentsPage } from '@/pages/FinancePaymentsPage'
 import { FinishedGoodsAdjustmentsPage } from '@/pages/FinishedGoodsAdjustmentsPage'
@@ -101,6 +103,8 @@ export function App() {
           <Route path="/sales/quotations/new" element={<QuotationFormPage />} />
           <Route path="/sales/quotations/:quotationId" element={<QuotationDetailPage />} />
           <Route path="/sales/quotations/:quotationId/edit" element={<QuotationFormPage />} />
+          <Route path="/sales/orders" element={<SalesOrdersPage />} />
+          <Route path="/sales/orders/:orderId" element={<SalesOrderDetailPage />} />
           <Route path="/finance/payments" element={<FinancePaymentsPage />} />
           <Route path="/finance/payments/:purchaseOrderId" element={<FinancePaymentsPage />} />
           <Route path="/users" element={<UsersPage />} />

@@ -20,6 +20,7 @@ from app.api.production_lines import router as production_lines_router
 from app.api.products import router as products_router
 from app.api.purchase_orders import router as purchase_orders_router
 from app.api.quotations import router as quotations_router
+from app.api.sales_orders import router as sales_orders_router
 from app.api.rfqs import router as rfqs_router
 from app.api.document_templates import router as document_templates_router
 from app.api.goods_receiving import router as goods_receiving_router
@@ -88,6 +89,7 @@ app.include_router(production_lines_router)
 app.include_router(products_router)
 app.include_router(purchase_orders_router)
 app.include_router(quotations_router)
+app.include_router(sales_orders_router)
 app.include_router(rfqs_router)
 app.include_router(document_templates_router)
 app.include_router(goods_receiving_router)

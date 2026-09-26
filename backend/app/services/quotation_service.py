@@ -54,7 +54,7 @@ def _resolve_product(db: Session, organisation_id: int, line: LineInput, index: 
     return product
 
 
-def _check_requested_date(requested_delivery_date: date | None, today: date) -> None:
+def check_requested_date(requested_delivery_date: date | None, today: date) -> None:
     if requested_delivery_date is not None and requested_delivery_date < today:
         raise ValidationError(
             "The requested delivery date is in the past.",
@@ -62,7 +62,7 @@ def _check_requested_date(requested_delivery_date: date | None, today: date) -> 
         )
 
 
-def _price_lines(db: Session, organisation_id: int, lines: list[LineInput], currency: str) -> list[dict]:
+def price_lines(db: Session, organisation_id: int, lines: list[LineInput], currency: str) -> list[dict]:
     """Validates every line and derives its amount and price flags -- the
     one place both create and edit price lines."""
     line_values: list[dict] = []
@@ -86,7 +86,7 @@ def _price_lines(db: Session, organisation_id: int, lines: list[LineInput], curr
     return line_values
 
 
-def _subtotal(line_values: list[dict], currency: str) -> Decimal:
+def subtotal_of(line_values: list[dict], currency: str) -> Decimal:
     return round_currency(sum((values["line_amount"] for values in line_values), Decimal("0")), currency)
 
 
@@ -107,9 +107,9 @@ def create_quotation(
     lines in one flush. Amounts are always derived here, from quantity x
     unit price rounded to the currency's minor unit; nothing the client
     sends about amounts is read. The caller commits."""
-    _check_requested_date(requested_delivery_date, quotation_date)
-    line_values = _price_lines(db, organisation_id, lines, currency)
-    subtotal = _subtotal(line_values, currency)
+    check_requested_date(requested_delivery_date, quotation_date)
+    line_values = price_lines(db, organisation_id, lines, currency)
+    subtotal = subtotal_of(line_values, currency)
 
     def build(number: str) -> Quotation:
         quotation = Quotation(
@@ -171,19 +171,19 @@ def update_quotation(
         changed.append("customer")
 
     if requested_delivery_date is not _UNSET and requested_delivery_date != quotation.requested_delivery_date:
-        _check_requested_date(requested_delivery_date, today)
+        check_requested_date(requested_delivery_date, today)
         quotation.requested_delivery_date = requested_delivery_date
         changed.append("requested_delivery_date")
 
     if lines is not None:
-        line_values = _price_lines(db, quotation.organisation_id, lines, quotation.currency)
+        line_values = price_lines(db, quotation.organisation_id, lines, quotation.currency)
         old = [(l.product_id, l.quantity, l.unit_of_measure_id, l.unit_price) for l in quotation.lines]
         new = [(v["product_id"], v["quantity"], v["unit_of_measure_id"], v["unit_price"]) for v in line_values]
         if old != new:
             quotation.lines.clear()
             db.flush()
             quotation.lines = [QuotationLine(**values) for values in line_values]
-            subtotal = _subtotal(line_values, quotation.currency)
+            subtotal = subtotal_of(line_values, quotation.currency)
             quotation.subtotal_amount = subtotal
             quotation.total_amount = subtotal
             quotation.price_approval_required = any(v["price_approval_required"] for v in line_values)
