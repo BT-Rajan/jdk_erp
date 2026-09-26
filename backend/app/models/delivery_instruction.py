@@ -12,13 +12,21 @@ order quantity x (1 + % / 100) less what fulfilled instructions delivered
 tranche, so the allowance can't multiply across shipments and later
 setting changes never alter an order that already has instructions.
 
+While pending, the warehouse may change a line's shipment quantity (in
+its stock unit; above the order's remaining permitted quantity only an
+Admin, with a reason) and records its pallets (Delivery D3). Pallets are
+handling information only -- never a unit, product, stock or conversion:
+`pallet_count_default` is the system suggestion (max(1, ceil(tonnes)) for
+products measured in mass, none otherwise), `pallet_count` the count used,
+`pallet_count_manual` whether the warehouse set it deliberately.
+
 Only `pending` is ever set yet; `fulfilled` is recognised so fulfilled
 quantities can be counted once a later pass records fulfilment. Nothing
-here moves or reserves stock, changes the Sales Order or counts pallets."""
+here moves or reserves stock or changes the Sales Order."""
 
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -65,6 +73,7 @@ class DeliveryInstructionLine(Base):
     __table_args__ = (
         UniqueConstraint("delivery_instruction_id", "sales_order_line_id", name="uq_delivery_instruction_lines_instruction_line"),
         CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("pallet_count >= 1", name="pallet_count_at_least_one"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -87,5 +96,10 @@ class DeliveryInstructionLine(Base):
     ordered_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     # This shipment's quantity, in the stock unit.
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    # Why an Admin allowed a quantity above the remaining permitted (D3).
+    quantity_override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pallet_count_default: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pallet_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pallet_count_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     delivery_instruction: Mapped[DeliveryInstruction] = relationship(back_populates="lines")

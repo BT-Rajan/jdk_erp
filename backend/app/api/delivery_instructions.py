@@ -1,8 +1,9 @@
 """Delivery Instructions (Delivery D2): shipment tranches of a Sales Order,
 created manually by warehouse staff. Every route needs the
 `inventory:deliver` grant (Admins always have it) and is scoped to the
-caller's organisation. Creation is audited. No fulfilment, stock movement,
-pallets or Sales Order change yet."""
+caller's organisation. Creation and every shipment change (quantity,
+pallets) are audited. No fulfilment, stock movement or Sales Order change
+yet."""
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session, selectinload
@@ -12,8 +13,9 @@ from app.core.database import get_db
 from app.core.errors import NotFoundError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
-from app.models.audit_event import DELIVERY_INSTRUCTION_CREATED, DELIVERY_MODULE
-from app.models.delivery_instruction import DeliveryInstruction
+from app.core.roles import ADMIN_ROLES
+from app.models.audit_event import DELIVERY_INSTRUCTION_CREATED, DELIVERY_MODULE, DELIVERY_SHIPMENT_UPDATED
+from app.models.delivery_instruction import DeliveryInstruction, DeliveryInstructionLine
 from app.models.sales_order import SalesOrder
 from app.models.user import User
 from app.schemas.delivery_instruction import (
@@ -21,6 +23,7 @@ from app.schemas.delivery_instruction import (
     DeliveryInstructionOut,
     DeliveryLinePositionOut,
     DeliveryPositionOut,
+    DeliveryShipmentUpdateRequest,
 )
 from app.schemas.pagination import PaginatedResponse
 from app.services import audit_service, delivery_instruction_service, inventory_scope
@@ -131,3 +134,61 @@ def create_delivery_instruction(
     db.commit()
     db.expire_all()
     return _query(db, current_user).filter(DeliveryInstruction.id == instruction.id).one()
+
+
+def _get_line(db: Session, user: User, instruction_id: int, line_id: int):
+    instruction = _query(db, user).filter(DeliveryInstruction.id == instruction_id).first()
+    line = (
+        db.query(DeliveryInstructionLine)
+        .filter(DeliveryInstructionLine.id == line_id, DeliveryInstructionLine.delivery_instruction_id == instruction_id)
+        .first()
+        if instruction is not None
+        else None
+    )
+    if line is None:
+        raise NotFoundError("Delivery instruction line not found.")
+    return instruction, line
+
+
+@router.patch("/{instruction_id}/lines/{line_id}", response_model=DeliveryInstructionOut)
+def update_shipment_line(
+    instruction_id: int,
+    line_id: int,
+    payload: DeliveryShipmentUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DeliveryInstruction:
+    """Changes a pending line's shipment quantity and/or pallet count
+    (Delivery D3). Above the order line's remaining permitted quantity
+    only an Admin, with a reason. Audited old -> new. Moves no stock."""
+    inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
+    instruction, line = _get_line(db, current_user, instruction_id, line_id)
+    updates = payload.model_dump(exclude_unset=True)
+    kwargs = {"pallet_count": updates["pallet_count"]} if "pallet_count" in updates else {}
+    changes = delivery_instruction_service.record_shipment(
+        db,
+        instruction,
+        line,
+        quantity=payload.quantity,
+        unit_of_measure_id=payload.unit_of_measure_id,
+        override_reason=payload.override_reason,
+        is_admin=current_user.role in ADMIN_ROLES,
+        **kwargs,
+    )
+    if changes:
+        audit_service.log_event(
+            db,
+            action=DELIVERY_SHIPMENT_UPDATED,
+            module=DELIVERY_MODULE,
+            organisation_id=current_user.organisation_id,
+            actor_user_id=current_user.id,
+            entity_type="delivery_instruction",
+            entity_id=instruction.id,
+            result="success",
+            details=f"number: {instruction.delivery_number}; " + "; ".join(changes),
+            ip_address=request.client.host if request.client else None,
+        )
+    db.commit()
+    db.expire_all()
+    return _query(db, current_user).filter(DeliveryInstruction.id == instruction_id).one()

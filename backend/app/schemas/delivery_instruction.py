@@ -25,6 +25,10 @@ class DeliveryInstructionLineOut(BaseModel):
     unit_of_measure_id: int
     ordered_quantity: Decimal
     quantity: Decimal
+    quantity_override_reason: str | None = None
+    pallet_count_default: int | None = None
+    pallet_count: int | None = None
+    pallet_count_manual: bool = False
 
 
 class DeliveryInstructionOut(BaseModel):
@@ -63,3 +67,16 @@ class DeliveryPositionOut(BaseModel):
     # False until the order's first Delivery Instruction locks the %.
     allowance_locked: bool
     lines: list[DeliveryLinePositionOut]
+
+
+class DeliveryShipmentUpdateRequest(BaseModel):
+    """A pending line's shipment quantity and/or pallets (Delivery D3).
+    Omitting `pallet_count` keeps a warehouse-set count (or follows the
+    default); sending null returns it to the default."""
+
+    quantity: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=4)
+    # Optional check: if sent, it must be the line's stock unit.
+    unit_of_measure_id: int | None = None
+    pallet_count: int | None = Field(default=None, ge=1, strict=True)
+    # Required when an Admin sets a quantity above the remaining permitted.
+    override_reason: str | None = Field(default=None, max_length=2000)

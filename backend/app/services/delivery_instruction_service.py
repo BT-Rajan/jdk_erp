@@ -17,21 +17,26 @@ all derived, never stored, and exact (quantities have 4 decimal places,
 the % 2, so no rounding is needed). A tranche above the remaining
 permitted quantity is flagged -- stopping it belongs to fulfilment.
 
+record_shipment (Delivery D3) changes a pending line's shipment quantity
+and pallets -- see its docstring.
+
 Records only: nothing moves or reserves stock, changes the Sales Order,
-fulfils, counts pallets or checks payment. The caller checks the
-permission, audits and commits."""
+fulfils or checks payment. The caller checks the permission, audits and
+commits."""
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, ValidationError
 from app.models.delivery_instruction import FULFILLED, PENDING, DeliveryInstruction, DeliveryInstructionLine
 from app.models.organisation import Organisation
+from app.models.product import Product
 from app.models.sales_order import HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
-from app.services import document_numbering
+from app.models.unit import UnitOfMeasure
+from app.services import document_numbering, uom_conversion
 
 DELIVERABLE_STATUSES = (HANDED_OFF, PARTIALLY_DELIVERED)
 _HUNDRED = Decimal("100")
@@ -118,6 +123,13 @@ def create(db: Session, order: SalesOrder, lines: list[LineInput], user_id: int,
     locked = order_allowance(db, order)
     allowance = locked if locked is not None else db.get(Organisation, order.organisation_id).delivery_scrap_allowance_percent
 
+    defaults = {
+        entry.sales_order_line_id: default_pallets(
+            db, order.organisation_id, db.get(UnitOfMeasure, order_lines[entry.sales_order_line_id].unit_of_measure_id), entry.quantity
+        )
+        for entry in lines
+    }
+
     def build(number: str) -> DeliveryInstruction:
         instruction = DeliveryInstruction(
             organisation_id=order.organisation_id,
@@ -135,6 +147,8 @@ def create(db: Session, order: SalesOrder, lines: list[LineInput], user_id: int,
                 unit_of_measure_id=order_lines[entry.sales_order_line_id].unit_of_measure_id,
                 ordered_quantity=order_lines[entry.sales_order_line_id].quantity,
                 quantity=entry.quantity,
+                pallet_count_default=defaults[entry.sales_order_line_id],
+                pallet_count=defaults[entry.sales_order_line_id],
             )
             for entry in lines
         ]
@@ -150,3 +164,125 @@ def create(db: Session, order: SalesOrder, lines: list[LineInput], user_id: int,
         today=today,
         label="delivery instruction",
     )
+
+
+# --- Shipment quantity and pallets (Delivery D3) --------------------------------
+
+# The organisation's tonne: its one active "mass" unit with one of these
+# codes (business decision, Delivery D3). None, or more than one, means no
+# pallet default -- the warehouse enters the count.
+TONNE_CODES = ("MT", "T", "TON", "TONNE")
+_UNSET = object()
+
+
+def tonne_unit(db: Session, organisation_id: int) -> UnitOfMeasure | None:
+    units = (
+        db.query(UnitOfMeasure)
+        .filter(
+            UnitOfMeasure.organisation_id == organisation_id,
+            UnitOfMeasure.is_active.is_(True),
+            UnitOfMeasure.dimension == "mass",
+            UnitOfMeasure.code.in_(TONNE_CODES),
+        )
+        .all()
+    )
+    return units[0] if len(units) == 1 else None
+
+
+def default_pallets(db: Session, organisation_id: int, unit: UnitOfMeasure | None, quantity: Decimal) -> int | None:
+    """max(1, ceil(quantity in tonnes)) through the existing unit
+    conversion -- a practical suggestion only, never a constraint on the
+    quantity. None when the unit can't be converted to tonnes."""
+    tonne = tonne_unit(db, organisation_id)
+    ratio = uom_conversion.resolve_conversion_ratio(unit, tonne) if unit is not None and tonne is not None else None
+    if ratio is None:
+        return None
+    return max(1, int((quantity * ratio).to_integral_value(rounding=ROUND_CEILING)))
+
+
+def record_shipment(
+    db: Session,
+    instruction: DeliveryInstruction,
+    line: DeliveryInstructionLine,
+    *,
+    quantity: Decimal | None,
+    unit_of_measure_id: int | None,
+    pallet_count=_UNSET,
+    override_reason: str | None,
+    is_admin: bool,
+) -> list[str]:
+    """Changes a pending line's shipment quantity and/or pallets. Returns
+    the changes as "field: old -> new" (empty if nothing changed).
+
+    Quantity: positive, in the line's stock unit (no conversion; the
+    product must still use it). Above the order line's remaining permitted
+    quantity (cumulative allowance) only an Admin, with a reason. The
+    Sales Order is never changed.
+    Pallets: a whole number >= 1. The default is recalculated from the
+    quantity every time; the count used follows it unless the warehouse
+    set one, which is kept until cleared by sending null. A product that
+    can't be converted to tonnes has no default, so its count must be
+    entered."""
+    if instruction.status != PENDING:
+        raise ConflictError(f"Only a pending delivery can be changed (this one is {instruction.status.replace('_', ' ')}).")
+    if unit_of_measure_id is not None and unit_of_measure_id != line.unit_of_measure_id:
+        raise ValidationError(
+            "The quantity must be in the product's stock unit; nothing is converted.",
+            fields={"unit_of_measure_id": "Must be the delivery line's stock unit."},
+        )
+    product = db.get(Product, line.product_id)
+    if product is None or product.unit_of_measure_id != line.unit_of_measure_id:
+        raise ConflictError("The product's stock unit has changed since this delivery was created; nothing is converted.")
+
+    new_quantity = quantity if quantity is not None else line.quantity
+    reason = (override_reason or "").strip() or None
+    position = line_position(db, db.get(SalesOrderLine, line.sales_order_line_id), instruction.scrap_allowance_percent)
+    if exceeds_permitted(position, new_quantity):
+        permitted = format(position.remaining_permitted_quantity.normalize(), "f")
+        if not is_admin:
+            raise ValidationError(
+                f"The quantity is above what may still be delivered on this order line ({permitted}).",
+                fields={"quantity": "Above the remaining permitted quantity."},
+            )
+        if reason is None:
+            raise ValidationError(
+                "An Admin override above the remaining permitted quantity needs a reason.",
+                fields={"override_reason": "Required above the remaining permitted quantity."},
+            )
+    else:
+        reason = None
+
+    new_default = default_pallets(db, instruction.organisation_id, db.get(UnitOfMeasure, line.unit_of_measure_id), new_quantity)
+    if pallet_count is _UNSET:
+        manual = line.pallet_count_manual
+        count = line.pallet_count if manual else new_default
+    elif pallet_count is None:
+        manual, count = False, new_default
+    else:
+        if isinstance(pallet_count, bool) or not isinstance(pallet_count, int) or pallet_count < 1:
+            raise ValidationError("Pallets must be a whole number of at least 1.", fields={"pallet_count": "At least 1."})
+        manual, count = True, pallet_count
+    if count is None:
+        raise ValidationError(
+            "This product can't be converted to tonnes -- enter the pallet count.",
+            fields={"pallet_count": "Required for this product."},
+        )
+
+    changes = []
+    for field, old, new in (
+        ("quantity", line.quantity, new_quantity),
+        ("pallet_count", line.pallet_count, count),
+        ("pallet_count_default", line.pallet_count_default, new_default),
+        ("pallet_count_manual", line.pallet_count_manual, manual),
+        ("quantity_override_reason", line.quantity_override_reason, reason),
+    ):
+        if old != new:
+            changes.append(f"line {line.sales_order_line_id} {field}: {old} -> {new}")
+    line.quantity = new_quantity
+    line.pallet_count = count
+    line.pallet_count_default = new_default
+    line.pallet_count_manual = manual
+    line.quantity_override_reason = reason
+    db.add(line)
+    db.flush()
+    return changes
