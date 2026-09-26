@@ -2,7 +2,7 @@ import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { cn } from '@/lib/cn'
 import { Spinner } from './Spinner'
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost'
+export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'gradient'
 export type ButtonSize = 'md' | 'sm'
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -18,6 +18,11 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   secondary: 'bg-ink-800 text-gold-100 border border-ink-600 hover:bg-ink-700',
   danger: 'bg-danger-500 text-white hover:bg-danger-500/90',
   ghost: 'bg-transparent text-gold-100 hover:bg-ink-800',
+  // Reserved for hero moments (the auth screens' primary CTA today) --
+  // everyday actions keep the flat `primary` look so the app's ordinary
+  // buttons stay consistent per docs/DESIGN_SYSTEM.md.
+  gradient:
+    'bg-gradient-to-b from-gold-300 to-gold-600 text-ink-950 shadow-glow-gold hover:from-gold-200 hover:to-gold-500',
 }
 
 const SIZE_CLASSES: Record<ButtonSize, string> = {
