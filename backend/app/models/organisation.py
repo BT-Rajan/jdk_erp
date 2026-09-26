@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, String, Text
+from datetime import time
+
+from sqlalchemy import Boolean, String, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -24,3 +26,10 @@ class Organisation(Base, TimestampMixin):
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="KWD")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Kuwait")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
+    # Sales same-day delivery cut-off, a Kuwait wall-clock time
+    # (app/services/working_calendar_service.py). 14:00 is only the
+    # default -- Admin changes it via PUT /api/organisations/me/working-calendar/cutoff,
+    # never through the general organisation edit above.
+    same_day_cutoff_time: Mapped[time] = mapped_column(
+        Time, nullable=False, default=time(14, 0), server_default="14:00:00"
+    )
