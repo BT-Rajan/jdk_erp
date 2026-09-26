@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { FileText, Home, Menu, MessageCircle, Package, Settings, ShoppingCart, Wallet } from 'lucide-react'
+import { Factory, FileText, Home, Menu, MessageCircle, Package, Settings, ShoppingCart, Wallet } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { AssistantDrawer } from '@/components/assistant/AssistantDrawer'
 import { ActionMenu } from '@/components/ui/ActionMenu'
@@ -50,6 +50,12 @@ const NAV_ENTRIES: NavEntry[] = [
       { label: 'Finished Goods Adjustments', to: '/inventory/finished-goods-adjustments' },
       { label: 'Deliveries', to: '/deliveries' },
     ],
+  },
+  {
+    type: 'group',
+    label: 'Production',
+    icon: <Factory size={16} />,
+    items: [{ label: 'Requirements', to: '/production/requirements' }],
   },
   {
     type: 'group',

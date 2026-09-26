@@ -23,13 +23,20 @@ order is fulfilment's source of truth, but this module reserves,
 produces, moves, bills and delivers nothing."""
 
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, ValidationError
 from app.models.quotation import ACCEPTED, CONVERTED, Quotation
 from app.models.sales_order import CANCELLED, HANDED_OFF, HANDOFF_AUTOMATIC, SalesOrder, SalesOrderLine
-from app.services import document_numbering, production_requirement_service, quotation_readiness_service, quotation_service
+from app.services import (
+    document_numbering,
+    fg_allocation_service,
+    production_requirement_service,
+    quotation_readiness_service,
+    quotation_service,
+)
 
 _UNSET = object()
 
@@ -54,6 +61,9 @@ def check_handoff_prerequisites(db: Session, quotation: Quotation, now: datetime
             f"The quotation is not ready for a Sales Order ({readiness.status}: {', '.join(readiness.reason_codes)})."
         )
     return readiness
+
+
+_ZERO = Decimal("0")
 
 
 def convert(db: Session, quotation: Quotation, user_id: int, now: datetime) -> SalesOrder:
@@ -136,13 +146,23 @@ def admin_update(
     customer_id: int | None = None,
     requested_delivery_date=_UNSET,
     lines: list[quotation_service.LineInput] | None = None,
-) -> list[str]:
+    confirm_fulfilment_change: bool = False,
+) -> tuple[list[str], list[production_requirement_service.RequirementChange], list[fg_allocation_service.AllocationChange]]:
     """Admin's change to a handed-off order (the reason is audited by the
     caller): the requested date, and each line's quantity and unit price,
     re-validated and re-priced like quotation lines. The customer,
     products, units, line count, number, status and source quotation never
     change. Returns every change as "field: old -> new" (empty if
-    nothing changed)."""
+    nothing changed), and the Production Requirement and FG allocation
+    changes it caused.
+
+    A quantity change on a line already assessed at hand-off is refused
+    unless the Admin confirms it (`confirm_fulfilment_change`, Production
+    P1). Then, in this one operation: any FG claim above the new quantity
+    returns to free stock, and the line's Production Requirement follows
+    ordered - delivered - allocated (production_requirement_service.
+    recalculate_line). The hand-off assessment is never rewritten. A
+    handed-off order has nothing delivered yet."""
     if order.status != HANDED_OFF:
         raise ConflictError(f"Only a handed-off order can be changed (this one is {order.status}).")
     if customer_id is not None and customer_id != order.customer_id:
@@ -151,6 +171,8 @@ def admin_update(
             fields={"customer_id": "Fixed to the source quotation's customer."},
         )
     changes: list[str] = []
+    requirement_changes: list[production_requirement_service.RequirementChange] = []
+    allocation_changes: list[fg_allocation_service.AllocationChange] = []
     if requested_delivery_date is not _UNSET and requested_delivery_date != order.requested_delivery_date:
         quotation_service.check_requested_date(requested_delivery_date, today)
         changes.append(f"requested_delivery_date: {order.requested_delivery_date} -> {requested_delivery_date}")
@@ -168,17 +190,24 @@ def admin_update(
             )
         assessed = production_requirement_service.lines_with_fulfilment(db, order)
         affected = [line.line_number for v, line in zip(values, order.lines) if v["quantity"] != line.quantity and line.id in assessed]
-        if affected:
+        if affected and not confirm_fulfilment_change:
             raise ConflictError(
                 "The quantity of line(s) "
                 + ", ".join(str(n) for n in affected)
                 + " was already assessed for fulfilment (stock / production requirement). "
-                "Resolve the affected fulfilment first; dates and prices can still change."
+                "Confirm the production demand change to go ahead; dates and prices can change without it."
             )
         for v, line in zip(values, order.lines):
             if v["quantity"] != line.quantity:
                 changes.append(f"line {line.line_number} quantity: {_plain(line.quantity)} -> {_plain(v['quantity'])}")
                 line.quantity = v["quantity"]
+                if line.id in assessed:
+                    clamped = fg_allocation_service.clamp_to_line(db, line, _ZERO, "Sales Order line quantity reduced")
+                    if clamped is not None:
+                        allocation_changes.append(clamped)
+                    change = production_requirement_service.recalculate_line(db, order, line, _ZERO)
+                    if change is not None:
+                        requirement_changes.append(change)
             if v["unit_price"] != line.unit_price:
                 changes.append(f"line {line.line_number} unit_price: {_plain(line.unit_price)} -> {_plain(v['unit_price'])}")
                 line.unit_price = v["unit_price"]
@@ -190,4 +219,4 @@ def admin_update(
         order.total_amount = subtotal
     db.add(order)
     db.flush()
-    return changes
+    return changes, requirement_changes, allocation_changes

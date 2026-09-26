@@ -47,6 +47,10 @@ VIEW = "view"
 # Delivery Instructions (Delivery D2): create and read shipment tranches of
 # Sales Orders -- warehouse work, granted independently of stock adjustment.
 DELIVER = "deliver"
+# FG allocation (Reservation + FG Allocation foundation): claim free
+# Finished Goods for a Sales Order line. Releasing a claim is Admin-only
+# (S15.1: "admin should be able to release it").
+ALLOCATE = "allocate"
 
 
 def can_perform(db: Session, user: User, action: str) -> bool:

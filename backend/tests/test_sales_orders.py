@@ -172,9 +172,9 @@ def test_after_handoff_admin_changes_date_quantity_and_price_with_history(client
     ):
         assert fragment in event.details
     # S15.1: the quantity was assessed for fulfilment at hand-off, so Admin
-    # must resolve that before it can change.
+    # must confirm the production demand change (Production P1) first.
     more = client.patch(url, json={"reason": "Customer wants 5", "lines": [_line(widget, "5", "95")]}, headers=admin)
-    assert more.status_code == 409 and "Resolve the affected fulfilment" in more.json()["error"]["message"]
+    assert more.status_code == 409 and "Confirm the production demand change" in more.json()["error"]["message"]
 
     client.post(f"{url}/cancel", json={"reason": "Lost"}, headers=admin)
     assert client.patch(url, json=change, headers=admin).status_code == 409

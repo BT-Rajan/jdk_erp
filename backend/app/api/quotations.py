@@ -6,10 +6,13 @@ itself. There is no quotation-specific ownership or permission key."""
 
 import json
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.api import fg_allocations as fg_allocations_api
 from app.api.deps import get_current_user, require_admin
 from app.core.roles import ADMIN_ROLES
 from app.core.database import get_db
@@ -35,6 +38,7 @@ from app.models.audit_event import (
     PRODUCTION_MODULE,
 )
 from app.models.customer import Customer
+from app.models.fg_allocation import FgAllocation
 from app.models.feasibility_check import FeasibilityCheck
 from app.models.quotation import ACCEPTED, CONVERTED, DRAFT, Quotation
 from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
@@ -63,8 +67,10 @@ from app.services import (
     feasibility_record_service,
     feasibility_service,
     quotation_readiness_service,
+    fg_allocation_service,
     quotation_service,
     sales_document_service,
+    sales_reservation_service,
     sales_order_service,
     same_day_fg_service,
 )
@@ -234,6 +240,9 @@ def update_quotation(
             ),
             ip_address=request.client.host if request.client else None,
         )
+        # An accepted quotation's reservations follow its lines.
+        reservations = sales_reservation_service.sync_for_quotation(db, quotation)
+        fg_allocations_api.audit_reservation_changes(db, request, current_user, reservations, f"quotation: {quotation.quotation_number}")
         # A new Quotation PDF for the saved content; upload_file commits.
         sales_document_service.store_quotation_pdf(db, quotation, current_user.id)
     else:
@@ -579,6 +588,10 @@ def accept_quotation(
         raise AccessDeniedError("Only the salesman who owns this customer can accept the quotation.")
     quotation_service.accept(quotation, current_user.id, now_jdk().date())
     _audit(db, request, current_user, QUOTATION_ACCEPTED, quotation, f"total: {quotation.total_amount} {quotation.currency}")
+    # The customer's commitment: a commercial reservation per line (never
+    # physical stock).
+    reservations = sales_reservation_service.reserve_for_quotation(db, quotation)
+    fg_allocations_api.audit_reservation_changes(db, request, current_user, reservations, f"quotation: {quotation.quotation_number}")
     db.commit()
     db.expire_all()
     return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user, with_pdf=True)
@@ -598,6 +611,8 @@ def reject_quotation(
     if quotation.status == DRAFT and not _can_reject(db, quotation, current_user):
         raise AccessDeniedError("Only the owning salesman or their team head can reject the quotation.")
     quotation_service.reject(quotation, current_user.id, payload.reason)
+    released = sales_reservation_service.release_for_quotation(db, quotation, f"quotation rejected: {payload.reason}")
+    fg_allocations_api.audit_reservation_changes(db, request, current_user, released, f"quotation: {quotation.quotation_number}")
     _audit(db, request, current_user, QUOTATION_REJECTED, quotation, f"reason: {payload.reason}")
     db.commit()
     db.expire_all()
@@ -642,6 +657,14 @@ def convert_to_sales_order(
         raise AccessDeniedError("Only the salesman who owns this customer can convert the quotation.")
     order = sales_order_service.convert(db, quotation, current_user.id, now_jdk())
     _audit(db, request, current_user, QUOTATION_CONVERTED, quotation, f"sales_order: {order.order_number}")
+    # The reservation now belongs to the order; FG allocated at hand-off.
+    linked = sales_reservation_service.link_to_order(db, quotation, order)
+    fg_allocations_api.audit_reservation_changes(db, request, current_user, linked, f"sales_order: {order.order_number}")
+    allocated = [
+        fg_allocation_service.AllocationChange(order.id, a.sales_order_line_id, a.product_id, "allocated", Decimal("0"), a.quantity)
+        for a in db.query(FgAllocation).filter(FgAllocation.sales_order_id == order.id, FgAllocation.quantity > 0).order_by(FgAllocation.id)
+    ]
+    fg_allocations_api.audit_allocation_changes(db, request, current_user, allocated, f"sales_order: {order.order_number}; at hand-off")
     audit_service.log_event(
         db,
         action=SALES_ORDER_CREATED,

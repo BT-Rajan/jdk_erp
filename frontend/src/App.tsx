@@ -27,6 +27,7 @@ import { InventoryOpeningStockPage } from '@/pages/InventoryOpeningStockPage'
 import { InventoryReconciliationPage } from '@/pages/InventoryReconciliationPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
+import { ProductionRequirementsPage } from '@/pages/ProductionRequirementsPage'
 import { ProductsPage } from '@/pages/ProductsPage'
 import { MachinesPage } from '@/pages/MachinesPage'
 import { ProductionLinesPage } from '@/pages/ProductionLinesPage'
@@ -103,6 +104,7 @@ export function App() {
           <Route path="/inventory/reconciliation" element={<InventoryReconciliationPage />} />
           <Route path="/inventory/finished-goods" element={<FinishedGoodsStockPositionPage />} />
           <Route path="/inventory/finished-goods-adjustments" element={<FinishedGoodsAdjustmentsPage />} />
+          <Route path="/production/requirements" element={<ProductionRequirementsPage />} />
           <Route path="/deliveries" element={<DeliveriesPage />} />
           <Route path="/deliveries/orders/:orderId" element={<DeliveryOrderPage />} />
           <Route path="/deliveries/:instructionId" element={<DeliveryInstructionPage />} />

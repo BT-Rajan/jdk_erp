@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.api import fg_allocations as fg_allocations_api
+from app.api import production_requirements as production_requirements_api
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.entity_access import register_entity_access_check
@@ -30,9 +32,12 @@ from app.services import (
     audit_service,
     customer_scope,
     delivery_instruction_service,
+    fg_allocation_service,
+    production_requirement_service,
     quotation_service,
     sales_document_service,
     sales_order_service,
+    sales_reservation_service,
 )
 
 router = APIRouter(prefix="/api/sales-orders", tags=["sales-orders"])
@@ -63,6 +68,7 @@ def order_out(db: Session, order: SalesOrder, user: User, *, with_pdf: bool = Fa
     out = SalesOrderOut.model_validate(order)
     for line in out.lines:
         line.fulfilled_quantity = delivery_instruction_service.fulfilled_quantity(db, line.id)
+        line.allocated_quantity = fg_allocation_service.line_allocation(db, line.id)
         line.remaining_quantity = line.quantity - line.fulfilled_quantity
     out.can_cancel = _admin_may_act(order, user)
     out.can_edit = _admin_may_act(order, user)
@@ -155,8 +161,21 @@ def cancel_sales_order(
     order = _get_visible_order(db, order_id, current_user)
     if current_user.role not in ADMIN_ROLES:
         raise AccessDeniedError("Only Admin can cancel a Sales Order after it has been handed off to fulfilment.")
+    # Row lock: a concurrent delivery or allocation for this order waits.
+    order = db.query(SalesOrder).filter(SalesOrder.id == order.id).with_for_update().one()
     sales_order_service.cancel(order, current_user.id, payload.reason)
     _audit(db, request, current_user, SALES_ORDER_CANCELLED, order, f"reason: {payload.reason}")
+    # Production P1: its demand is withdrawn -- active requirements are
+    # cancelled (kept, never deleted); nothing moves in inventory.
+    requirement_changes = production_requirement_service.cancel_for_order(db, order, payload.reason)
+    production_requirements_api.audit_changes(db, request, current_user, requirement_changes, order.order_number)
+    # Its remaining FG allocation returns to free stock and its reservation
+    # is released -- no stock moves, no production demand is created.
+    context = f"sales_order: {order.order_number}"
+    released = fg_allocation_service.release_for_order(db, order, f"Sales Order cancelled: {payload.reason}")
+    fg_allocations_api.audit_allocation_changes(db, request, current_user, released, context)
+    reservations = sales_reservation_service.release_for_order(db, order, f"Sales Order cancelled: {payload.reason}")
+    fg_allocations_api.audit_reservation_changes(db, request, current_user, reservations, context)
     db.commit()
     db.expire_all()
     return order_out(db, _get_visible_order(db, order_id, current_user), current_user, with_pdf=True)
@@ -189,11 +208,25 @@ def update_sales_order(
             )
             for line in payload.lines
         ]
-    changes = sales_order_service.admin_update(
-        db, order, today=now_jdk().date(), customer_id=updates.get("customer_id"), lines=lines, **kwargs
+    changes, requirement_changes, allocation_changes = sales_order_service.admin_update(
+        db,
+        order,
+        today=now_jdk().date(),
+        customer_id=updates.get("customer_id"),
+        lines=lines,
+        confirm_fulfilment_change=payload.confirm_fulfilment_change,
+        **kwargs,
     )
     if changes:
         _audit(db, request, admin, SALES_ORDER_UPDATED, order, f"changes: {'; '.join(changes)}; reason: {payload.reason}")
+        production_requirements_api.audit_changes(db, request, admin, requirement_changes, order.order_number)
+        # A claim above a line's new quantity went back to free FG; the
+        # reservation follows the quantity.
+        context = f"sales_order: {order.order_number}"
+        fg_allocations_api.audit_allocation_changes(db, request, admin, allocation_changes, context)
+        for line in order.lines:
+            followed = sales_reservation_service.follow_line_quantity(db, line)
+            fg_allocations_api.audit_reservation_changes(db, request, admin, [followed] if followed else [], context)
         # A new Order Confirmation PDF for the changed order (commits).
         sales_document_service.store_sales_order_pdf(db, order, admin.id)
     else:

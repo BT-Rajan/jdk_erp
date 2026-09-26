@@ -79,20 +79,39 @@ describe('SalesOrderDetailPage', () => {
     expect(body).not.toHaveProperty('customer_id')
   })
 
-  it('shows an assessed line quantity read-only while the price stays editable (S16.1)', async () => {
+  it('changes a price on an assessed line without any confirmation', async () => {
     renderPage()
     await userEvent.click(await screen.findByRole('button', { name: 'Edit (Admin)' }))
 
-    expect(screen.queryByRole('spinbutton', { name: 'Line 1 quantity' })).not.toBeInTheDocument()
-    expect(await screen.findByLabelText('Line 1 quantity (read-only)')).toHaveTextContent('3')
-    expect(screen.getByText('Fixed: already assessed for fulfilment.')).toBeInTheDocument()
+    expect(screen.getByText('Assessed at hand-off: a change needs confirmation.')).toBeInTheDocument()
     await userEvent.clear(screen.getByRole('spinbutton', { name: 'Line 1 unit price' }))
     await userEvent.type(screen.getByRole('spinbutton', { name: 'Line 1 unit price' }), '95')
     await userEvent.type(screen.getByLabelText(/reason for the change/i), 'Agreed discount')
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
 
     await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1))
-    expect(patchMock.mock.calls[0][1].lines).toEqual([{ product_id: 7, unit_of_measure_id: 2, quantity: '3', unit_price: '95' }])
+    const body = patchMock.mock.calls[0][1]
+    expect(body.lines).toEqual([{ product_id: 7, unit_of_measure_id: 2, quantity: '3', unit_price: '95' }])
+    expect(body).not.toHaveProperty('confirm_fulfilment_change')
+  })
+
+  it('needs the Admin to confirm the production demand change for an assessed quantity (Production P1)', async () => {
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit (Admin)' }))
+
+    await userEvent.clear(screen.getByRole('spinbutton', { name: 'Line 1 quantity' }))
+    await userEvent.type(screen.getByRole('spinbutton', { name: 'Line 1 quantity' }), '5')
+    await userEvent.type(screen.getByLabelText(/reason for the change/i), 'Customer wants 5')
+    const save = screen.getByRole('button', { name: 'Save Changes' })
+    expect(save).toBeDisabled()
+    await userEvent.click(screen.getByRole('checkbox', { name: /production demand/ }))
+    await userEvent.click(save)
+
+    await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1))
+    const body = patchMock.mock.calls[0][1]
+    expect(body.lines[0].quantity).toBe('5')
+    expect(body.confirm_fulfilment_change).toBe(true)
   })
 
   it('keeps quantity editable on a line that was never assessed', async () => {

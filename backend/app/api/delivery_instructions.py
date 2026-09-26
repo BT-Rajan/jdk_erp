@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.api import fg_allocations as fg_allocations_api
+from app.api import production_requirements as production_requirements_api
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.entity_access import register_entity_access_check
@@ -41,7 +43,14 @@ from app.schemas.delivery_instruction import (
 )
 from app.schemas.file import FileOut
 from app.schemas.pagination import PaginatedResponse
-from app.services import audit_service, delivery_instruction_service, inventory_scope, sales_document_service
+from app.services import (
+    audit_service,
+    delivery_instruction_service,
+    inventory_scope,
+    production_requirement_service,
+    sales_document_service,
+    sales_reservation_service,
+)
 
 router = APIRouter(prefix="/api/delivery-instructions", tags=["delivery-instructions"])
 
@@ -289,12 +298,22 @@ def fulfil_delivery_instruction(
     request is a 409 and changes nothing."""
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     instruction = _get_instruction(db, current_user, instruction_id)
-    movements, status_change = delivery_instruction_service.fulfil(db, instruction, current_user.id)
+    movements, status_change, allocation_changes = delivery_instruction_service.fulfil(db, instruction, current_user.id)
     issued = "; ".join(
         f"line {line.sales_order_line_id}: {line.quantity} (finished goods movement {movement.id})"
         for line, movement in zip(instruction.lines, movements)
     )
     _audit_transition(db, request, current_user, DELIVERY_FULFILLED, instruction, f"pending -> fulfilled; {issued}")
+    # Production Requirements follow what is still uncovered after this
+    # delivery (ordered - delivered - allocated).
+    order = db.get(SalesOrder, instruction.sales_order_id)
+    delivered = {line.id: delivery_instruction_service.fulfilled_quantity(db, line.id) for line in order.lines}
+    requirement_changes = production_requirement_service.recalculate_order(db, order, delivered)
+    production_requirements_api.audit_changes(db, request, current_user, requirement_changes, order.order_number)
+    context = f"sales_order: {order.order_number}; delivery {instruction.delivery_number}"
+    fg_allocations_api.audit_allocation_changes(db, request, current_user, allocation_changes, context)
+    reservations = sales_reservation_service.mark_fulfilled(db, order, delivered)
+    fg_allocations_api.audit_reservation_changes(db, request, current_user, reservations, context)
     if status_change is not None:
         audit_service.log_event(
             db,

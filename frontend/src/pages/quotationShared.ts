@@ -155,6 +155,8 @@ export interface SalesOrderLine {
   line_amount: string
   /** Delivery progress, derived on the server from fulfilled deliveries. */
   fulfilled_quantity?: string
+  /** Open claim on physical FG for this line. */
+  allocated_quantity?: string
   remaining_quantity?: string | null
 }
 
