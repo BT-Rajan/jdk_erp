@@ -8,6 +8,7 @@ import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentSettingsPage } from '@/pages/DocumentSettingsPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
+import { WorkingCalendarSettingsPage } from '@/pages/WorkingCalendarSettingsPage'
 import { FinancePaymentsPage } from '@/pages/FinancePaymentsPage'
 import { FinishedGoodsAdjustmentsPage } from '@/pages/FinishedGoodsAdjustmentsPage'
 import { FinishedGoodsStockPositionPage } from '@/pages/FinishedGoodsStockPositionPage'
@@ -99,6 +100,7 @@ export function App() {
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />
           <Route path="/settings/documents" element={<DocumentSettingsPage />} />
+          <Route path="/settings/working-calendar" element={<WorkingCalendarSettingsPage />} />
           <Route path="/styleguide" element={<StyleGuidePage />} />
         </Route>
       </Routes>

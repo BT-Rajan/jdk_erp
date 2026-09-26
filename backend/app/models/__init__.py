@@ -11,6 +11,7 @@ from app.models.job import Job
 from app.models.machine import Machine
 from app.models.notification import Notification
 from app.models.organisation import Organisation
+from app.models.organisation_holiday import OrganisationHoliday
 from app.models.product import Product
 from app.models.production_line import ProductionLine
 from app.models.purchase_order import (
@@ -39,6 +40,7 @@ from app.models.warehouse import Warehouse
 
 __all__ = [
     "Organisation",
+    "OrganisationHoliday",
     "Category",
     "Customer",
     "DocumentTemplate",

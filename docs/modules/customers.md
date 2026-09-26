@@ -89,8 +89,10 @@ page-level write access; only editing an *existing* record is
 admin-only, see §7). A `team_member`'s new customer is always
 auto-assigned to themselves, silently overriding any client-supplied
 `assigned_to_user_id` — they can create their own customers but can
-never assign one to someone else. A `manager`/`admin` may specify any
-active user in their own organisation, or leave it unassigned. No
+never assign one to someone else. An `admin` may specify any active
+user in their own organisation, or leave it unassigned; a `manager` may
+assign it to themselves, leave it unassigned, or assign it to a member
+of a team they head (Sales S2 — see §10). No
 approval workflow — a customer is immediately usable once created (see
 the audit for why jdk_clean's onboarding-approval workflow isn't ported).
 
@@ -156,11 +158,23 @@ Reuses the existing Foundation mechanisms directly: `app/core/list_query.py`'s
 on the frontend — the same composition `CategoriesPage`/
 `UnitsOfMeasurePage` already use. **Edit and status-change are
 admin-gated** (`require_admin`, no new authorization layer);
-**reassignment is admin-or-manager** (`_require_can_assign`, a plain
-role check mirroring jdk_clean's own `is_admin OR is_department_head`
-gate, not a new scope-table action); **create and view** are open to
+**reassignment is Department Head only** (Sales S2,
+`customer_scope.can_reassign_customer`): `admin`/`super_admin` anywhere
+in the organisation; a `manager` only within a team they head — one team
+must contain the manager, the current owner and the new owner (so a
+manager cannot touch an unassigned customer or un-assign one). It
+changes only `assigned_to_user_id`; creation and earlier audit events
+are never rewritten; **create and view** are open to
 every authenticated organisation member, with view further narrowed by
 the caller's resolved scope.
+
+**Sales records** (quotations, orders, ... once built) have no ownership
+of their own: Sales record → Customer → `assigned_to_user_id` → the
+caller's scope per §4. Every Sales endpoint reuses
+`customer_scope.get_accessible_customer` (object-level: 404 when out of
+scope, including a `customer_id` named in a create/update body) and
+`customer_scope.scope_by_customer` (list/lookup queries) — no separate
+Sales permission key or ownership column.
 
 ## 11. Customer list UX
 
@@ -192,8 +206,8 @@ enforced on every query (never a client-supplied `organisation_id`);
 view-scope is resolved server-side per §4; mutation authorization is
 enforced server-side per §10. Tested for both allowed and deliberately
 unauthorized access in every direction: a `team_member` cannot edit,
-deactivate, or reassign (403); a `manager` cannot edit or deactivate but
-can reassign; cross-organisation ids 404 on every endpoint including
+deactivate, or reassign (403); a `manager` cannot edit or deactivate and
+can reassign only within a team they head (403 otherwise); cross-organisation ids 404 on every endpoint including
 mutations; a customer outside view scope 404s rather than 403ing.
 
 ## 14. Performance

@@ -78,6 +78,7 @@ const ADMIN_NAV_ENTRIES: NavEntry[] = [
       { label: 'Users', to: '/users' },
       { label: 'Email', to: '/settings/email' },
       { label: 'Documents', to: '/settings/documents' },
+      { label: 'Working calendar', to: '/settings/working-calendar' },
     ],
   },
 ]
