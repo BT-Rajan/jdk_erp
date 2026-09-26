@@ -43,14 +43,12 @@ _MAX_CODE_ATTEMPTS = 5
 
 
 def _require_can_assign(user: User = Depends(get_current_user)) -> User:
-    """Reassignment is deliberately narrower than general view access
-    (docs/modules/customers.md #3/#4) -- a team_member can create and
-    view their own customers but never reassign one, mirroring
-    jdk_clean's real is_admin-or-department_head gate
-    (docs/audit/CUSTOMERS_AUDIT.md) rather than routing this one
-    business rule through the generic scope engine."""
+    """Coarse gate only: a team_member can never reassign a customer,
+    including their own. Whether an admin/manager may reassign *this*
+    customer to *this* user is the Department Head rule in
+    customer_scope.can_reassign_customer, checked in the handler."""
     if user.role not in ADMIN_ROLES and user.role != MANAGER:
-        raise AccessDeniedError("Only an admin or manager can assign customers.")
+        raise AccessDeniedError("Only an admin or department head can assign customers.")
     return user
 
 
@@ -67,14 +65,9 @@ def _get_customer_in_org(db: Session, customer_id: int, organisation_id: int) ->
 
 def _get_visible_customer(db: Session, customer_id: int, current_user: User) -> Customer:
     """404, not 403, for a customer that exists but is out of the
-    caller's view scope -- same reasoning as a cross-organisation id
-    (never confirm a record's existence to a caller who can't see it),
-    directly adopted from jdk_clean's own real, deliberate choice here
-    (docs/audit/CUSTOMERS_AUDIT.md)."""
-    customer = _get_customer_in_org(db, customer_id, current_user.organisation_id)
-    if not customer_scope.can_view_customer(db, current_user, customer):
-        raise NotFoundError("Customer not found.")
-    return customer
+    caller's view scope -- see customer_scope.get_accessible_customer,
+    the same object-level check every Sales endpoint reuses."""
+    return customer_scope.get_accessible_customer(db, current_user, customer_id)
 
 
 def _generate_customer_code(db: Session, organisation_id: int) -> str:
@@ -154,6 +147,8 @@ def create_customer(
                 "assigned_to_user_id must be an active user in your organisation.",
                 fields={"assigned_to_user_id": "Not a valid user in your organisation."},
             )
+        if not customer_scope.can_assign_new_customer(db, current_user, assigned_to_user_id):
+            raise AccessDeniedError("You can only assign a customer to a member of a team you manage.")
 
     if payload.phone is not None:
         duplicate = (
@@ -290,10 +285,13 @@ def assign_customer(
     user: User = Depends(_require_can_assign),
     db: Session = Depends(get_db),
 ) -> Customer:
-    """Admin-or-manager-gated (docs/modules/customers.md #3) -- a
-    team_member can never reassign a customer, including their own.
-    `assigned_to_user_id: null` explicitly un-assigns."""
-    customer = _get_customer_in_org(db, customer_id, user.organisation_id)
+    """Department Head reassignment (customer_scope.can_reassign_customer):
+    admin/super_admin anywhere in the organisation; a manager only within
+    a team they head. A customer outside the caller's scope is a 404,
+    same as a read. `assigned_to_user_id: null` un-assigns (admin only).
+    Only the current ownership pointer changes -- the customer's
+    creation event and every earlier audit record stay as they were."""
+    customer = _get_visible_customer(db, customer_id, user)
 
     if payload.assigned_to_user_id is not None:
         assignee = (
@@ -310,6 +308,8 @@ def assign_customer(
                 "assigned_to_user_id must be an active user in your organisation.",
                 fields={"assigned_to_user_id": "Not a valid user in your organisation."},
             )
+    if not customer_scope.can_reassign_customer(db, user, customer, payload.assigned_to_user_id):
+        raise AccessDeniedError("You can only reassign customers within a team you manage.")
 
     old_assignee = customer.assigned_to_user_id
     customer.assigned_to_user_id = payload.assigned_to_user_id

@@ -202,7 +202,12 @@ def test_customer_code_is_auto_generated_and_never_client_supplied(client, activ
     assert response.json()["code"].startswith("3")
 
 
-def test_manager_can_assign_customer_to_someone_else_at_create(client, db_session, organisation, manager_user, active_user):
+def test_manager_can_assign_customer_to_someone_else_at_create(
+    client, db_session, organisation, manager_user, active_user, sales_team
+):
+    # A department head may assign a new customer to a member of a team they head.
+    db_session.add_all([UserTeam(user_id=manager_user.id, team_id=sales_team.id), UserTeam(user_id=active_user.id, team_id=sales_team.id)])
+    db_session.commit()
     headers = _login_headers(client, "manager_person")
     response = client.post(
         "/api/customers", json={"name": "New Co", "assigned_to_user_id": active_user.id}, headers=headers
@@ -346,8 +351,11 @@ def test_team_member_cannot_assign_customer(client, active_user, db_session, org
     assert response.status_code == 403
 
 
-def test_manager_can_assign_customer(client, manager_user, active_user, db_session, organisation):
-    customer = _make_customer(db_session, organisation, name="Existing")
+def test_manager_can_assign_customer(client, manager_user, active_user, db_session, organisation, sales_team):
+    # A department head reassigns within a team they head.
+    db_session.add_all([UserTeam(user_id=manager_user.id, team_id=sales_team.id), UserTeam(user_id=active_user.id, team_id=sales_team.id)])
+    db_session.commit()
+    customer = _make_customer(db_session, organisation, name="Existing", assigned_to_user_id=manager_user.id)
     headers = _login_headers(client, "manager_person")
     response = client.patch(
         f"/api/customers/{customer.id}/assign", json={"assigned_to_user_id": active_user.id}, headers=headers
