@@ -40,6 +40,16 @@ export interface Quotation {
   readiness_status: string | null
   /** Server's answer: only the salesman owning the customer may edit a draft. */
   can_edit: boolean
+  valid_until: string
+  accepted_at: string | null
+  rejected_at: string | null
+  rejection_reason: string | null
+  /** All computed on the server for the current user (S12). */
+  is_expired: boolean
+  order_eligible: boolean
+  can_accept: boolean
+  can_reject: boolean
+  can_renew: boolean
   created_at: string
   updated_at: string
   lines: QuotationLine[]
@@ -113,4 +123,16 @@ export const REASON_LABELS: Record<string, string> = {
 
 export function reasonLabel(code: string): string {
   return REASON_LABELS[code] ?? code
+}
+
+export const STATUS_LABELS: Record<string, string> = {
+  draft: 'Draft',
+  accepted: 'Accepted',
+  rejected: 'Rejected',
+}
+
+export const STATUS_TONES: Record<string, BadgeTone> = {
+  draft: 'neutral',
+  accepted: 'success',
+  rejected: 'danger',
 }

@@ -7,12 +7,21 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
-# Sales S4 is the data foundation only: a quotation is created as a draft
-# and nothing moves it anywhere else yet. Acceptance, rejection, expiry,
-# revision and conversion are later passes -- their states are added then,
-# not guessed now.
+# Lifecycle (Sales S12, business decisions of S12.1): a quotation is
+# created as a draft; the owning salesman records the customer's
+# acceptance, or the owning salesman / their team head records a
+# rejection with a reason. Both are final (no path back to draft).
+# Expiry is not a status: a draft past `valid_until` is expired and can't
+# be accepted until the owner renews it. Revision and conversion to a
+# Sales Order are later passes.
 DRAFT = "draft"
-QUOTATION_STATUSES = (DRAFT,)
+ACCEPTED = "accepted"
+REJECTED = "rejected"
+QUOTATION_STATUSES = (DRAFT, ACCEPTED, REJECTED)
+
+# A quotation is valid for 7 calendar days from its quotation date
+# (S12.1); renewal restarts the 7 days from the renewal date.
+VALIDITY_DAYS = 7
 
 # Admin's decision on the quotation's prices when any line needs price
 # approval (Sales S11.1). Same approve/reject vocabulary as the S8
@@ -69,6 +78,13 @@ class Quotation(Base, TimestampMixin, OrganisationScopedMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     price_decision_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Last day (Kuwait calendar date) the quotation can be accepted.
+    valid_until: Mapped[date] = mapped_column(Date, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    accepted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rejected_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     lines: Mapped[list["QuotationLine"]] = relationship(
         back_populates="quotation", cascade="all, delete-orphan", order_by="QuotationLine.line_number"
