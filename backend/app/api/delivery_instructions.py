@@ -16,7 +16,12 @@ from app.models.audit_event import DELIVERY_INSTRUCTION_CREATED, DELIVERY_MODULE
 from app.models.delivery_instruction import DeliveryInstruction
 from app.models.sales_order import SalesOrder
 from app.models.user import User
-from app.schemas.delivery_instruction import DeliveryInstructionCreateRequest, DeliveryInstructionOut
+from app.schemas.delivery_instruction import (
+    DeliveryInstructionCreateRequest,
+    DeliveryInstructionOut,
+    DeliveryLinePositionOut,
+    DeliveryPositionOut,
+)
 from app.schemas.pagination import PaginatedResponse
 from app.services import audit_service, delivery_instruction_service, inventory_scope
 
@@ -47,6 +52,30 @@ def list_delivery_instructions(
     return PaginatedResponse(data=[DeliveryInstructionOut.model_validate(r) for r in rows], pagination=pagination)
 
 
+@router.get("/position", response_model=DeliveryPositionOut)
+def get_delivery_position(
+    sales_order_id: int = Query(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> DeliveryPositionOut:
+    """A Sales Order's cumulative delivery position per line: ordered,
+    fulfilled, remaining, the allowance ceiling and what may still be
+    delivered. All derived; read-only."""
+    inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
+    order = (
+        db.query(SalesOrder)
+        .filter(SalesOrder.id == sales_order_id, SalesOrder.organisation_id == current_user.organisation_id)
+        .first()
+    )
+    if order is None:
+        raise NotFoundError("Sales order not found.")
+    allowance, locked, positions = delivery_instruction_service.order_position(db, order)
+    return DeliveryPositionOut(
+        sales_order_id=order.id,
+        scrap_allowance_percent=allowance,
+        allowance_locked=locked,
+        lines=[DeliveryLinePositionOut.model_validate(p) for p in positions],
+    )
+
+
 @router.get("/{instruction_id}", response_model=DeliveryInstructionOut)
 def get_delivery_instruction(
     instruction_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -66,8 +95,8 @@ def create_delivery_instruction(
     db: Session = Depends(get_db),
 ) -> DeliveryInstruction:
     """One shipment tranche of an eligible (handed-off or partially
-    delivered) Sales Order; several may exist per order. Copies the
-    current Delivery Scrap Allowance % into each line. Audited."""
+    delivered) Sales Order; several may exist per order. The order's
+    allowance % is locked by its first instruction. Audited."""
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     order = (
         db.query(SalesOrder)
@@ -93,12 +122,9 @@ def create_delivery_instruction(
         entity_id=instruction.id,
         result="success",
         details=(
-            f"number: {instruction.delivery_number}, sales_order: {order.order_number}; "
-            + "; ".join(
-                f"line {line.sales_order_line_id}: {line.quantity} (allowance {line.scrap_allowance_percent}%, "
-                f"max {line.max_permitted_quantity})"
-                for line in instruction.lines
-            )
+            f"number: {instruction.delivery_number}, sales_order: {order.order_number}, "
+            f"allowance: {instruction.scrap_allowance_percent}%; "
+            + "; ".join(f"line {line.sales_order_line_id}: {line.quantity}" for line in instruction.lines)
         ),
         ip_address=request.client.host if request.client else None,
     )

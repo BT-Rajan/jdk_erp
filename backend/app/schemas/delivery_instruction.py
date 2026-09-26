@@ -25,8 +25,6 @@ class DeliveryInstructionLineOut(BaseModel):
     unit_of_measure_id: int
     ordered_quantity: Decimal
     quantity: Decimal
-    scrap_allowance_percent: Decimal
-    max_permitted_quantity: Decimal
 
 
 class DeliveryInstructionOut(BaseModel):
@@ -39,6 +37,29 @@ class DeliveryInstructionOut(BaseModel):
     customer_id: int
     customer_name: str | None = None
     status: str
+    # The Sales Order's allowance %, locked by its first instruction.
+    scrap_allowance_percent: Decimal
     created_by_user_id: int | None
     created_at: datetime
     lines: list[DeliveryInstructionLineOut]
+
+
+class DeliveryLinePositionOut(BaseModel):
+    """One Sales Order line's cumulative delivery position (derived)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    sales_order_line_id: int
+    ordered_quantity: Decimal
+    fulfilled_quantity: Decimal
+    remaining_quantity: Decimal
+    ceiling_quantity: Decimal
+    remaining_permitted_quantity: Decimal
+
+
+class DeliveryPositionOut(BaseModel):
+    sales_order_id: int
+    scrap_allowance_percent: Decimal
+    # False until the order's first Delivery Instruction locks the %.
+    allowance_locked: bool
+    lines: list[DeliveryLinePositionOut]

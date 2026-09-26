@@ -1,10 +1,11 @@
 """Delivery Instructions -- shipment tranches of a Sales Order (Delivery D2)
 
 delivery_instructions: number YY8NNNN unique per organisation, Sales Order,
-customer, status (pending), creator. Several per Sales Order.
+customer, status (pending), creator, and the order's Delivery Scrap
+Allowance % (copied from its first instruction). Several per Sales Order.
 delivery_instruction_lines: Sales Order line, product, stock unit, ordered
-quantity, tranche quantity, the Delivery Scrap Allowance % copied at
-creation and the exact maximum permitted quantity.
+quantity and this shipment's quantity. The permitted total is derived per
+Sales Order, never stored per tranche.
 
 Revision ID: 0056
 Revises: 0055
@@ -34,6 +35,7 @@ def upgrade() -> None:
         sa.Column("customer_id", sa.Integer(), _fk("customers.id", "fk_delivery_instructions_customer_id_customers", "RESTRICT"), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False, server_default="pending"),
         sa.Column("created_by_user_id", sa.Integer(), _fk("users.id", "fk_delivery_instructions_created_by_user_id_users", "SET NULL"), nullable=True),
+        sa.Column("scrap_allowance_percent", sa.Numeric(precision=5, scale=2), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.UniqueConstraint("organisation_id", "delivery_number", name="uq_delivery_instructions_organisation_id_delivery_number"),
@@ -51,11 +53,8 @@ def upgrade() -> None:
         sa.Column("unit_of_measure_id", sa.Integer(), _fk("units_of_measure.id", "fk_delivery_instruction_lines_unit_of_measure_id", "RESTRICT"), nullable=False),
         sa.Column("ordered_quantity", sa.Numeric(precision=14, scale=4), nullable=False),
         sa.Column("quantity", sa.Numeric(precision=14, scale=4), nullable=False),
-        sa.Column("scrap_allowance_percent", sa.Numeric(precision=5, scale=2), nullable=False),
-        sa.Column("max_permitted_quantity", sa.Numeric(precision=20, scale=8), nullable=False),
         sa.UniqueConstraint("delivery_instruction_id", "sales_order_line_id", name="uq_delivery_instruction_lines_instruction_line"),
         sa.CheckConstraint("quantity > 0", name="ck_delivery_instruction_lines_quantity_positive"),
-        sa.CheckConstraint("scrap_allowance_percent >= 0", name="ck_delivery_instruction_lines_allowance_not_negative"),
     )
     op.create_index("ix_delivery_instruction_lines_delivery_instruction_id", "delivery_instruction_lines", ["delivery_instruction_id"])
     op.create_index("ix_delivery_instruction_lines_sales_order_line_id", "delivery_instruction_lines", ["sales_order_line_id"])

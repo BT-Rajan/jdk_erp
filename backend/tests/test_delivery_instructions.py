@@ -16,11 +16,13 @@ from app.core.security import hash_password
 from app.core.timezone import JDK_TIMEZONE
 from app.models.audit_event import DELIVERY_INSTRUCTION_CREATED, AuditEvent
 from app.models.customer import Customer
+from app.models.delivery_instruction import FULFILLED, DeliveryInstruction
 from app.models.finished_goods_inventory import FinishedGoodsMovement
 from app.models.role_permission import RolePermission
 from app.models.sales_order import CANCELLED, COMPLETED, HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder
 from app.models.user import User
 from app.services import (
+    delivery_instruction_service,
     document_numbering,
     feasibility_record_service,
     quotation_readiness_service,
@@ -122,24 +124,83 @@ def test_only_handed_off_or_partially_delivered_orders_are_eligible(client, db_s
         assert _create(client, order, "10").status_code == expected, status
 
 
-def test_allowance_is_copied_at_creation_and_later_setting_changes_do_not_alter_it(client, db_session, setup):
+def _position(client, order):
+    response = client.get(f"/api/delivery-instructions/position?sales_order_id={order['id']}", headers=_headers(client, "warehouse"))
+    assert response.status_code == 200
+    body = response.json()
+    line = body["lines"][0]
+    return body, {k: Decimal(line[k]) for k in (
+        "ordered_quantity", "fulfilled_quantity", "remaining_quantity", "ceiling_quantity", "remaining_permitted_quantity"
+    )}
+
+
+def _fulfil(db_session, *instruction_ids):
+    # Fulfilment isn't implemented yet: mark instructions fulfilled directly
+    # so the cumulative position can be checked.
+    for instruction_id in instruction_ids:
+        db_session.get(DeliveryInstruction, instruction_id).status = FULFILLED
+    db_session.commit()
+
+
+def test_allowance_is_locked_per_order_and_later_setting_changes_do_not_alter_it(client, db_session, setup):
     order, _ = setup
     admin = _headers(client, "boss")
-    assert client.patch("/api/organisations/me", json={"delivery_scrap_allowance_percent": "2.5"}, headers=admin).status_code == 200
-    first = _create(client, order, "40").json()
-    line = first["lines"][0]
-    # 40 x (1 + 2.5 / 100) = 41, stored exactly.
-    assert (Decimal(line["scrap_allowance_percent"]), Decimal(line["max_permitted_quantity"])) == (Decimal("2.5"), Decimal("41"))
+    client.patch("/api/organisations/me", json={"delivery_scrap_allowance_percent": "2"}, headers=admin)
+    body, _ = _position(client, order)
+    assert (Decimal(body["scrap_allowance_percent"]), body["allowance_locked"]) == (Decimal("2"), False)
 
+    first = _create(client, order, "40").json()
     client.patch("/api/organisations/me", json={"delivery_scrap_allowance_percent": "10"}, headers=admin)
-    unchanged = client.get(f"/api/delivery-instructions/{first['id']}", headers=_headers(client, "warehouse")).json()["lines"][0]
-    assert (Decimal(unchanged["scrap_allowance_percent"]), Decimal(unchanged["max_permitted_quantity"])) == (Decimal("2.5"), Decimal("41"))
-    later = _create(client, order, "33.3333").json()["lines"][0]
-    # 33.3333 x 1.10 = 36.66663 exactly -- no rounding.
-    assert (Decimal(later["scrap_allowance_percent"]), Decimal(later["max_permitted_quantity"])) == (Decimal("10"), Decimal("36.66663"))
-    # The Sales Order quantity itself never changes.
+    second = _create(client, order, "30").json()
+    # The first instruction locked 2% for this order; the later setting change alters neither.
+    assert [Decimal(i["scrap_allowance_percent"]) for i in (first, second)] == [Decimal("2"), Decimal("2")]
+    again = client.get(f"/api/delivery-instructions/{first['id']}", headers=_headers(client, "warehouse")).json()
+    assert Decimal(again["scrap_allowance_percent"]) == Decimal("2")
+    body, position = _position(client, order)
+    assert (Decimal(body["scrap_allowance_percent"]), body["allowance_locked"]) == (Decimal("2"), True)
+    # Applied once to the order: 100 t + 2% = 102 t, however many tranches.
+    assert position["ceiling_quantity"] == Decimal("102")
+    assert "max_permitted_quantity" not in again["lines"][0]
+
+
+def test_cumulative_ceiling_across_tranches(client, db_session, setup):
+    order, _ = setup
+    client.patch("/api/organisations/me", json={"delivery_scrap_allowance_percent": "2"}, headers=_headers(client, "boss"))
+    di1, di2, di3 = (_create(client, order, q).json() for q in ("40", "40", "22"))
+    # Nothing fulfilled yet: pending tranches don't count.
+    assert _position(client, order)[1] == {
+        "ordered_quantity": Decimal("100"), "fulfilled_quantity": Decimal("0"), "remaining_quantity": Decimal("100"),
+        "ceiling_quantity": Decimal("102"), "remaining_permitted_quantity": Decimal("102"),
+    }
+    _fulfil(db_session, di1["id"], di2["id"])
+    _, position = _position(client, order)
+    assert (position["fulfilled_quantity"], position["remaining_quantity"], position["remaining_permitted_quantity"]) == (
+        Decimal("80"), Decimal("20"), Decimal("22"),
+    )
+    # 40 + 40 + 22 = 102 is within the one 2% allowance; 40 + 40 + 23 = 103 is detected.
+    order_row = db_session.get(SalesOrder, order["id"])
+    line_position = delivery_instruction_service.line_position(db_session, order_row.lines[0], Decimal("2"))
+    assert not delivery_instruction_service.exceeds_permitted(line_position, Decimal("22"))
+    assert delivery_instruction_service.exceeds_permitted(line_position, Decimal("23"))
+    _fulfil(db_session, di3["id"])
+    _, position = _position(client, order)
+    assert (position["fulfilled_quantity"], position["remaining_quantity"], position["remaining_permitted_quantity"]) == (
+        Decimal("102"), Decimal("-2"), Decimal("0"),
+    )
+    # Delivery never changes the Sales Order itself.
     db_session.expire_all()
-    assert db_session.get(SalesOrder, order["id"]).lines[0].quantity == Decimal("100")
+    order_row = db_session.get(SalesOrder, order["id"])
+    assert (order_row.status, order_row.lines[0].quantity) == (HANDED_OFF, Decimal("100"))
+    assert db_session.query(FinishedGoodsMovement).count() == 0
+
+
+def test_a_tranche_may_be_less_than_what_remains(client, db_session, setup):
+    order, _ = setup
+    di1 = _create(client, order, "40").json()
+    _fulfil(db_session, di1["id"])
+    assert _position(client, order)[1]["remaining_quantity"] == Decimal("60")
+    for quantity in ("20", "30", "50"):
+        assert _create(client, order, quantity).status_code == 201
 
 
 def test_unauthorised_users_cannot_create_or_read(client, db_session, organisation, setup):

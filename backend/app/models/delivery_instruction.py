@@ -2,15 +2,19 @@
 Sales Order. A Sales Order may have several; each is created manually by
 warehouse staff with the `inventory:deliver` grant.
 
-Each line keeps what applied when the tranche was created -- the Sales
-Order line's ordered quantity, product and stock unit, the quantity
-planned for this shipment, and the Delivery Scrap Allowance % copied from
-the Admin setting -- so later changes to the setting or the order never
-alter it. `max_permitted_quantity` = quantity x (1 + allowance / 100),
-stored exactly (no rounding).
+Each line keeps the Sales Order line, its ordered quantity, product and
+stock unit, and this shipment's own quantity. The Delivery Scrap Allowance
+applies to the Sales Order cumulatively, never per tranche: the order's
+first instruction copies the Admin setting's %, every later instruction of
+that order copies the same %, and the permitted total is
+order quantity x (1 + % / 100) less what fulfilled instructions delivered
+(delivery_instruction_service.order_position) -- derived, never stored per
+tranche, so the allowance can't multiply across shipments and later
+setting changes never alter an order that already has instructions.
 
-Only the `pending` state exists yet. Nothing here moves or reserves
-stock, changes the Sales Order or counts pallets."""
+Only `pending` is ever set yet; `fulfilled` is recognised so fulfilled
+quantities can be counted once a later pass records fulfilment. Nothing
+here moves or reserves stock, changes the Sales Order or counts pallets."""
 
 from decimal import Decimal
 
@@ -21,7 +25,8 @@ from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
 PENDING = "pending"
-DELIVERY_INSTRUCTION_STATUSES = (PENDING,)
+FULFILLED = "fulfilled"
+DELIVERY_INSTRUCTION_STATUSES = (PENDING, FULFILLED)
 
 
 class DeliveryInstruction(Base, TimestampMixin, OrganisationScopedMixin):
@@ -36,6 +41,8 @@ class DeliveryInstruction(Base, TimestampMixin, OrganisationScopedMixin):
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=PENDING, server_default=PENDING)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # The order's allowance %, copied from its first instruction (see above).
+    scrap_allowance_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
 
     lines: Mapped[list["DeliveryInstructionLine"]] = relationship(
         back_populates="delivery_instruction", cascade="all, delete-orphan", order_by="DeliveryInstructionLine.id"
@@ -58,7 +65,6 @@ class DeliveryInstructionLine(Base):
     __table_args__ = (
         UniqueConstraint("delivery_instruction_id", "sales_order_line_id", name="uq_delivery_instruction_lines_instruction_line"),
         CheckConstraint("quantity > 0", name="quantity_positive"),
-        CheckConstraint("scrap_allowance_percent >= 0", name="allowance_not_negative"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -79,8 +85,7 @@ class DeliveryInstructionLine(Base):
         nullable=False,
     )
     ordered_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    # This shipment's quantity, in the stock unit.
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
-    scrap_allowance_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
-    max_permitted_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
 
     delivery_instruction: Mapped[DeliveryInstruction] = relationship(back_populates="lines")
