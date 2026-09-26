@@ -148,6 +148,7 @@ describe('GoodsReceivingPage', () => {
         notes: null,
         lines: [{ purchase_order_line_id: 501, quantity: '250', remarks: null }],
         file_ids: [],
+        client_reference: expect.any(String),
       }),
     )
 

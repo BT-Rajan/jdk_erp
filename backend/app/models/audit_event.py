@@ -130,6 +130,23 @@ RESERVATION_RELEASED = "reservation_released"
 FG_ALLOCATED = "fg_allocated"
 FG_ALLOCATION_RELEASED = "fg_allocation_released"
 FG_ALLOCATION_CONSUMED = "fg_allocation_consumed"
+# Production Plans (P3), module "production".
+PRODUCTION_PLAN_CREATED = "production_plan_created"
+# Production Schedule (P4), module "production".
+# Production Orders (P5), module "production".
+PRODUCTION_ORDER_CREATED = "production_order_created"
+PRODUCTION_ORDER_UPDATED = "production_order_updated"
+PRODUCTION_ORDER_ISSUED = "production_order_issued"
+PRODUCTION_ORDER_CANCELLED = "production_order_cancelled"
+# Production Execution (P6), module "production".
+PRODUCTION_STARTED = "production_started"
+PRODUCTION_RECORDED = "production_recorded"
+PRODUCTION_SCHEDULED = "production_scheduled"
+PRODUCTION_RESCHEDULED = "production_rescheduled"
+PRODUCTION_SCHEDULE_CANCELLED = "production_schedule_cancelled"
+PRODUCTION_PLAN_UPDATED = "production_plan_updated"
+PRODUCTION_PLAN_PLANNED = "production_plan_planned"
+PRODUCTION_PLAN_CANCELLED = "production_plan_cancelled"
 PRODUCTION_REQUIREMENT_CREATED = "requirement_created"
 PRODUCTION_REQUIREMENT_BOM_RESOLVED = "requirement_bom_resolved"
 PRODUCTION_REQUIREMENT_QUANTITY_CHANGED = "requirement_quantity_changed"

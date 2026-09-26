@@ -11,7 +11,7 @@ stock immediately and is then reconciled automatically."""
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -204,6 +204,7 @@ def submit_receipt(
     purchase_order_id: int,
     payload: CreateReceiptRequest,
     request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ReceivingOut:
@@ -212,6 +213,14 @@ def submit_receipt(
     creator; a late delivery is shown, not blocking. One commit."""
     purchase_scope.require_permission(db, current_user, purchase_scope.RECEIVE)
     purchase_order = _get_po(db, purchase_order_id, current_user.organisation_id)
+    # Duplicate protection: under the PO row lock, a repeated submission
+    # finds the receipt it already posted and posts nothing again.
+    purchase_order = purchase_order_service.lock_purchase_order(db, purchase_order)
+    reference = (payload.client_reference or "").strip() or None
+    if purchase_order_service.existing_receipt(db, current_user.organisation_id, purchase_order.id, reference) is not None:
+        response.status_code = status.HTTP_200_OK
+        db.refresh(purchase_order)
+        return _build_outs(db, [purchase_order])[0]
     if payload.receipt_date > date.today():
         raise ValidationError("Receipt date cannot be in the future.", fields={"receipt_date": "Cannot be in the future."})
 
@@ -224,6 +233,7 @@ def submit_receipt(
         entries=[(line.purchase_order_line_id, line.quantity) for line in payload.lines],
         created_by_user_id=current_user.id,
         remarks={line.purchase_order_line_id: line.remarks for line in payload.lines},
+        client_reference=reference,
     )
     if payload.file_ids:
         file_service.attach_files(

@@ -12,6 +12,7 @@ import { SelectField } from '@/components/forms/SelectField'
 import { TextField } from '@/components/forms/TextField'
 import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
+import { useSubmissionReference } from '@/lib/useSubmissionReference'
 import { formatDate, formatNumber } from '@/lib/format'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
@@ -140,6 +141,8 @@ export function FinancePaymentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Duplicate protection: one reference per payment submission.
+  const submission = useSubmissionReference()
 
   const isFirstSearch = useRef(true)
   useEffect(() => {
@@ -154,6 +157,7 @@ export function FinancePaymentsPage() {
     setError(null)
     setNotice(null)
     setLoadError(null)
+    submission.reset()
     if (viewId === null) {
       setTarget(null)
       return
@@ -213,7 +217,9 @@ export function FinancePaymentsPage() {
         payment_date: payment.payment_date,
         payment_method: payment.payment_method,
         notes: payment.notes.trim() || null,
+        client_reference: submission.get(),
       })
+      submission.reset()
       const { data } = await apiClient.get<FinancePo>(`/api/finance/purchase-orders/${target.id}`)
       setTarget(data)
       setPayment(emptyPayment(data))

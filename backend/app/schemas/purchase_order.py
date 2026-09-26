@@ -377,6 +377,9 @@ class CreateReceiptRequest(BaseModel):
     notes: str | None = None
     lines: list[CreateReceiptLineRequest]
     file_ids: list[int] = []
+    # One per submission (duplicate protection): a repeat returns the
+    # receipt already recorded instead of receiving the goods again.
+    client_reference: str | None = Field(default=None, max_length=64)
 
     @field_validator("lines")
     @classmethod
@@ -408,6 +411,9 @@ class RecordPaymentRequest(BaseModel):
     notes: str | None = None
     is_final: bool = False
     file_ids: list[int] = []
+    # One per submission (duplicate protection): a repeat returns the
+    # payment already recorded instead of recording it again.
+    client_reference: str | None = Field(default=None, max_length=64)
 
     @field_validator("amount")
     @classmethod

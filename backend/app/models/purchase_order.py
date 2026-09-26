@@ -300,10 +300,15 @@ class PurchaseOrderPayment(Base, TimestampMixin, OrganisationScopedMixin):
         UniqueConstraint(
             "organisation_id", "payment_number", name="uq_purchase_order_payments_organisation_id_payment_number"
         ),
+        UniqueConstraint("organisation_id", "client_reference", name="uq_purchase_order_payments_org_client_reference"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     payment_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Sent once per submission by the client: a retried or repeated
+    # request with the same reference returns this record instead of
+    # recording it again (duplicate protection).
+    client_reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
     purchase_order_id: Mapped[int] = mapped_column(
         ForeignKey("purchase_orders.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -369,10 +374,15 @@ class PurchaseOrderReceipt(Base, TimestampMixin, OrganisationScopedMixin):
         UniqueConstraint(
             "organisation_id", "receipt_number", name="uq_purchase_order_receipts_organisation_id_receipt_number"
         ),
+        UniqueConstraint("organisation_id", "client_reference", name="uq_purchase_order_receipts_org_client_reference"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     receipt_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Sent once per submission by the client: a retried or repeated
+    # request with the same reference returns this record instead of
+    # recording it again (duplicate protection).
+    client_reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
     purchase_order_id: Mapped[int] = mapped_column(
         ForeignKey("purchase_orders.id", ondelete="CASCADE"), nullable=False, index=True
     )

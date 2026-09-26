@@ -72,7 +72,31 @@ describe('FinancePaymentsPage', () => {
       payment_date: expect.any(String),
       payment_method: 'Bank Transfer',
       notes: 'Paid on 1 Sep',
+      client_reference: expect.any(String),
     })
     expect(await within(view).findByText(/Payment of 1,000.000 KWD recorded/)).toBeInTheDocument()
+  })
+
+  it('retries a failed payment with the same reference, so it is never recorded twice', async () => {
+    const user = userEvent.setup()
+    postMock.mockRejectedValueOnce(new Error('timeout'))
+    render(
+      <MemoryRouter initialEntries={['/finance/payments']}>
+        <Routes>
+          <Route path="/finance/payments" element={<FinancePaymentsPage />} />
+          <Route path="/finance/payments/:purchaseOrderId" element={<FinancePaymentsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Open' }))
+    const view = await screen.findByRole('region', { name: 'Payment for 2650001' })
+    await user.selectOptions(within(view).getByLabelText(/Payment Mode/), 'Bank Transfer')
+    await user.click(within(view).getByRole('button', { name: 'Save Payment' }))
+    expect(await within(view).findByText('Failed to record the payment.')).toBeInTheDocument()
+    await user.click(within(view).getByRole('button', { name: 'Save Payment' }))
+    expect(await within(view).findByText(/Payment of 1,000.000 KWD recorded/)).toBeInTheDocument()
+    const [first, second] = postMock.mock.calls
+    expect(first[1].client_reference).toBeTruthy()
+    expect(second[1].client_reference).toBe(first[1].client_reference)
   })
 })

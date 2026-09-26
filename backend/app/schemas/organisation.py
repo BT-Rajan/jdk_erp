@@ -19,6 +19,7 @@ class OrganisationOut(BaseModel):
     currency: str
     timezone: str
     production_staff_available_per_day: int | None = None
+    production_hours_per_day: Decimal | None = None
     delivery_scrap_allowance_percent: Decimal = Decimal("0")
     is_active: bool
 
@@ -41,6 +42,8 @@ class OrganisationUpdateRequest(BaseModel):
     currency: str | None = None
     timezone: str | None = None
     production_staff_available_per_day: int | None = Field(default=None, ge=0)
+    # Hours of production in a working day, 0 < h <= 24, 2 decimal places.
+    production_hours_per_day: Decimal | None = Field(default=None, gt=0, le=24, max_digits=4, decimal_places=2)
     # Percent, 0-999.99 with at most 2 decimal places (Numeric(5, 2));
     # never rounded silently -- a value it can't store exactly is refused.
     delivery_scrap_allowance_percent: Decimal | None = Field(

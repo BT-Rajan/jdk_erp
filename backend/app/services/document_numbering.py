@@ -27,7 +27,8 @@ invents. `ESTABLISHED_TYPE_DIGITS` records the ones already in use so a
 new document type can't collide with them. Quotation is `4` (business
 decision, Sales S4), Sales Order `6` (Sales S13.1) and Delivery
 Instruction `8` (Delivery D2: the next free Sales digit -- Sales documents
-use even digits, procurement odd)."""
+use even digits, procurement odd). Production Order `2` (P5: the next
+free digit; `1` stays the numbering tests' placeholder)."""
 
 from collections.abc import Callable
 from datetime import date
@@ -49,6 +50,7 @@ GOODS_RECEIPT_TYPE_DIGIT = "9"
 QUOTATION_TYPE_DIGIT = "4"
 SALES_ORDER_TYPE_DIGIT = "6"
 DELIVERY_INSTRUCTION_TYPE_DIGIT = "8"
+PRODUCTION_ORDER_TYPE_DIGIT = "2"
 
 ESTABLISHED_TYPE_DIGITS = {
     RFQ_TYPE_DIGIT: "RFQ",
@@ -58,6 +60,7 @@ ESTABLISHED_TYPE_DIGITS = {
     QUOTATION_TYPE_DIGIT: "Quotation",
     SALES_ORDER_TYPE_DIGIT: "Sales Order",
     DELIVERY_INSTRUCTION_TYPE_DIGIT: "Delivery Instruction",
+    PRODUCTION_ORDER_TYPE_DIGIT: "Production Order",
 }
 
 

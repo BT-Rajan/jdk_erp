@@ -33,6 +33,7 @@ from app.models.inventory import (
     ADJUSTMENT_REFERENCE,
     OPENING_STOCK,
     OPENING_STOCK_REFERENCE,
+    PRODUCTION_ISSUE,
     RECEIPT,
     RECEIPT_REVERSAL,
     InventoryAdjustment,
@@ -241,6 +242,48 @@ def adjust_stock(
         raw_material_id=raw_material_id,
         warehouse_id=warehouse_id,
         quantity=quantity,
+    )
+    return movement
+
+
+def issue_for_production(
+    db: Session,
+    *,
+    organisation_id: int,
+    raw_material_id: int,
+    warehouse_id: int,
+    quantity,
+    unit_of_measure_id: int,
+    reference_type: str,
+    reference_id: int,
+    created_by_user_id: int | None,
+) -> StockMovement:
+    """Raw material consumed by recorded production (Production Execution,
+    P6) -- a PRODUCTION_ISSUE ledger row with the negative of `quantity`
+    (the positive magnitude consumed), applied to the snapshot through the
+    same conditional UPDATE every movement uses, so it can never take stock
+    below zero (BusinessRuleError, nothing applied). `unit_of_measure_id`
+    is the material's own stock unit, resolved by the caller. The
+    reference must be unique per consumed material (the ledger's
+    reference/movement-type uniqueness is the duplicate guard)."""
+    movement = StockMovement(
+        organisation_id=organisation_id,
+        raw_material_id=raw_material_id,
+        warehouse_id=warehouse_id,
+        movement_type=PRODUCTION_ISSUE,
+        quantity=-quantity,
+        unit_of_measure_id=unit_of_measure_id,
+        reference_type=reference_type,
+        reference_id=reference_id,
+        created_by_user_id=created_by_user_id,
+    )
+    _insert_movement(db, movement)
+    _increment_inventory(
+        db,
+        organisation_id=organisation_id,
+        raw_material_id=raw_material_id,
+        warehouse_id=warehouse_id,
+        quantity=-quantity,
     )
     return movement
 

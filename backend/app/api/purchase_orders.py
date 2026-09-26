@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -1160,6 +1160,7 @@ def create_receipt(
     purchase_order_id: int,
     payload: CreateReceiptRequest,
     request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
@@ -1174,6 +1175,11 @@ def create_receipt(
     # warehouse uses app/api/goods_receiving.py, which never exposes prices.
     purchase_scope.require_permission(db, current_user, purchase_scope.VIEW)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
+    purchase_order = purchase_order_service.lock_purchase_order(db, purchase_order)
+    reference = (payload.client_reference or "").strip() or None
+    if purchase_order_service.existing_receipt(db, current_user.organisation_id, purchase_order.id, reference) is not None:
+        response.status_code = status.HTTP_200_OK
+        return _build_po_out(db, purchase_order)
 
     entries = [(line.purchase_order_line_id, line.quantity) for line in payload.lines]
     receipt = purchase_order_service.create_receipt(
@@ -1185,6 +1191,7 @@ def create_receipt(
         entries=entries,
         created_by_user_id=current_user.id,
         remarks={line.purchase_order_line_id: line.remarks for line in payload.lines},
+        client_reference=reference,
     )
     if payload.file_ids:
         file_service.attach_files(
@@ -1340,6 +1347,7 @@ def record_payment(
     purchase_order_id: int,
     payload: RecordPaymentRequest,
     request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PurchaseOrderOut:
@@ -1350,6 +1358,13 @@ def record_payment(
     touches stock_movements/raw_material_inventory."""
     purchase_payment_scope.require_permission(db, current_user, purchase_payment_scope.CREATE)
     purchase_order = _get_po_in_org(db, purchase_order_id, current_user.organisation_id)
+    # Duplicate protection: under the PO row lock, a repeated submission
+    # finds the payment it already recorded and records nothing again.
+    purchase_order = purchase_order_service.lock_purchase_order(db, purchase_order)
+    reference = (payload.client_reference or "").strip() or None
+    if purchase_order_service.existing_payment(db, current_user.organisation_id, purchase_order.id, reference, payload.amount) is not None:
+        response.status_code = status.HTTP_200_OK
+        return _build_po_out(db, purchase_order)
 
     lines = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.purchase_order_id == purchase_order.id).all()
     existing_payments = (
@@ -1367,6 +1382,7 @@ def record_payment(
         notes=payload.notes,
         created_by_user_id=current_user.id,
         is_final=payload.is_final,
+        client_reference=reference,
     )
     purchase_order_service.check_payment_discrepancy(db, purchase_order, final_payment=payload.is_final)
     purchase_order_service.refresh_status(db, purchase_order)
