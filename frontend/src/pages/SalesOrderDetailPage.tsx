@@ -47,10 +47,17 @@ export function SalesOrderDetailPage() {
   const [editDate, setEditDate] = useState('')
   const [editLines, setEditLines] = useState<LineEdit[]>([])
   const [editReason, setEditReason] = useState('')
+  // Line ids already assessed for fulfilment at hand-off (S15.2): their
+  // quantity is fixed until that is resolved; null = not known.
+  const [assessedLineIds, setAssessedLineIds] = useState<Set<number> | null>(null)
 
   const load = useCallback(async () => {
     const { data } = await apiClient.get<SalesOrder>(`/api/sales-orders/${orderId}`)
     setOrder(data)
+    apiClient
+      .get<{ sales_order_line_id: number }[]>(`/api/sales-orders/${orderId}/fulfilment`)
+      .then((res) => setAssessedLineIds(new Set(res.data.map((row) => row.sales_order_line_id))))
+      .catch(() => setAssessedLineIds(null))
   }, [orderId])
 
   useEffect(() => {
@@ -178,37 +185,52 @@ export function SalesOrderDetailPage() {
         <Card className="space-y-4 p-6">
           <FormSectionHeading>Edit Order (Admin)</FormSectionHeading>
           <DateField label="Requested Delivery Date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
-          {editLines.map((line, index) => (
-            <div key={index} className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-end">
-              <div className="col-span-2 text-sm sm:col-span-1">{productsById.get(line.product_id)?.name ?? `Product ${line.product_id}`}</div>
-              <label className="flex flex-col gap-1 text-xs text-gold-100/60">
-                Quantity
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="any"
-                  aria-label={`Line ${index + 1} quantity`}
-                  className="rounded border border-ink-700 bg-ink-900 px-2 py-2 text-sm text-gold-100"
-                  value={line.quantity}
-                  onChange={(e) => setEditLines((prev) => prev.map((l, i) => (i === index ? { ...l, quantity: e.target.value } : l)))}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-gold-100/60">
-                Unit Price
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="any"
-                  aria-label={`Line ${index + 1} unit price`}
-                  className="rounded border border-ink-700 bg-ink-900 px-2 py-2 text-sm text-gold-100"
-                  value={line.unit_price}
-                  onChange={(e) => setEditLines((prev) => prev.map((l, i) => (i === index ? { ...l, unit_price: e.target.value } : l)))}
-                />
-              </label>
-            </div>
-          ))}
+          {editLines.map((line, index) => {
+            const lineId = order.lines[index]?.id
+            // Unknown or assessed -> read-only; the server refuses a change anyway.
+            const quantityLocked = assessedLineIds === null || (lineId !== undefined && assessedLineIds.has(lineId))
+            return (
+              <div key={index} className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-end">
+                <div className="col-span-2 text-sm sm:col-span-1">{productsById.get(line.product_id)?.name ?? `Product ${line.product_id}`}</div>
+                {quantityLocked ? (
+                  <div className="flex flex-col gap-1 text-xs text-gold-100/60">
+                    Quantity
+                    <span className="py-2 text-sm text-gold-100" aria-label={`Line ${index + 1} quantity (read-only)`}>
+                      {formatNumber(line.quantity, { maximumFractionDigits: 4 })}
+                    </span>
+                    <span>Fixed: already assessed for fulfilment.</span>
+                  </div>
+                ) : (
+                  <label className="flex flex-col gap-1 text-xs text-gold-100/60">
+                    Quantity
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      aria-label={`Line ${index + 1} quantity`}
+                      className="rounded border border-ink-700 bg-ink-900 px-2 py-2 text-sm text-gold-100"
+                      value={line.quantity}
+                      onChange={(e) => setEditLines((prev) => prev.map((l, i) => (i === index ? { ...l, quantity: e.target.value } : l)))}
+                    />
+                  </label>
+                )}
+                <label className="flex flex-col gap-1 text-xs text-gold-100/60">
+                  Unit Price
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="any"
+                    aria-label={`Line ${index + 1} unit price`}
+                    className="rounded border border-ink-700 bg-ink-900 px-2 py-2 text-sm text-gold-100"
+                    value={line.unit_price}
+                    onChange={(e) => setEditLines((prev) => prev.map((l, i) => (i === index ? { ...l, unit_price: e.target.value } : l)))}
+                  />
+                </label>
+              </div>
+            )
+          })}
           <TextareaField label="Reason for the change" required value={editReason} onChange={(e) => setEditReason(e.target.value)} />
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => setEditing(false)} disabled={busy !== null}>Discard</Button>

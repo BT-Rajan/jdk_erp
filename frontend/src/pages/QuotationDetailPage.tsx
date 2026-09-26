@@ -314,10 +314,11 @@ export function QuotationDetailPage() {
                 : 'Awaiting Admin decision'}
             {quotation.price_decision_reason && <span className="text-gold-100/70"> — {quotation.price_decision_reason}</span>}
           </p>
-          {!isAdmin && !quotation.price_decision && (
+          {!locked && !isAdmin && !quotation.price_decision && (
             <Alert variant="warning">An Admin must approve or reject the quoted prices.</Alert>
           )}
-          {isAdmin && (
+          {/* A converted quotation is locked (S13.1): no price decision. */}
+          {!locked && isAdmin && (
             <div className="space-y-2 border-t border-ink-700 pt-3">
               <TextareaField label="Price decision reason" required value={priceReason} onChange={(e) => setPriceReason(e.target.value)} />
               <div className="flex flex-wrap gap-2">
