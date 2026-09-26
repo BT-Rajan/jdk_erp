@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -55,4 +55,42 @@ describe('AppLayout', () => {
 
     expect(logoutMock).toHaveBeenCalledOnce()
   })
+
+  it('has one menu (the sidebar), an icon-only home link in the header, and Master Data under Settings', async () => {
+    renderLayout()
+
+    expect(screen.getAllByRole('navigation', { name: 'Main' })).toHaveLength(1)
+    const header = screen.getByRole('banner')
+    const home = within(header).getByRole('link', { name: 'Dashboard' })
+    expect(home).toHaveAttribute('href', '/')
+    expect(home).not.toHaveTextContent('Dashboard')
+    expect(screen.queryByRole('button', { name: /master data/i })).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /settings/i }))
+    expect(screen.getByRole('link', { name: 'Customers' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Working calendar' })).toBeInTheDocument()
+  })
+
+  it('still gives non-admins the Master Data pages under Settings, without the admin pages', async () => {
+    useAuthMock.mockReturnValue({ user: { id: 2, full_name: 'Sam Sales', role: 'team_member' }, logout: logoutMock })
+    renderLayout()
+
+    await userEvent.click(screen.getByRole('button', { name: /settings/i }))
+    expect(screen.getByRole('link', { name: 'Customers' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Products' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Working calendar' })).not.toBeInTheDocument()
+  })
 })
+
+function renderLayout() {
+  render(
+    <MemoryRouter initialEntries={['/']}>
+      <Routes>
+        <Route path="/" element={<AppLayout />}>
+          <Route index element={<p>Dashboard content</p>} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  )
+}
