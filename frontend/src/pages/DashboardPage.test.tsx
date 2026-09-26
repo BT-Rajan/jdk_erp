@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DashboardPage } from './DashboardPage'
@@ -55,6 +55,61 @@ describe('DashboardPage', () => {
     expect(poLink).toHaveAttribute('href', '/purchase-orders/12')
     expect(screen.getByText('Overdue 3 day(s)')).toBeInTheDocument()
     expect(screen.getByText('Acme Traders')).toBeInTheDocument()
+  })
+
+  it('groups items into tabs by their existing type and filters the table on selection', async () => {
+    getMock.mockResolvedValue({
+      data: [
+        {
+          type: 'rfq_needs_decision',
+          label: 'Supplier response needs a decision',
+          entity: 'rfq',
+          id: 7,
+          reference: '2630003',
+          supplier_name: null,
+          detail: '2/2 supplier(s) responded',
+          date: '2026-09-01',
+        },
+        {
+          type: 'po_overdue',
+          label: 'Overdue for delivery',
+          entity: 'purchase_order',
+          id: 12,
+          reference: '2650004',
+          supplier_name: 'Acme Traders',
+          detail: 'Overdue 3 day(s)',
+          date: '2026-09-10',
+        },
+        {
+          type: 'po_overdue',
+          label: 'Overdue for delivery',
+          entity: 'purchase_order',
+          id: 13,
+          reference: '2650005',
+          supplier_name: 'Beta Supplies',
+          detail: 'Overdue 1 day(s)',
+          date: '2026-09-11',
+        },
+      ],
+    })
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('link', { name: '2630003' })
+
+    const allTab = screen.getByRole('tab', { name: /All\s*3/ })
+    expect(allTab).toHaveAttribute('aria-selected', 'true')
+    const overdueTab = screen.getByRole('tab', { name: /Overdue for delivery\s*2/ })
+
+    fireEvent.click(overdueTab)
+
+    expect(screen.queryByRole('link', { name: '2630003' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '2650004' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '2650005' })).toBeInTheDocument()
   })
 
   it('shows an empty state once nothing needs attention', async () => {
