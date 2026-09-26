@@ -16,15 +16,17 @@ Frozen rules:
   holiday) is `not_servable`: not a normal delivery date. It is a
   result, not an error -- a later Sales workflow sends it to Admin.
   The requested date is never moved.
-- Same day means the required date is today's Kuwait date and the
-  current Kuwait time is at or before the organisation's
-  `same_day_cutoff_time` (14:00 by default). After the cut-off, every
-  request -- for today or any later date -- is evaluated from the next
-  working day instead of today.
-- Otherwise count only working days after the evaluation start (today,
-  or the next working day after a missed cut-off), up to and including
-  the required date: 0-2 -> within 2 working days, 3 or more -> more
-  than 2 working days.
+- The applicable working day is today while the current Kuwait time is
+  at or before the organisation's `same_day_cutoff_time` (14:00 by
+  default); after the cut-off it is the next working day (Sales S5).
+- A required date equal to the applicable working day is same day.
+  Otherwise count only working days after the applicable day, up to
+  and including the required date: 0-2 -> within 2 working days, 3 or
+  more -> more than 2 working days. (A request for today made after the
+  cut-off falls before the applicable day: 0 working days after it,
+  i.e. within 2 working days.)
+- Time-dependent by nature: computed from the current Kuwait time on
+  every call, never stored here.
 
 A date before today is not classified at all -> ValidationError.
 
@@ -115,19 +117,18 @@ def classify_delivery_window(
         return NOT_SERVABLE
 
     cutoff = db.query(Organisation.same_day_cutoff_time).filter(Organisation.id == organisation_id).scalar()
-    before_cutoff = current.time() <= cutoff
-    if required_date == today and before_cutoff:
-        return SAME_DAY
-
     evaluation_start = today
-    if not before_cutoff:
+    if current.time() > cutoff:
         # Missed the cut-off: the request is evaluated from the next
-        # working day, whatever date it asks for. A request for today
-        # then falls before that start, i.e. 0 working days after it.
+        # working day, whatever date it asks for. The requested date
+        # itself is never changed.
         evaluation_start = next_working_day(
             today,
             get_holiday_dates(db, organisation_id, today, today + timedelta(days=_NEXT_WORKING_DAY_HORIZON_DAYS)),
         )
+
+    if required_date == evaluation_start:
+        return SAME_DAY
 
     holidays = get_holiday_dates(db, organisation_id, evaluation_start + timedelta(days=1), required_date)
     if count_working_days_after(evaluation_start, required_date, holidays) <= _WITHIN_WORKING_DAYS_LIMIT:

@@ -81,9 +81,19 @@ def test_same_day_uses_kuwait_time_and_the_configured_cutoff(client, db_session,
     later = lambda required, now: classify_delivery_window(db_session, organisation.id, required, now=now)
     assert later(THURSDAY, datetime(2026, 9, 28, 10, 59, tzinfo=timezone.utc)) == MORE_THAN_2_WORKING_DAYS
     assert later(THURSDAY, after_cutoff) == WITHIN_2_WORKING_DAYS
-    # "Next working day" skips Friday, Saturday and holidays: Thursday's
-    # next working day is Monday when Sunday is a holiday.
+    # The next working day is now the applicable day: Monday 14:01 for
+    # Tuesday is same day; before the cut-off it was 1 working day away.
+    assert later(TUESDAY, datetime(2026, 9, 28, 10, 59, tzinfo=timezone.utc)) == WITHIN_2_WORKING_DAYS
+    assert later(TUESDAY, after_cutoff) == SAME_DAY
+    # "Next working day" skips Friday, Saturday and holidays: Thursday
+    # 14:01 with Sunday a holiday -> Monday is the applicable day.
     assert next_working_day(THURSDAY, {date(2026, 10, 4)}) == date(2026, 10, 5)
+    db_session.add(OrganisationHoliday(organisation_id=organisation.id, holiday_date=date(2026, 10, 4), description="Holiday"))
+    db_session.commit()
+    thursday_after_cutoff = datetime(2026, 10, 1, 11, 1, tzinfo=timezone.utc)
+    assert later(date(2026, 10, 5), thursday_after_cutoff) == SAME_DAY
+    assert later(date(2026, 10, 7), thursday_after_cutoff) == WITHIN_2_WORKING_DAYS
+    assert later(date(2026, 10, 8), thursday_after_cutoff) == MORE_THAN_2_WORKING_DAYS
 
     response = client.put(
         "/api/organisations/me/working-calendar/cutoff",
