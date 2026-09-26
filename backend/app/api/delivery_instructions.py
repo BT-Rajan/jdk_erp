@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.api import production_requirements as production_requirements_api
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.entity_access import register_entity_access_check
@@ -41,7 +42,13 @@ from app.schemas.delivery_instruction import (
 )
 from app.schemas.file import FileOut
 from app.schemas.pagination import PaginatedResponse
-from app.services import audit_service, delivery_instruction_service, inventory_scope, sales_document_service
+from app.services import (
+    audit_service,
+    delivery_instruction_service,
+    inventory_scope,
+    production_requirement_service,
+    sales_document_service,
+)
 
 router = APIRouter(prefix="/api/delivery-instructions", tags=["delivery-instructions"])
 
@@ -295,6 +302,12 @@ def fulfil_delivery_instruction(
         for line, movement in zip(instruction.lines, movements)
     )
     _audit_transition(db, request, current_user, DELIVERY_FULFILLED, instruction, f"pending -> fulfilled; {issued}")
+    # Production P1: a requirement whose order line is now delivered in
+    # full has had its demand met.
+    order = db.get(SalesOrder, instruction.sales_order_id)
+    delivered = {line.id: delivery_instruction_service.fulfilled_quantity(db, line.id) for line in order.lines}
+    requirement_changes = production_requirement_service.mark_satisfied(db, order, delivered)
+    production_requirements_api.audit_changes(db, request, current_user, requirement_changes, order.order_number)
     if status_change is not None:
         audit_service.log_event(
             db,

@@ -8,6 +8,7 @@ import { FormSectionHeading } from '@/components/ui/FormSectionHeading'
 import { KeyValue } from '@/components/ui/KeyValue'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Spinner } from '@/components/ui/Spinner'
+import { CheckboxField } from '@/components/forms/CheckboxField'
 import { DateField } from '@/components/forms/DateField'
 import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
@@ -50,8 +51,11 @@ export function SalesOrderDetailPage() {
   const [editDate, setEditDate] = useState('')
   const [editLines, setEditLines] = useState<LineEdit[]>([])
   const [editReason, setEditReason] = useState('')
-  // Line ids already assessed for fulfilment at hand-off (S15.2): their
-  // quantity is fixed until that is resolved; null = not known.
+  // Production P1: changing an assessed line's quantity recomputes its
+  // production demand -- the Admin confirms it; the server enforces it.
+  const [confirmDemandChange, setConfirmDemandChange] = useState(false)
+  // Line ids already assessed for fulfilment at hand-off (S15.2): changing
+  // their quantity needs the confirmation below; null = not known.
   const [assessedLineIds, setAssessedLineIds] = useState<Set<number> | null>(null)
   // null = not visible to this user (no delivery permission).
   const [deliveries, setDeliveries] = useState<DeliveryInstruction[] | null>(null)
@@ -97,6 +101,7 @@ export function SalesOrderDetailPage() {
       })),
     )
     setEditReason('')
+    setConfirmDemandChange(false)
     setEditing(true)
   }
 
@@ -115,6 +120,14 @@ export function SalesOrderDetailPage() {
     }
   }
 
+  const assessedQuantityChanged =
+    order !== null &&
+    assessedLineIds !== null &&
+    editLines.some((line, index) => {
+      const original = order.lines[index]
+      return original !== undefined && assessedLineIds.has(original.id) && Number(line.quantity) !== Number(original.quantity)
+    })
+
   const cancel = () => run('cancel', () => apiClient.post(`/api/sales-orders/${orderId}/cancel`, { reason: cancelReason }))
   const saveEdit = () =>
     run('edit', () =>
@@ -122,6 +135,7 @@ export function SalesOrderDetailPage() {
         reason: editReason,
         requested_delivery_date: editDate || null,
         lines: editLines.map((line) => ({ ...line, quantity: line.quantity.trim(), unit_price: line.unit_price.trim() })),
+        ...(assessedQuantityChanged ? { confirm_fulfilment_change: confirmDemandChange } : {}),
       }),
     )
 
@@ -201,8 +215,9 @@ export function SalesOrderDetailPage() {
           <DateField label="Requested Delivery Date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
           {editLines.map((line, index) => {
             const lineId = order.lines[index]?.id
-            // Unknown or assessed -> read-only; the server refuses a change anyway.
-            const quantityLocked = assessedLineIds === null || (lineId !== undefined && assessedLineIds.has(lineId))
+            // Unknown -> read-only; the server decides anyway.
+            const quantityLocked = assessedLineIds === null
+            const assessed = lineId !== undefined && assessedLineIds !== null && assessedLineIds.has(lineId)
             return (
               <div key={index} className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-end">
                 <div className="col-span-2 text-sm sm:col-span-1">{productsById.get(line.product_id)?.name ?? `Product ${line.product_id}`}</div>
@@ -212,7 +227,7 @@ export function SalesOrderDetailPage() {
                     <span className="py-2 text-sm text-gold-100" aria-label={`Line ${index + 1} quantity (read-only)`}>
                       {formatNumber(line.quantity, { maximumFractionDigits: 4 })}
                     </span>
-                    <span>Fixed: already assessed for fulfilment.</span>
+                    <span>Fixed until its fulfilment assessment is known.</span>
                   </div>
                 ) : (
                   <label className="flex flex-col gap-1 text-xs text-gold-100/60">
@@ -227,6 +242,7 @@ export function SalesOrderDetailPage() {
                       value={line.quantity}
                       onChange={(e) => setEditLines((prev) => prev.map((l, i) => (i === index ? { ...l, quantity: e.target.value } : l)))}
                     />
+                    {assessed && <span>Assessed at hand-off: a change needs confirmation.</span>}
                   </label>
                 )}
                 <label className="flex flex-col gap-1 text-xs text-gold-100/60">
@@ -245,10 +261,19 @@ export function SalesOrderDetailPage() {
               </div>
             )
           })}
+          {assessedQuantityChanged && (
+            <CheckboxField
+              label="Confirm: an assessed line's quantity changes its production demand (recomputed from the stock covered at hand-off)."
+              checked={confirmDemandChange}
+              onChange={(e) => setConfirmDemandChange(e.target.checked)}
+            />
+          )}
           <TextareaField label="Reason for the change" required value={editReason} onChange={(e) => setEditReason(e.target.value)} />
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => setEditing(false)} disabled={busy !== null}>Discard</Button>
-            <Button onClick={saveEdit} isLoading={busy === 'edit'} disabled={busy !== null || !editReason.trim()}>Save Changes</Button>
+            <Button onClick={saveEdit} isLoading={busy === 'edit'} disabled={busy !== null || !editReason.trim() || (assessedQuantityChanged && !confirmDemandChange)}>
+              Save Changes
+            </Button>
           </div>
         </Card>
       )}

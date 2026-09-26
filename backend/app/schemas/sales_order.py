@@ -85,6 +85,10 @@ class SalesOrderUpdateRequest(BaseModel):
     customer_id: int | None = None
     requested_delivery_date: date | None = None
     lines: list[QuotationLineCreateRequest] | None = Field(default=None, min_length=1, max_length=200)
+    # Production P1: required to change the quantity of a line already
+    # assessed at hand-off -- the Admin confirms its production demand
+    # will be recomputed.
+    confirm_fulfilment_change: bool = False
 
     @field_validator("reason")
     @classmethod

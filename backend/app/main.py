@@ -12,6 +12,7 @@ from app.api.categories import router as categories_router
 from app.api.communication import router as communication_router
 from app.api.customers import router as customers_router
 from app.api.delivery_instructions import router as delivery_instructions_router
+from app.api.production_requirements import router as production_requirements_router
 from app.api.files import router as files_router
 from app.api.jobs import router as jobs_router
 from app.api.notifications import router as notifications_router
@@ -83,6 +84,7 @@ app.include_router(categories_router)
 app.include_router(communication_router)
 app.include_router(customers_router)
 app.include_router(delivery_instructions_router)
+app.include_router(production_requirements_router)
 app.include_router(files_router)
 app.include_router(jobs_router)
 app.include_router(notifications_router)

@@ -30,6 +30,30 @@ class ProductionRequirementOut(BaseModel):
     bom_base_quantity: Decimal | None
     components: list[ProductionRequirementComponentOut]
     created_at: datetime
+    # Production P1 lifecycle.
+    fulfilled_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancellation_reason: str | None = None
+
+
+class ProductionRequirementRowOut(ProductionRequirementOut):
+    """The Production view of one requirement (Production P1): the demand
+    record plus its source and derived position. `quantity` is the
+    shortfall recorded at hand-off (or after a confirmed Admin change);
+    `outstanding_quantity` is the part the order line has not received
+    yet -- demand, not a production instruction."""
+
+    sales_order_number: str | None = None
+    sales_order_status: str | None = None
+    customer_name: str | None = None
+    line_number: int | None = None
+    product_name: str | None = None
+    ordered_quantity: Decimal | None = None
+    covered_quantity: Decimal | None = None
+    delivered_quantity: Decimal = Decimal("0")
+    outstanding_quantity: Decimal = Decimal("0")
+    # The server's answer for the caller: may take the BOM snapshot now.
+    can_resolve_bom: bool = False
 
 
 class LineFulfilmentOut(BaseModel):

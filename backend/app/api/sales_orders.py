@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.api import production_requirements as production_requirements_api
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.entity_access import register_entity_access_check
@@ -30,6 +31,7 @@ from app.services import (
     audit_service,
     customer_scope,
     delivery_instruction_service,
+    production_requirement_service,
     quotation_service,
     sales_document_service,
     sales_order_service,
@@ -157,6 +159,10 @@ def cancel_sales_order(
         raise AccessDeniedError("Only Admin can cancel a Sales Order after it has been handed off to fulfilment.")
     sales_order_service.cancel(order, current_user.id, payload.reason)
     _audit(db, request, current_user, SALES_ORDER_CANCELLED, order, f"reason: {payload.reason}")
+    # Production P1: its demand is withdrawn -- active requirements are
+    # cancelled (kept, never deleted); nothing moves in inventory.
+    requirement_changes = production_requirement_service.cancel_for_order(db, order, payload.reason)
+    production_requirements_api.audit_changes(db, request, current_user, requirement_changes, order.order_number)
     db.commit()
     db.expire_all()
     return order_out(db, _get_visible_order(db, order_id, current_user), current_user, with_pdf=True)
@@ -189,11 +195,18 @@ def update_sales_order(
             )
             for line in payload.lines
         ]
-    changes = sales_order_service.admin_update(
-        db, order, today=now_jdk().date(), customer_id=updates.get("customer_id"), lines=lines, **kwargs
+    changes, requirement_changes = sales_order_service.admin_update(
+        db,
+        order,
+        today=now_jdk().date(),
+        customer_id=updates.get("customer_id"),
+        lines=lines,
+        confirm_fulfilment_change=payload.confirm_fulfilment_change,
+        **kwargs,
     )
     if changes:
         _audit(db, request, admin, SALES_ORDER_UPDATED, order, f"changes: {'; '.join(changes)}; reason: {payload.reason}")
+        production_requirements_api.audit_changes(db, request, admin, requirement_changes, order.order_number)
         # A new Order Confirmation PDF for the changed order (commits).
         sales_document_service.store_sales_order_pdf(db, order, admin.id)
     else:
