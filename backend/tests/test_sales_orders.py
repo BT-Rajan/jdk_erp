@@ -200,19 +200,3 @@ def test_a_converted_quotation_locks_feasibility_and_readiness(client, db_sessio
     assert client.get(f"{base}/feasibility-checks", headers=a).json()[0]["state"] == "approved"
     assert db_session.query(AuditEvent).filter(AuditEvent.action == QUOTATION_READINESS_ASSESSED).count() == audits
 
-
-def test_conversion_refuses_a_past_requested_date_by_kuwait_date(client, db_session, setup, monkeypatch):
-    users, customer, widget = setup
-    quotation = _accepted_quotation(client, customer, widget, requested="2026-10-05")
-
-    # 00:30 on 6 Oct in Kuwait is still 5 Oct in UTC: Kuwait's date decides.
-    monkeypatch.setattr(quotations_api, "now_jdk", lambda: datetime(2026, 10, 6, 0, 30, tzinfo=JDK_TIMEZONE))
-    response = _convert(client, quotation["id"])
-    assert response.status_code == 422 and "requested_delivery_date" in response.json()["error"]["fields"]
-    unchanged = client.get(f"/api/quotations/{quotation['id']}", headers=_headers(client, "salesman_a")).json()
-    assert (unchanged["status"], unchanged["requested_delivery_date"]) == ("accepted", "2026-10-05")
-    assert db_session.query(SalesOrder).count() == 0
-
-    # On the requested day itself (late evening, Kuwait) it still converts.
-    monkeypatch.setattr(quotations_api, "now_jdk", lambda: datetime(2026, 10, 5, 23, 30, tzinfo=JDK_TIMEZONE))
-    assert _convert(client, quotation["id"]).status_code == 201

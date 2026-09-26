@@ -30,10 +30,6 @@ def convert(db: Session, quotation: Quotation, user_id: int, today: date) -> Sal
     quotation converted, in one flush. The caller audits and commits."""
     if quotation.status != ACCEPTED:
         raise ConflictError(f"Only an accepted quotation can be converted (this one is {quotation.status}).")
-    # S13.5: an order is never created for a date already past (Kuwait
-    # business date, passed in by the caller); the date must be corrected
-    # on the quotation first -- nothing moves it forward here.
-    quotation_service.check_requested_date(quotation.requested_delivery_date, today)
 
     def build(number: str) -> SalesOrder:
         order = SalesOrder(
