@@ -4,6 +4,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
+# Payment arrangements Admin may set on a customer (S0.2 / S14.2).
+PAYMENT_BEFORE_DELIVERY = "before_delivery"
+PAYMENT_AFTER_DELIVERY = "after_delivery"
+PAYMENT_PLAN = "payment_plan"
+PAYMENT_ARRANGEMENTS = (PAYMENT_BEFORE_DELIVERY, PAYMENT_AFTER_DELIVERY, PAYMENT_PLAN)
+
 
 class Customer(Base, TimestampMixin, OrganisationScopedMixin):
     """The single authoritative customer record consumed by Sales
@@ -57,3 +63,9 @@ class Customer(Base, TimestampMixin, OrganisationScopedMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
+    # Standing payment arrangement decided by Admin (S0.2 / S14.2): payment
+    # before delivery, after delivery, or an Admin-approved plan (described
+    # in payment_plan_details). Required before a Sales Order can be
+    # created; it records the arrangement only -- payments are Finance's.
+    payment_arrangement: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    payment_plan_details: Mapped[str | None] = mapped_column(Text, nullable=True)

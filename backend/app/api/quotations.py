@@ -29,10 +29,14 @@ from app.models.audit_event import (
     QUOTATION_UPDATED,
     SALES_MODULE,
     SALES_ORDER_CREATED,
+    SALES_ORDER_HANDED_OFF,
+    FULFILMENT_ASSESSED,
+    PRODUCTION_MODULE,
 )
 from app.models.customer import Customer
 from app.models.feasibility_check import FeasibilityCheck
 from app.models.quotation import ACCEPTED, CONVERTED, DRAFT, Quotation
+from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
 from app.models.sales_order import SalesOrder
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
@@ -411,6 +415,8 @@ def run_feasibility_check(
     are kept unchanged. Anyone who can see the quotation may run it; only
     Admin decides exceptions."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if quotation.status == CONVERTED:
+        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
     record = feasibility_record_service.run_check(db, quotation, current_user.id)
     audit_service.log_event(
         db,
@@ -469,6 +475,8 @@ def decide_feasibility_check(
     may change an earlier decision. The calculated result is untouched.
     Every decision is audited."""
     quotation = _get_visible_quotation(db, quotation_id, admin)
+    if quotation.status == CONVERTED:
+        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
     record = _get_check(db, quotation, check_id)
     previous = feasibility_record_service.decide(db, record, quotation, payload.decision, payload.reason, admin.id)
     audit_service.log_event(
@@ -503,6 +511,8 @@ def assess_readiness(
     everything else are left unchanged; anything that later needs
     readiness must call this, never trust a client flag."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if quotation.status == CONVERTED:
+        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
     readiness = quotation_readiness_service.assess(db, quotation)
     audit_service.log_event(
         db,
@@ -611,13 +621,15 @@ def convert_to_sales_order(
     db: Session = Depends(get_db),
 ) -> SalesOrderOut:
     """Converts an accepted quotation into its Sales Order (S13.1): only the
-    salesman owning its customer; acceptance is the only prerequisite. The
-    quotation becomes converted and locked. Audited on both records.
-    Nothing is reserved, produced or delivered."""
+    salesman owning its customer. The order is handed off to fulfilment
+    automatically on creation, so every S14.2 hand-off prerequisite must
+    hold (sales_order_service.check_handoff_prerequisites). The quotation
+    becomes converted and locked. Audited: the conversion, the creation and
+    the automatic hand-off. Nothing is reserved, produced or delivered."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
     if not _is_owner(quotation, current_user):
         raise AccessDeniedError("Only the salesman who owns this customer can convert the quotation.")
-    order = sales_order_service.convert(db, quotation, current_user.id, now_jdk().date())
+    order = sales_order_service.convert(db, quotation, current_user.id, now_jdk())
     _audit(db, request, current_user, QUOTATION_CONVERTED, quotation, f"sales_order: {order.order_number}")
     audit_service.log_event(
         db,
@@ -631,6 +643,52 @@ def convert_to_sales_order(
         details=(
             f"number: {order.order_number}, quotation: {quotation.quotation_number}, "
             f"total: {order.total_amount} {order.currency}"
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+    # The fulfilment assessment made at hand-off (S15.2): what each line
+    # takes from stock and what becomes a Production Requirement.
+    fulfilments = db.query(SalesOrderLineFulfilment).filter(SalesOrderLineFulfilment.sales_order_id == order.id).all()
+    requirements = {
+        r.sales_order_line_id: r
+        for r in db.query(ProductionRequirement).filter(ProductionRequirement.sales_order_id == order.id)
+    }
+    line_numbers = {line.id: line.line_number for line in order.lines}
+    audit_service.log_event(
+        db,
+        action=FULFILMENT_ASSESSED,
+        module=PRODUCTION_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type="sales_order",
+        entity_id=order.id,
+        result="success",
+        details=f"number: {order.order_number}; "
+        + "; ".join(
+            f"line {line_numbers[f.sales_order_line_id]}: from stock {f.fg_covered_quantity}, to produce {f.production_quantity}"
+            + (
+                f" (requirement {requirements[f.sales_order_line_id].id}, {requirements[f.sales_order_line_id].status})"
+                if f.sales_order_line_id in requirements
+                else ""
+            )
+            for f in fulfilments
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+    # The automatic transition (S14.2): the actor is the user whose order
+    # creation triggered it; nobody pressed a separate hand-off button.
+    audit_service.log_event(
+        db,
+        action=SALES_ORDER_HANDED_OFF,
+        module=SALES_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type="sales_order",
+        entity_id=order.id,
+        result="success",
+        details=(
+            f"number: {order.order_number}, source: {order.handoff_source} (on creation), "
+            f"payment arrangement: {quotation.customer.payment_arrangement}"
         ),
         ip_address=request.client.host if request.client else None,
     )

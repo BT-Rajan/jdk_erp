@@ -1,5 +1,7 @@
 import re
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 from app.core.validation import check_max_length, normalize_email
@@ -28,6 +30,8 @@ class CustomerOut(BaseModel):
     address: str | None
     assigned_to_user_id: int | None
     is_active: bool
+    payment_arrangement: str | None = None
+    payment_plan_details: str | None = None
 
 
 class CustomerCreateRequest(BaseModel):
@@ -87,6 +91,11 @@ class CustomerUpdateRequest(BaseModel):
     phone: str | None = None
     email: EmailStr | None = None
     address: str | None = None
+    # Admin-only, like every field here (S14.2): payment before delivery,
+    # after delivery, or an Admin-approved plan whose terms go in
+    # payment_plan_details. Null clears it.
+    payment_arrangement: Literal["before_delivery", "after_delivery", "payment_plan"] | None = None
+    payment_plan_details: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -113,6 +122,14 @@ class CustomerUpdateRequest(BaseModel):
             return value
         normalized = _normalize_phone(value)
         return check_max_length(normalized, 30, "Phone") if normalized else None
+
+    @field_validator("payment_plan_details")
+    @classmethod
+    def _check_plan_details(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return check_max_length(value, 2000, "Payment plan details") if value else None
 
     @field_validator("email")
     @classmethod

@@ -13,7 +13,7 @@ import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { formatDate, formatDateTime, formatNumber } from '@/lib/format'
 import type { LookupOption, PaginatedResponse } from './rfqShared'
-import { ORDER_STATUS_LABELS, ORDER_STATUS_TONES, type SalesOrder } from './quotationShared'
+import { HANDOFF_SOURCE_LABELS, ORDER_STATUS_LABELS, ORDER_STATUS_TONES, type SalesOrder } from './quotationShared'
 
 interface LineEdit {
   product_id: number
@@ -26,10 +26,12 @@ function money(value: string, currency: string): string {
   return `${formatNumber(value, { minimumFractionDigits: 3, maximumFractionDigits: 3 })} ${currency}`
 }
 
-/** One Sales Order (`/sales/orders/:orderId`). Cancel and Admin edit are
- * offered from the server's `can_cancel` / `can_edit`; the server
- * enforces both, re-prices any edit and records every reason. Nothing
- * here reserves, produces or delivers. */
+/** One Sales Order (`/sales/orders/:orderId`), handed off to fulfilment
+ * automatically on creation (S14.2). Cancel and Admin edit (date,
+ * quantities, prices) are offered from the server's `can_cancel` /
+ * `can_edit`; the server enforces both, re-prices any edit and records
+ * every change with its reason. Nothing here reserves, produces or
+ * delivers. */
 export function SalesOrderDetailPage() {
   const { orderId } = useParams()
   const navigate = useNavigate()
@@ -161,6 +163,14 @@ export function SalesOrderDetailPage() {
         <KeyValue label="Quotation" value={order.quotation_number ?? '—'} />
         <KeyValue label="Order Date" value={formatDate(order.order_date)} />
         <KeyValue label="Requested Delivery" value={formatDate(order.requested_delivery_date)} />
+        <KeyValue
+          label="Handed Off"
+          value={
+            order.handed_off_at
+              ? `${formatDateTime(order.handed_off_at)} (${HANDOFF_SOURCE_LABELS[order.handoff_source ?? ''] ?? order.handoff_source})`
+              : '—'
+          }
+        />
         <KeyValue label="Last Updated" value={formatDateTime(order.updated_at)} />
       </Card>
 

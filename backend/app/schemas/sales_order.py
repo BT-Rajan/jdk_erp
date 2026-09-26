@@ -47,6 +47,9 @@ class SalesOrderOut(BaseModel):
     cancelled_at: datetime | None
     cancelled_by_user_id: int | None
     cancellation_reason: str | None
+    handed_off_at: datetime | None = None
+    handed_off_by_user_id: int | None = None
+    handoff_source: str | None = None
     created_at: datetime
     updated_at: datetime
     lines: list[SalesOrderLineOut]
@@ -70,6 +73,8 @@ class SalesOrderUpdateRequest(BaseModel):
     from the client."""
 
     reason: str = Field(min_length=1, max_length=2000)
+    # Accepted only so a change can be refused explicitly (S13.5): the
+    # customer is fixed to the source quotation's.
     customer_id: int | None = None
     requested_delivery_date: date | None = None
     lines: list[QuotationLineCreateRequest] | None = Field(default=None, min_length=1, max_length=200)

@@ -1,9 +1,10 @@
 """Sales Orders (Sales S13). Created only by converting an accepted
 quotation (POST /api/quotations/{id}/convert). Every path here is scoped
-through the order's customer (S2) -- outside scope is a 404. Cancel: the
-owning salesman or their team head, reason required. Change: Admin only,
-reason required. All audited. Nothing here reserves, produces, moves,
-bills or delivers anything."""
+through the order's customer (S2) -- outside scope is a 404. Every order
+is handed off to fulfilment on creation (S14.2), so cancel and change are
+Admin only, each with a mandatory reason, and audited (a change with every
+old -> new value). Nothing here reserves, produces, moves, bills or
+delivers anything."""
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import or_
@@ -11,15 +12,17 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import AccessDeniedError, NotFoundError, ValidationError
+from app.core.errors import AccessDeniedError, NotFoundError
 from app.core.list_query import paginate
 from app.core.roles import ADMIN_ROLES
 from app.core.timezone import now_jdk
 from app.models.audit_event import SALES_MODULE, SALES_ORDER_CANCELLED, SALES_ORDER_UPDATED
 from app.models.customer import Customer
-from app.models.sales_order import OPEN, SalesOrder
+from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
+from app.models.sales_order import HANDED_OFF, SalesOrder
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
+from app.schemas.production_requirement import LineFulfilmentOut, ProductionRequirementOut
 from app.schemas.sales_order import SalesOrderCancelRequest, SalesOrderOut, SalesOrderUpdateRequest
 from app.services import audit_service, customer_scope, quotation_service, sales_order_service
 
@@ -42,22 +45,15 @@ def _get_visible_order(db: Session, order_id: int, user: User) -> SalesOrder:
     return order
 
 
-def _owner_id(order: SalesOrder) -> int | None:
-    return order.customer.assigned_to_user_id if order.customer is not None else None
-
-
-def _can_cancel(db: Session, order: SalesOrder, user: User) -> bool:
-    """S13.1: the owning salesman or their team head, on an open order."""
-    if order.status != OPEN:
-        return False
-    owner_id = _owner_id(order)
-    return owner_id == user.id or customer_scope.is_team_head_of(db, user, owner_id)
+def _admin_may_act(order: SalesOrder, user: User) -> bool:
+    """S13.1 / S14.2: after hand-off only Admin cancels or changes an order."""
+    return order.status == HANDED_OFF and user.role in ADMIN_ROLES
 
 
 def order_out(db: Session, order: SalesOrder, user: User) -> SalesOrderOut:
     out = SalesOrderOut.model_validate(order)
-    out.can_cancel = _can_cancel(db, order, user)
-    out.can_edit = order.status == OPEN and user.role in ADMIN_ROLES
+    out.can_cancel = _admin_may_act(order, user)
+    out.can_edit = _admin_may_act(order, user)
     return out
 
 
@@ -102,6 +98,35 @@ def get_sales_order(
     return order_out(db, _get_visible_order(db, order_id, current_user), current_user)
 
 
+@router.get("/{order_id}/fulfilment", response_model=list[LineFulfilmentOut])
+def get_sales_order_fulfilment(
+    order_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[LineFulfilmentOut]:
+    """Read-only (S15.2): per line, what Finished Goods covered at hand-off
+    and the Production Requirement for any shortfall. Same visibility as
+    the order itself. There is no write path here -- the order's
+    commercial data is never changed from the production side."""
+    order = _get_visible_order(db, order_id, current_user)
+    line_numbers = {line.id: line.line_number for line in order.lines}
+    requirements = {
+        r.sales_order_line_id: r
+        for r in db.query(ProductionRequirement).filter(ProductionRequirement.sales_order_id == order.id)
+    }
+    rows = []
+    for fulfilment in (
+        db.query(SalesOrderLineFulfilment)
+        .filter(SalesOrderLineFulfilment.sales_order_id == order.id)
+        .order_by(SalesOrderLineFulfilment.id)
+    ):
+        out = LineFulfilmentOut.model_validate(fulfilment)
+        out.line_number = line_numbers.get(fulfilment.sales_order_line_id)
+        requirement = requirements.get(fulfilment.sales_order_line_id)
+        if requirement is not None:
+            out.production_requirement = ProductionRequirementOut.model_validate(requirement)
+        rows.append(out)
+    return rows
+
+
 @router.post("/{order_id}/cancel", response_model=SalesOrderOut)
 def cancel_sales_order(
     order_id: int,
@@ -110,10 +135,11 @@ def cancel_sales_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> SalesOrderOut:
-    """The owning salesman or their team head; reason mandatory; final."""
+    """Admin only once handed off (every order is, from creation); reason
+    mandatory; final."""
     order = _get_visible_order(db, order_id, current_user)
-    if order.status == OPEN and not _can_cancel(db, order, current_user):
-        raise AccessDeniedError("Only the owning salesman or their team head can cancel this order.")
+    if current_user.role not in ADMIN_ROLES:
+        raise AccessDeniedError("Only Admin can cancel a Sales Order after it has been handed off to fulfilment.")
     sales_order_service.cancel(order, current_user.id, payload.reason)
     _audit(db, request, current_user, SALES_ORDER_CANCELLED, order, f"reason: {payload.reason}")
     db.commit()
@@ -129,16 +155,11 @@ def update_sales_order(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> SalesOrderOut:
-    """Admin/Super Admin only, reason mandatory, open orders only. Lines
-    are re-validated and re-priced on the server."""
+    """Admin/Super Admin only, reason mandatory, handed-off orders only:
+    the requested date, quantities and prices (re-validated and re-priced
+    on the server). Every change is audited with its old and new value."""
     order = _get_visible_order(db, order_id, admin)
     updates = payload.model_dump(exclude_unset=True)
-    customer_id = None
-    if updates.get("customer_id") is not None:
-        customer = customer_scope.get_accessible_customer(db, admin, updates["customer_id"])
-        if not customer.is_active:
-            raise ValidationError("This customer is inactive.", fields={"customer_id": "Customer is inactive."})
-        customer_id = customer.id
     kwargs = {}
     if "requested_delivery_date" in updates:
         kwargs["requested_delivery_date"] = updates["requested_delivery_date"]
@@ -153,18 +174,11 @@ def update_sales_order(
             )
             for line in payload.lines
         ]
-    changed = sales_order_service.admin_update(
-        db, order, today=now_jdk().date(), customer_id=customer_id, lines=lines, **kwargs
+    changes = sales_order_service.admin_update(
+        db, order, today=now_jdk().date(), customer_id=updates.get("customer_id"), lines=lines, **kwargs
     )
-    if changed:
-        _audit(
-            db,
-            request,
-            admin,
-            SALES_ORDER_UPDATED,
-            order,
-            f"changed: {', '.join(changed)}; reason: {payload.reason}; total: {order.total_amount} {order.currency}",
-        )
+    if changes:
+        _audit(db, request, admin, SALES_ORDER_UPDATED, order, f"changes: {'; '.join(changes)}; reason: {payload.reason}")
     db.commit()
     db.expire_all()
     return order_out(db, _get_visible_order(db, order_id, admin), admin)

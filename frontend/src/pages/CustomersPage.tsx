@@ -35,6 +35,16 @@ interface Customer {
   address: string | null
   assigned_to_user_id: number | null
   is_active: boolean
+  payment_arrangement: string | null
+  payment_plan_details: string | null
+}
+
+/** Admin-set payment arrangement (S14.2) -- needed before a Sales Order;
+ * records the arrangement only, never a payment. */
+const PAYMENT_ARRANGEMENT_LABELS: Record<string, string> = {
+  before_delivery: 'Payment before delivery',
+  after_delivery: 'Payment after delivery',
+  payment_plan: 'Admin-approved payment plan',
 }
 
 /** Local shape for the assignee picker -- mirrors the fields this page
@@ -61,11 +71,21 @@ const customerSchema = z.object({
   phone: z.string(),
   email: z.string().refine((value) => value === '' || z.string().email().safeParse(value).success, 'Enter a valid email address'),
   address: z.string(),
+  payment_arrangement: z.string(),
+  payment_plan_details: z.string(),
 })
 
 type CustomerFormValues = z.infer<typeof customerSchema>
 
-const emptyDefaults: CustomerFormValues = { name: '', contact_person: '', phone: '', email: '', address: '' }
+const emptyDefaults: CustomerFormValues = {
+  name: '',
+  contact_person: '',
+  phone: '',
+  email: '',
+  address: '',
+  payment_arrangement: '',
+  payment_plan_details: '',
+}
 
 function toFormValues(customer: Customer): CustomerFormValues {
   return {
@@ -74,6 +94,8 @@ function toFormValues(customer: Customer): CustomerFormValues {
     phone: customer.phone ?? '',
     email: customer.email ?? '',
     address: customer.address ?? '',
+    payment_arrangement: customer.payment_arrangement ?? '',
+    payment_plan_details: customer.payment_plan_details ?? '',
   }
 }
 
@@ -142,6 +164,7 @@ export function CustomersPage() {
     register,
     handleSubmit,
     reset,
+    watch,
     setError: setFieldError,
     formState: { errors, isSubmitting },
   } = useForm<CustomerFormValues>({ resolver: zodResolver(customerSchema), defaultValues: emptyDefaults })
@@ -208,7 +231,12 @@ export function CustomersPage() {
       }
       try {
         if (editingCustomer) {
-          await apiClient.patch(`/api/customers/${editingCustomer.id}`, payload)
+          // Editing is Admin-only; so is the payment arrangement (S14.2).
+          await apiClient.patch(`/api/customers/${editingCustomer.id}`, {
+            ...payload,
+            payment_arrangement: values.payment_arrangement || null,
+            payment_plan_details: values.payment_arrangement === 'payment_plan' ? values.payment_plan_details || null : null,
+          })
         } else {
           await apiClient.post('/api/customers', payload)
         }
@@ -375,6 +403,29 @@ export function CustomersPage() {
         <TextField label="Phone" {...register('phone')} error={errors.phone?.message} />
         <TextField label="Email" type="email" {...register('email')} error={errors.email?.message} />
         <TextareaField label="Address" {...register('address')} error={errors.address?.message} />
+        {editingCustomer && (
+          <SelectField
+            label="Payment arrangement"
+            hint="Required before a Sales Order can be created."
+            {...register('payment_arrangement')}
+            error={errors.payment_arrangement?.message}
+          >
+            <option value="">Not set</option>
+            {Object.entries(PAYMENT_ARRANGEMENT_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </SelectField>
+        )}
+        {editingCustomer && watch('payment_arrangement') === 'payment_plan' && (
+          <TextareaField
+            label="Payment plan details"
+            required
+            {...register('payment_plan_details')}
+            error={errors.payment_plan_details?.message}
+          />
+        )}
       </FormPage>
 
       {canEdit && (

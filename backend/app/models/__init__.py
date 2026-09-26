@@ -26,6 +26,11 @@ from app.models.purchase_order import (
     PurchaseOrderRevision,
     PurchaseOrderRevisionLine,
 )
+from app.models.production_requirement import (
+    ProductionRequirement,
+    ProductionRequirementComponent,
+    SalesOrderLineFulfilment,
+)
 from app.models.quotation import Quotation, QuotationLine
 from app.models.raw_material import RawMaterial
 from app.models.refresh_token import RefreshToken
@@ -68,6 +73,9 @@ __all__ = [
     "RawMaterial",
     "SalesOrder",
     "SalesOrderLine",
+    "SalesOrderLineFulfilment",
+    "ProductionRequirement",
+    "ProductionRequirementComponent",
     "SupplierMaterial",
     "ProductionLine",
     "Machine",

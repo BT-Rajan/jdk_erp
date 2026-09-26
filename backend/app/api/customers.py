@@ -18,7 +18,7 @@ from app.models.audit_event import (
     CUSTOMER_UPDATED,
     MASTER_DATA_MODULE,
 )
-from app.models.customer import Customer
+from app.models.customer import PAYMENT_PLAN, Customer
 from app.models.user import User
 from app.schemas.customer import (
     CustomerAssignRequest,
@@ -217,9 +217,19 @@ def update_customer(
     customer = _get_customer_in_org(db, customer_id, admin.organisation_id)
 
     updates = payload.model_dump(exclude_unset=True)
+    # Plan terms belong only to a payment plan (S14.2): cleared with any
+    # other arrangement, required with a plan.
+    arrangement = updates.get("payment_arrangement", customer.payment_arrangement)
+    if arrangement != PAYMENT_PLAN and ("payment_plan_details" in updates or customer.payment_plan_details):
+        updates["payment_plan_details"] = None
     before = {field: getattr(customer, field) for field in updates}
     for field, value in updates.items():
         setattr(customer, field, value)
+    if customer.payment_arrangement == PAYMENT_PLAN and not customer.payment_plan_details:
+        raise ValidationError(
+            "Describe the approved payment plan.",
+            fields={"payment_plan_details": "Required for a payment plan."},
+        )
     db.add(customer)
 
     try:
