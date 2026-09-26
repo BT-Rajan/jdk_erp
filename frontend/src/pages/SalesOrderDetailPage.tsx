@@ -11,9 +11,11 @@ import { Spinner } from '@/components/ui/Spinner'
 import { DateField } from '@/components/forms/DateField'
 import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
+import { downloadFile } from '@/lib/downloadFile'
 import { formatDate, formatDateTime, formatNumber } from '@/lib/format'
 import type { LookupOption, PaginatedResponse } from './rfqShared'
 import { HANDOFF_SOURCE_LABELS, ORDER_STATUS_LABELS, ORDER_STATUS_TONES, type SalesOrder } from './quotationShared'
+import { DELIVERY_STATUS_LABELS, DELIVERY_STATUS_TONES, type DeliveryInstruction } from './deliveryShared'
 
 interface LineEdit {
   product_id: number
@@ -30,8 +32,9 @@ function money(value: string, currency: string): string {
  * automatically on creation (S14.2). Cancel and Admin edit (date,
  * quantities, prices) are offered from the server's `can_cancel` /
  * `can_edit`; the server enforces both, re-prices any edit and records
- * every change with its reason. Nothing here reserves, produces or
- * delivers. */
+ * every change with its reason. Delivered / remaining quantities and the
+ * order's Delivery Instructions are read-only here (the instructions
+ * only for users with the delivery permission). */
 export function SalesOrderDetailPage() {
   const { orderId } = useParams()
   const navigate = useNavigate()
@@ -50,6 +53,8 @@ export function SalesOrderDetailPage() {
   // Line ids already assessed for fulfilment at hand-off (S15.2): their
   // quantity is fixed until that is resolved; null = not known.
   const [assessedLineIds, setAssessedLineIds] = useState<Set<number> | null>(null)
+  // null = not visible to this user (no delivery permission).
+  const [deliveries, setDeliveries] = useState<DeliveryInstruction[] | null>(null)
 
   const load = useCallback(async () => {
     const { data } = await apiClient.get<SalesOrder>(`/api/sales-orders/${orderId}`)
@@ -58,6 +63,10 @@ export function SalesOrderDetailPage() {
       .get<{ sales_order_line_id: number }[]>(`/api/sales-orders/${orderId}/fulfilment`)
       .then((res) => setAssessedLineIds(new Set(res.data.map((row) => row.sales_order_line_id))))
       .catch(() => setAssessedLineIds(null))
+    apiClient
+      .get<PaginatedResponse<DeliveryInstruction>>('/api/delivery-instructions', { params: { sales_order_id: orderId, page_size: 100 } })
+      .then((res) => setDeliveries(res.data.data))
+      .catch(() => setDeliveries(null))
   }, [orderId])
 
   useEffect(() => {
@@ -135,6 +144,11 @@ export function SalesOrderDetailPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => navigate('/sales/orders')}>All Sales Orders</Button>
+            {order.pdf_file && (
+              <Button variant="secondary" onClick={() => downloadFile(order.pdf_file!).catch(() => setActionError('Failed to download the PDF.'))}>
+                Order Confirmation PDF
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => navigate(`/sales/quotations/${order.quotation_id}`)}>View Quotation</Button>
             {order.can_edit && !editing && <Button variant="secondary" onClick={startEdit}>Edit (Admin)</Button>}
             {order.can_cancel && !cancelling && (
@@ -249,6 +263,8 @@ export function SalesOrderDetailPage() {
                 <th className="py-2 pr-3">Product</th>
                 <th className="py-2 pr-3 text-right">Quantity</th>
                 <th className="py-2 pr-3">Unit</th>
+                <th className="py-2 pr-3 text-right">Delivered</th>
+                <th className="py-2 pr-3 text-right">Remaining</th>
                 <th className="py-2 pr-3 text-right">Unit Price</th>
                 <th className="py-2 text-right">Amount</th>
               </tr>
@@ -260,6 +276,10 @@ export function SalesOrderDetailPage() {
                   <td className="py-2 pr-3">{productsById.get(line.product_id)?.name ?? `Product ${line.product_id}`}</td>
                   <td className="py-2 pr-3 text-right">{formatNumber(line.quantity, { maximumFractionDigits: 4 })}</td>
                   <td className="py-2 pr-3">{unitsById.get(line.unit_of_measure_id)?.code ?? '—'}</td>
+                  <td className="py-2 pr-3 text-right">{formatNumber(line.fulfilled_quantity ?? '0', { maximumFractionDigits: 4 })}</td>
+                  <td className="py-2 pr-3 text-right">
+                    {line.remaining_quantity == null ? '—' : formatNumber(line.remaining_quantity, { maximumFractionDigits: 4 })}
+                  </td>
                   <td className="py-2 pr-3 text-right">{formatNumber(line.unit_price, { maximumFractionDigits: 4 })}</td>
                   <td className="py-2 text-right">{money(line.line_amount, order.currency)}</td>
                 </tr>
@@ -272,6 +292,29 @@ export function SalesOrderDetailPage() {
           <div className="font-medium"><span className="text-gold-100/50">Total: </span>{money(order.total_amount, order.currency)}</div>
         </div>
       </Card>
+
+      {deliveries !== null && (
+        <Card className="space-y-3 p-6">
+          <FormSectionHeading>Delivery Instructions</FormSectionHeading>
+          {deliveries.length === 0 ? (
+            <p className="text-sm text-gold-100/60">No deliveries yet.</p>
+          ) : (
+            <ul className="divide-y divide-ink-700">
+              {deliveries.map((d) => (
+                <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                  <span>
+                    {d.delivery_number} <span className="text-gold-100/50">· {formatDateTime(d.created_at)}</span>
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <Badge tone={DELIVERY_STATUS_TONES[d.status] ?? 'neutral'}>{DELIVERY_STATUS_LABELS[d.status] ?? d.status}</Badge>
+                    <Button variant="secondary" onClick={() => navigate(`/deliveries/${d.id}`)}>Open</Button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

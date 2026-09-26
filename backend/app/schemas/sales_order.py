@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.file import FileOut
 from app.schemas.quotation import QuotationLineCreateRequest
 
 
@@ -23,6 +24,10 @@ class SalesOrderLineOut(BaseModel):
     unit_of_measure_id: int
     unit_price: Decimal
     line_amount: Decimal
+    # Delivery progress (Delivery D6), derived from fulfilled Delivery
+    # Instructions; the ordered `quantity` itself never changes.
+    fulfilled_quantity: Decimal = Decimal("0")
+    remaining_quantity: Decimal | None = None
 
 
 class SalesOrderOut(BaseModel):
@@ -55,6 +60,8 @@ class SalesOrderOut(BaseModel):
     lines: list[SalesOrderLineOut]
     can_cancel: bool = False
     can_edit: bool = False
+    # The latest Order Confirmation PDF (single-order responses only).
+    pdf_file: FileOut | None = None
 
 
 class SalesOrderCancelRequest(BaseModel):

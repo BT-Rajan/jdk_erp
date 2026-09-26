@@ -20,13 +20,16 @@ handling information only -- never a unit, product, stock or conversion:
 products measured in mass, none otherwise), `pallet_count` the count used,
 `pallet_count_manual` whether the warehouse set it deliberately.
 
-Only `pending` is ever set yet; `fulfilled` is recognised so fulfilled
-quantities can be counted once a later pass records fulfilment. Nothing
-here moves or reserves stock or changes the Sales Order."""
+Lifecycle (Delivery D4): pending -> fulfilled (final: the shipment
+quantity then counts toward the Sales Order and can never change), or
+pending -> not_fulfilled (reason required; counts for nothing) ->
+pending again to retry the same instruction. There is no partially
+fulfilled instruction -- a partial delivery is simply a smaller tranche."""
 
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -34,7 +37,8 @@ from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
 PENDING = "pending"
 FULFILLED = "fulfilled"
-DELIVERY_INSTRUCTION_STATUSES = (PENDING, FULFILLED)
+NOT_FULFILLED = "not_fulfilled"
+DELIVERY_INSTRUCTION_STATUSES = (PENDING, FULFILLED, NOT_FULFILLED)
 
 
 class DeliveryInstruction(Base, TimestampMixin, OrganisationScopedMixin):
@@ -51,6 +55,12 @@ class DeliveryInstruction(Base, TimestampMixin, OrganisationScopedMixin):
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     # The order's allowance %, copied from its first instruction (see above).
     scrap_allowance_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    fulfilled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # The latest not-fulfilled attempt (cleared on retry; every attempt stays in the audit trail).
+    not_fulfilled_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    not_fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    not_fulfilled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     lines: Mapped[list["DeliveryInstructionLine"]] = relationship(
         back_populates="delivery_instruction", cascade="all, delete-orphan", order_by="DeliveryInstructionLine.id"

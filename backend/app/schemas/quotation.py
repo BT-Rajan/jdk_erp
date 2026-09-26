@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.file import FileOut
+
 
 class QuotationLineCreateRequest(BaseModel):
     """`unit_of_measure_id` is required and must be the product's own unit
@@ -66,6 +68,9 @@ class QuotationLineOut(BaseModel):
 
 class QuotationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+    # The latest Quotation PDF (single-quotation responses only).
+    pdf_file: FileOut | None = None
 
     id: int
     quotation_number: str

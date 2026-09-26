@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user, require_admin
 from app.core.roles import ADMIN_ROLES
 from app.core.database import get_db
+from app.core.entity_access import register_entity_access_check
 from app.core.errors import AccessDeniedError, ConflictError, NotFoundError, ValidationError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
@@ -39,6 +40,7 @@ from app.models.quotation import ACCEPTED, CONVERTED, DRAFT, Quotation
 from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
 from app.models.sales_order import SalesOrder
 from app.models.user import User
+from app.schemas.file import FileOut
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.sales_order import SalesOrderOut
 from app.schemas.quotation import (
@@ -62,6 +64,7 @@ from app.services import (
     feasibility_service,
     quotation_readiness_service,
     quotation_service,
+    sales_document_service,
     sales_order_service,
     same_day_fg_service,
 )
@@ -111,7 +114,7 @@ def _can_reject(db: Session, quotation: Quotation, user: User) -> bool:
     return _is_owner(quotation, user) or customer_scope.is_team_head_of(db, user, owner_id)
 
 
-def _list_row(db: Session, quotation: Quotation, user: User) -> QuotationListRowOut:
+def _list_row(db: Session, quotation: Quotation, user: User, *, with_pdf: bool = False) -> QuotationListRowOut:
     today = now_jdk().date()
     readiness = quotation_readiness_service.assess(db, quotation)
     row = QuotationListRowOut.model_validate(quotation)
@@ -128,6 +131,9 @@ def _list_row(db: Session, quotation: Quotation, user: User) -> QuotationListRow
     row.can_convert = quotation.status == ACCEPTED and owner
     if quotation.status == CONVERTED:
         row.sales_order_id = db.query(SalesOrder.id).filter(SalesOrder.quotation_id == quotation.id).scalar()
+    if with_pdf:
+        record = sales_document_service.latest_pdf(db, sales_document_service.QUOTATION_PDF, quotation.id)
+        row.pdf_file = FileOut.model_validate(record) if record is not None else None
     return row
 
 
@@ -157,7 +163,7 @@ def list_quotations(
 def get_quotation(
     quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> QuotationListRowOut:
-    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user, with_pdf=True)
 
 
 @router.patch("/{quotation_id}", response_model=QuotationListRowOut)
@@ -228,9 +234,12 @@ def update_quotation(
             ),
             ip_address=request.client.host if request.client else None,
         )
-    db.commit()
+        # A new Quotation PDF for the saved content; upload_file commits.
+        sales_document_service.store_quotation_pdf(db, quotation, current_user.id)
+    else:
+        db.commit()
     db.expire_all()
-    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user, with_pdf=True)
 
 
 @router.put("/{quotation_id}/price-decision", response_model=QuotationListRowOut)
@@ -268,7 +277,7 @@ def decide_price(
     )
     db.commit()
     db.expire_all()
-    return _list_row(db, _get_visible_quotation(db, quotation_id, admin), admin)
+    return _list_row(db, _get_visible_quotation(db, quotation_id, admin), admin, with_pdf=True)
 
 
 @router.get("/{quotation_id}/lines", response_model=list[QuotationLineOut])
@@ -329,7 +338,8 @@ def create_quotation(
         ),
         ip_address=request.client.host if request.client else None,
     )
-    db.commit()
+    # The Quotation PDF; upload_file is the single commit point.
+    sales_document_service.store_quotation_pdf(db, quotation, current_user.id)
     return _get_visible_quotation(db, quotation.id, current_user)
 
 
@@ -571,7 +581,7 @@ def accept_quotation(
     _audit(db, request, current_user, QUOTATION_ACCEPTED, quotation, f"total: {quotation.total_amount} {quotation.currency}")
     db.commit()
     db.expire_all()
-    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user, with_pdf=True)
 
 
 @router.post("/{quotation_id}/reject", response_model=QuotationListRowOut)
@@ -591,7 +601,7 @@ def reject_quotation(
     _audit(db, request, current_user, QUOTATION_REJECTED, quotation, f"reason: {payload.reason}")
     db.commit()
     db.expire_all()
-    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user, with_pdf=True)
 
 
 @router.post("/{quotation_id}/renew", response_model=QuotationListRowOut)
@@ -608,9 +618,10 @@ def renew_quotation(
         raise AccessDeniedError("Only the salesman who owns this customer can renew the quotation.")
     previous = quotation_service.renew(quotation, now_jdk().date())
     _audit(db, request, current_user, QUOTATION_RENEWED, quotation, f"valid_until: {previous} -> {quotation.valid_until}")
-    db.commit()
+    # The new validity date is printed: a new Quotation PDF (commits).
+    sales_document_service.store_quotation_pdf(db, quotation, current_user.id)
     db.expire_all()
-    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user, with_pdf=True)
 
 
 @router.post("/{quotation_id}/convert", response_model=SalesOrderOut, status_code=status.HTTP_201_CREATED)
@@ -692,9 +703,18 @@ def convert_to_sales_order(
         ),
         ip_address=request.client.host if request.client else None,
     )
-    db.commit()
+    # The Order Confirmation PDF; upload_file is the single commit point.
+    sales_document_service.store_sales_order_pdf(db, order, current_user.id)
     db.expire_all()
     # Same server-computed flags as every other Sales Order response.
     from app.api import sales_orders as sales_orders_api
 
-    return sales_orders_api.order_out(db, db.query(SalesOrder).filter(SalesOrder.id == order.id).one(), current_user)
+    return sales_orders_api.order_out(db, db.query(SalesOrder).filter(SalesOrder.id == order.id).one(), current_user, with_pdf=True)
+
+
+def _check_quotation_pdf_access(db: Session, user: User, quotation_id: int) -> bool:
+    """A Quotation PDF follows the quotation's own visibility (customer scope)."""
+    return _scoped_query(db, user).filter(Quotation.id == quotation_id).first() is not None
+
+
+register_entity_access_check(sales_document_service.QUOTATION_PDF, _check_quotation_pdf_access)

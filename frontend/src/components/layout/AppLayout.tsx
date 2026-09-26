@@ -48,6 +48,7 @@ const NAV_ENTRIES: NavEntry[] = [
       { label: 'Reconciliation', to: '/inventory/reconciliation' },
       { label: 'Finished Goods Stock', to: '/inventory/finished-goods' },
       { label: 'Finished Goods Adjustments', to: '/inventory/finished-goods-adjustments' },
+      { label: 'Deliveries', to: '/deliveries' },
     ],
   },
   {

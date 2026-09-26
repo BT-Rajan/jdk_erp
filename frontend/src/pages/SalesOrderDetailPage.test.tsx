@@ -109,4 +109,28 @@ describe('SalesOrderDetailPage', () => {
     await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1))
     expect(patchMock.mock.calls[0][1].lines[0].quantity).toBe('5')
   })
+
+  it('offers the Order Confirmation PDF only when the server reports one', async () => {
+    renderPage()
+    await screen.findByRole('button', { name: 'Edit (Admin)' })
+    expect(screen.queryByRole('button', { name: 'Order Confirmation PDF' })).not.toBeInTheDocument()
+  })
+
+  it('downloads the Order Confirmation through the files endpoint', async () => {
+    const withPdf = { ...ORDER, pdf_file: { id: 42, original_filename: 'Order-Confirmation-2660001.pdf' } }
+    Object.assign(window.URL, { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/sales-orders/5') return Promise.resolve({ data: withPdf })
+      if (url === '/api/files/42') return Promise.resolve({ data: new Blob(['%PDF']) })
+      if (url === '/api/sales-orders/5/fulfilment') return Promise.resolve({ data: fulfilment })
+      return Promise.resolve({ data: EMPTY_PAGE })
+    })
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'Order Confirmation PDF' }))
+    await waitFor(() => expect(click).toHaveBeenCalled())
+    expect(getMock).toHaveBeenCalledWith('/api/files/42', { responseType: 'blob' })
+    click.mockRestore()
+  })
 })
+

@@ -12,6 +12,7 @@ import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { isAdminRole } from '@/lib/auth/roles'
+import { downloadFile } from '@/lib/downloadFile'
 import { formatDate, formatDateTime, formatNumber } from '@/lib/format'
 import type { LookupOption, PaginatedResponse } from './rfqShared'
 import {
@@ -166,6 +167,11 @@ export function QuotationDetailPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => navigate('/sales/quotations')}>All Quotations</Button>
+            {quotation.pdf_file && (
+              <Button variant="secondary" onClick={() => downloadFile(quotation.pdf_file!).catch(() => setActionError('Failed to download the PDF.'))}>
+                Download PDF
+              </Button>
+            )}
             {quotation.can_edit && (
               <Button variant="secondary" onClick={() => navigate(`/sales/quotations/${quotation.id}/edit`)}>Edit</Button>
             )}

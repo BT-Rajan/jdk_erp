@@ -1,7 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.file import FileOut
 
 
 class DeliveryInstructionLineCreate(BaseModel):
@@ -43,9 +45,15 @@ class DeliveryInstructionOut(BaseModel):
     status: str
     # The Sales Order's allowance %, locked by its first instruction.
     scrap_allowance_percent: Decimal
+    fulfilled_at: datetime | None = None
+    fulfilled_by_user_id: int | None = None
+    not_fulfilled_reason: str | None = None
+    not_fulfilled_at: datetime | None = None
     created_by_user_id: int | None
     created_at: datetime
     lines: list[DeliveryInstructionLineOut]
+    # The latest Delivery Note (detail responses only).
+    pdf_file: FileOut | None = None
 
 
 class DeliveryLinePositionOut(BaseModel):
@@ -54,6 +62,8 @@ class DeliveryLinePositionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     sales_order_line_id: int
+    product_id: int
+    unit_of_measure_id: int
     ordered_quantity: Decimal
     fulfilled_quantity: Decimal
     remaining_quantity: Decimal
@@ -63,6 +73,12 @@ class DeliveryLinePositionOut(BaseModel):
 
 class DeliveryPositionOut(BaseModel):
     sales_order_id: int
+    sales_order_number: str
+    sales_order_status: str
+    customer_name: str | None = None
+    requested_delivery_date: date | None = None
+    # Whether a new Delivery Instruction may be created now (server rule).
+    can_create: bool = False
     scrap_allowance_percent: Decimal
     # False until the order's first Delivery Instruction locks the %.
     allowance_locked: bool
@@ -80,3 +96,19 @@ class DeliveryShipmentUpdateRequest(BaseModel):
     pallet_count: int | None = Field(default=None, ge=1, strict=True)
     # Required when an Admin sets a quantity above the remaining permitted.
     override_reason: str | None = Field(default=None, max_length=2000)
+
+
+class DeliveryNotFulfilledRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class DeliverableOrderOut(BaseModel):
+    """A Sales Order that can take a Delivery Instruction now."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    order_number: str
+    customer_name: str | None = None
+    requested_delivery_date: date | None = None
+    status: str
