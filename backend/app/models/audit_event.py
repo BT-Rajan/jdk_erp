@@ -110,6 +110,7 @@ INVENTORY_OPENING_STOCK_RECORDED = "inventory_opening_stock_recorded"
 # domain" reasoning app/services/inventory_scope.py's module_key reuse
 # already documents for Finished Goods Inventory's authorization.
 FINISHED_GOODS_ADJUSTMENT_CREATED = "finished_goods_adjustment_created"
+QUOTATION_CREATED = "quotation_created"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"
@@ -127,6 +128,8 @@ PROCUREMENT_MODULE = "procurement"
 # app/services/inventory_scope.py's module_key is distinct from
 # purchase_scope.py's.
 INVENTORY_MODULE = "inventory"
+# Phase 3 -- Sales documents (quotations, and later orders/delivery notes).
+SALES_MODULE = "sales"
 
 
 class AuditEvent(Base):

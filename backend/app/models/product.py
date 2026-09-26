@@ -76,6 +76,12 @@ class Product(Base, TimestampMixin, OrganisationScopedMixin):
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     selling_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # Admin-set permitted quoting range (Sales S4). A quotation line priced
+    # outside it -- or for a product with no range set -- is flagged as
+    # needing Admin approval; never blocked, never silently accepted.
+    # Both optional; when both are set, min <= max.
+    min_selling_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    max_selling_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     manufacturing_lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     customer_lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)

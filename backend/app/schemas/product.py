@@ -16,6 +16,8 @@ class ProductOut(BaseModel):
     unit_of_measure_id: int
     description: str | None
     selling_price: Decimal
+    min_selling_price: Decimal | None
+    max_selling_price: Decimal | None
     manufacturing_lead_time_days: int | None
     customer_lead_time_days: int | None
     is_active: bool
@@ -34,6 +36,8 @@ class ProductCreateRequest(BaseModel):
     unit_of_measure_id: int
     description: str | None = None
     selling_price: Decimal = Field(max_digits=14, decimal_places=2)
+    min_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
+    max_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
     manufacturing_lead_time_days: int | None = None
     customer_lead_time_days: int | None = None
 
@@ -50,6 +54,13 @@ class ProductCreateRequest(BaseModel):
     def _check_selling_price(cls, value: Decimal) -> Decimal:
         if value < 0:
             raise ValueError("Selling price must not be negative.")
+        return value
+
+    @field_validator("min_selling_price", "max_selling_price")
+    @classmethod
+    def _check_price_range_value(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("Price must not be negative.")
         return value
 
     @field_validator("manufacturing_lead_time_days", "customer_lead_time_days")
@@ -72,6 +83,8 @@ class ProductUpdateRequest(BaseModel):
     unit_of_measure_id: int | None = None
     description: str | None = None
     selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
+    min_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
+    max_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
     manufacturing_lead_time_days: int | None = None
     customer_lead_time_days: int | None = None
 
@@ -90,6 +103,13 @@ class ProductUpdateRequest(BaseModel):
     def _check_selling_price(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and value < 0:
             raise ValueError("Selling price must not be negative.")
+        return value
+
+    @field_validator("min_selling_price", "max_selling_price")
+    @classmethod
+    def _check_price_range_value(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("Price must not be negative.")
         return value
 
     @field_validator("manufacturing_lead_time_days", "customer_lead_time_days")

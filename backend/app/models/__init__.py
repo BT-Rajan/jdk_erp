@@ -25,6 +25,7 @@ from app.models.purchase_order import (
     PurchaseOrderRevision,
     PurchaseOrderRevisionLine,
 )
+from app.models.quotation import Quotation, QuotationLine
 from app.models.raw_material import RawMaterial
 from app.models.refresh_token import RefreshToken
 from app.models.rfq import Rfq, RfqInvitationFollowUp, RfqLine, RfqResponse, RfqResponseLine, RfqSupplierInvitation
@@ -58,6 +59,8 @@ __all__ = [
     "Notification",
     "Supplier",
     "Product",
+    "Quotation",
+    "QuotationLine",
     "RawMaterial",
     "SupplierMaterial",
     "ProductionLine",
