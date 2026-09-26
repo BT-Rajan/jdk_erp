@@ -234,14 +234,19 @@ def _reload(db: Session, user: User, instruction_id: int) -> DeliveryInstruction
 def fulfil_delivery_instruction(
     instruction_id: int, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> DeliveryInstruction:
-    """pending -> fulfilled (Delivery D4). Refused unless every line is
-    within its order line's remaining permitted quantity (or carries an
-    Admin override). A repeated request is a 409 and changes nothing."""
+    """pending -> fulfilled, issuing each line's quantity from Finished
+    Goods in the same transaction (Delivery D4/D5). Refused unless every
+    line is within its order line's remaining permitted quantity (or
+    carries an Admin override) and the stock is on hand. A repeated
+    request is a 409 and changes nothing."""
     inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
     instruction = _get_instruction(db, current_user, instruction_id)
-    delivery_instruction_service.fulfil(db, instruction, current_user.id)
-    quantities = "; ".join(f"line {line.sales_order_line_id}: {line.quantity}" for line in instruction.lines)
-    _audit_transition(db, request, current_user, DELIVERY_FULFILLED, instruction, f"pending -> fulfilled; {quantities}")
+    movements = delivery_instruction_service.fulfil(db, instruction, current_user.id)
+    issued = "; ".join(
+        f"line {line.sales_order_line_id}: {line.quantity} (finished goods movement {movement.id})"
+        for line, movement in zip(instruction.lines, movements)
+    )
+    _audit_transition(db, request, current_user, DELIVERY_FULFILLED, instruction, f"pending -> fulfilled; {issued}")
     return _reload(db, current_user, instruction_id)
 
 

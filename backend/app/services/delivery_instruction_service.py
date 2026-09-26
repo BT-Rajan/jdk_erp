@@ -36,7 +36,7 @@ from app.models.organisation import Organisation
 from app.models.product import Product
 from app.models.sales_order import CANCELLED, HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
 from app.models.unit import UnitOfMeasure
-from app.services import document_numbering, uom_conversion
+from app.services import document_numbering, finished_goods_inventory_service, purchase_order_service, uom_conversion
 
 DELIVERABLE_STATUSES = (HANDED_OFF, PARTIALLY_DELIVERED)
 _HUNDRED = Decimal("100")
@@ -339,11 +339,44 @@ def check_fulfilment(db: Session, instruction: DeliveryInstruction) -> None:
             )
 
 
-def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> None:
-    """pending -> fulfilled, after check_fulfilment. Final: its shipment
-    quantity now counts toward the Sales Order and can't change."""
+# The Finished Goods movement's source (Delivery D5): one DELIVERY movement
+# per Delivery Instruction line, so the ledger's unique (reference_type,
+# reference_id, movement_type) rule makes a second issue for the same line
+# impossible. The line identifies its Delivery Instruction and Sales Order.
+FG_REFERENCE_TYPE = "delivery_instruction_line"
+
+
+def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> list:
+    """pending -> fulfilled, after check_fulfilment, and each line's shipment
+    quantity issued from Finished Goods through the existing single writer
+    (finished_goods_inventory_service.issue_finished_goods), in the
+    product's stock unit, from the organisation's warehouse. All in the
+    caller's one transaction: if anything fails -- a duplicate, too little
+    stock (never clamped or split) -- nothing is committed, so a fulfilled
+    instruction always has exactly its movements and never more. The status
+    moves first, as a conditional update, so a concurrent second request
+    stops before issuing anything. Returns the movements."""
     check_fulfilment(db, instruction)
+    for line in instruction.lines:
+        product = db.get(Product, line.product_id)
+        if product is None or product.unit_of_measure_id != line.unit_of_measure_id:
+            raise ConflictError("A product's stock unit has changed since this delivery was created; nothing is converted.")
     _transition(db, instruction, PENDING, {"status": FULFILLED, "fulfilled_at": datetime.utcnow(), "fulfilled_by_user_id": user_id})
+    warehouse = purchase_order_service.default_warehouse(db, instruction.organisation_id)
+    return [
+        finished_goods_inventory_service.issue_finished_goods(
+            db,
+            organisation_id=instruction.organisation_id,
+            product_id=line.product_id,
+            warehouse_id=warehouse.id,
+            quantity=line.quantity,
+            unit_of_measure_id=line.unit_of_measure_id,
+            reference_type=FG_REFERENCE_TYPE,
+            reference_id=line.id,
+            created_by_user_id=user_id,
+        )
+        for line in instruction.lines
+    ]
 
 
 def mark_not_fulfilled(db: Session, instruction: DeliveryInstruction, user_id: int, reason: str) -> None:

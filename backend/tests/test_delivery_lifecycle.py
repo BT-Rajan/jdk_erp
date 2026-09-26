@@ -17,7 +17,12 @@ from app.models.audit_event import DELIVERY_FULFILLED, DELIVERY_NOT_FULFILLED, D
 from app.models.customer import Customer
 from app.models.role_permission import RolePermission
 from app.models.user import User
-from app.services import feasibility_record_service, quotation_readiness_service, working_calendar_service
+from app.services import (
+    feasibility_record_service,
+    finished_goods_inventory_service,
+    quotation_readiness_service,
+    working_calendar_service,
+)
 
 MONDAY_9AM_KUWAIT = datetime(2026, 9, 28, 9, 0, tzinfo=JDK_TIMEZONE)
 
@@ -36,8 +41,9 @@ def _headers(client, username):
 
 
 @pytest.fixture()
-def setup(client, db_session, organisation, widget_product, monkeypatch):
-    """A handed-off order for 100 Widgets; allowance 2% (ceiling 102)."""
+def setup(client, db_session, organisation, widget_product, warehouse_1, monkeypatch):
+    """A handed-off order for 100 Widgets; allowance 2% (ceiling 102);
+    200 Widgets in finished goods stock (fulfilment issues stock, D5)."""
     for module in (working_calendar_service, quotations_api, sales_orders_api, feasibility_record_service, quotation_readiness_service):
         monkeypatch.setattr(module, "now_jdk", lambda: MONDAY_9AM_KUWAIT)
     monkeypatch.setattr("app.api.delivery_instructions.now_jdk", lambda: MONDAY_9AM_KUWAIT)
@@ -51,6 +57,12 @@ def setup(client, db_session, organisation, widget_product, monkeypatch):
     )
     widget_product.min_selling_price, widget_product.max_selling_price = Decimal("90"), Decimal("110")
     db_session.add(customer)
+    db_session.commit()
+    finished_goods_inventory_service.receive_finished_goods(
+        db_session, organisation_id=organisation.id, product_id=widget_product.id, warehouse_id=warehouse_1.id,
+        quantity=Decimal("200"), unit_of_measure_id=widget_product.unit_of_measure_id, reference_type="test_seed",
+        reference_id=1, created_by_user_id=None,
+    )
     db_session.commit()
     client.patch("/api/organisations/me", json={"delivery_scrap_allowance_percent": "2"}, headers=_headers(client, "boss"))
     a = _headers(client, "salesman_a")
