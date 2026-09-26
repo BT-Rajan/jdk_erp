@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
-import { FileText, Home, Menu, Package, Settings, ShoppingCart, Wallet } from 'lucide-react'
+import { FileText, Home, Menu, MessageCircle, Package, Settings, ShoppingCart, Wallet } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
+import { AssistantDrawer } from '@/components/assistant/AssistantDrawer'
 import { ActionMenu } from '@/components/ui/ActionMenu'
 import { IconButton } from '@/components/ui/IconButton'
 import { NotificationBell } from '@/components/ui/NotificationBell'
@@ -79,6 +80,7 @@ const ADMIN_SETTINGS_ITEMS = [
   { label: 'Email', to: '/settings/email' },
   { label: 'Documents', to: '/settings/documents' },
   { label: 'Working calendar', to: '/settings/working-calendar' },
+  { label: 'AI Assistant', to: '/settings/assistant' },
 ]
 
 /** The one authenticated app shell every protected route renders
@@ -89,6 +91,7 @@ export function AppLayout() {
   const { user, logout } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
 
   const entries = useMemo<NavEntry[]>(() => {
     const settings = isAdminRole(user?.role) ? [...MASTER_DATA_ITEMS, ...ADMIN_SETTINGS_ITEMS] : MASTER_DATA_ITEMS
@@ -119,6 +122,11 @@ export function AppLayout() {
         }
         actions={
           <div className="flex items-center gap-3">
+            <IconButton
+              icon={<MessageCircle size={18} />}
+              aria-label="Open JDK Assistant"
+              onClick={() => setAssistantOpen(true)}
+            />
             <NotificationBell />
             <UserChip name={user?.full_name ?? ''} subtitle={user?.role} />
             <ActionMenu
@@ -142,6 +150,8 @@ export function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      <AssistantDrawer open={assistantOpen} onClose={() => setAssistantOpen(false)} />
     </div>
   )
 }

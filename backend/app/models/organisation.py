@@ -38,3 +38,7 @@ class Organisation(Base, TimestampMixin):
     # against (app/services/feasibility_service.py). NULL = not set, which
     # that check treats as a failure needing an Admin decision.
     production_staff_available_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The AI assistant's provider API key (Anthropic "sk-ant-..." -> Claude,
+    # anything else -> DeepSeek), Fernet-encrypted at rest (app/core/crypto.py)
+    # like a mailbox password. Admin-set; never returned in full.
+    ai_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)

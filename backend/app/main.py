@@ -4,6 +4,7 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 
 import app.jobs  # noqa: F401 -- registers every job handler (docs/modules/background_jobs.md #1)
 from app.api.action_items import router as action_items_router
+from app.api.assistant import router as assistant_router
 from app.api.audit_events import router as audit_events_router
 from app.api.auth import router as auth_router
 from app.api.boms import router as boms_router
@@ -73,6 +74,7 @@ app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
 app.include_router(action_items_router)
+app.include_router(assistant_router)
 app.include_router(audit_events_router)
 app.include_router(auth_router)
 app.include_router(boms_router)
