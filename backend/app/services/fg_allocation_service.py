@@ -117,11 +117,14 @@ def _guard(db: Session, organisation_id: int, product_id: int, on_hand: Decimal)
         raise ConflictError("Finished Goods allocations would exceed the stock on hand; nothing was changed.")
 
 
-def allocate(db: Session, order: SalesOrder, line: SalesOrderLine, quantity: Decimal, delivered: Decimal) -> AllocationChange:
+def allocate(
+    db: Session, order: SalesOrder, line: SalesOrderLine, quantity: Decimal, delivered: Decimal, client_reference: str | None = None
+) -> AllocationChange | None:
     """Claims `quantity` of free FG for one order line. Refused above the
     free FG, above what the line still needs (ordered - delivered - already
     allocated), for an order that is not handed off / partially delivered,
-    or for a line not in its product's stock unit."""
+    or for a line not in its product's stock unit. A repeat of the last
+    applied `client_reference` changes nothing (returns None)."""
     if quantity is None or quantity <= _ZERO:
         raise ValidationError("Allocate a positive quantity.", fields={"quantity": "Must be greater than zero."})
     if order.status not in ALLOCATABLE_STATUSES:
@@ -129,6 +132,8 @@ def allocate(db: Session, order: SalesOrder, line: SalesOrderLine, quantity: Dec
     on_hand = lock_product(db, order.organisation_id, line.product_id)
     free = on_hand - allocated_total(db, order.organisation_id, line.product_id)
     row = _row(db, order, line)
+    if client_reference and row.last_client_reference == client_reference:
+        return None
     needed = line.quantity - delivered - row.quantity
     if quantity > needed:
         raise ConflictError(f"Line {line.line_number} needs at most {_plain(max(needed, _ZERO))} more; nothing was allocated.")
@@ -136,6 +141,7 @@ def allocate(db: Session, order: SalesOrder, line: SalesOrderLine, quantity: Dec
         raise ConflictError(f"Only {_plain(max(free, _ZERO))} of this product is free to allocate; nothing was allocated.")
     before = row.quantity
     row.quantity = before + quantity
+    row.last_client_reference = client_reference
     db.flush()
     _guard(db, order.organisation_id, line.product_id, on_hand)
     return AllocationChange(order.id, line.id, line.product_id, "allocated", before, row.quantity)
@@ -155,7 +161,9 @@ def allocate_free_up_to(db: Session, order: SalesOrder, line: SalesOrderLine, wa
     return free, take
 
 
-def release(db: Session, line: SalesOrderLine, quantity: Decimal | None, reason: str) -> AllocationChange | None:
+def release(
+    db: Session, line: SalesOrderLine, quantity: Decimal | None, reason: str, client_reference: str | None = None
+) -> AllocationChange | None:
     """Returns `quantity` (all of it when None) of the line's claim to free
     FG. Physical stock is untouched; nothing else is created. None if the
     line holds nothing."""
@@ -163,6 +171,8 @@ def release(db: Session, line: SalesOrderLine, quantity: Decimal | None, reason:
     if not reason:
         raise ValidationError("Say why the allocation is released.", fields={"reason": "Required."})
     row = db.query(FgAllocation).filter(FgAllocation.sales_order_line_id == line.id).with_for_update().first()
+    if row is not None and client_reference and row.last_client_reference == client_reference:
+        return None  # a retry of the release already applied
     held = row.quantity if row is not None else _ZERO
     if quantity is not None and quantity <= _ZERO:
         raise ValidationError("Release a positive quantity.", fields={"quantity": "Must be greater than zero."})
@@ -172,6 +182,8 @@ def release(db: Session, line: SalesOrderLine, quantity: Decimal | None, reason:
         return None
     amount = held if quantity is None else quantity
     row.quantity = held - amount
+    if client_reference:
+        row.last_client_reference = client_reference
     db.flush()
     return AllocationChange(line.sales_order_id, line.id, line.product_id, "released", held, row.quantity, reason)
 

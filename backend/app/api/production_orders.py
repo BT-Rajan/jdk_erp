@@ -164,12 +164,15 @@ def _out(db: Session, order: ProductionOrder, with_history: bool = False) -> Pro
     line = db.get(SalesOrderLine, requirement.sales_order_line_id) if requirement is not None else None
     machine = db.get(Machine, order.machine_id)
     production_line = db.get(ProductionLine, machine.production_line_id) if machine is not None else None
+    # Detail only: the list never shows executions or consumption.
     executions = (
         db.query(ProductionExecution)
         .options(selectinload(ProductionExecution.materials))
         .filter(ProductionExecution.production_order_id == order.id)
         .order_by(ProductionExecution.sequence)
         .all()
+        if with_history
+        else []
     )
     consumed: dict[int, Decimal] = {}
     for execution in executions:

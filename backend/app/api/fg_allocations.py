@@ -109,6 +109,8 @@ def audit_reservation_changes(
 class AllocateRequest(BaseModel):
     sales_order_line_id: int
     quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=4)
+    # One per submission: a retry of the last applied one changes nothing.
+    client_reference: str | None = Field(default=None, max_length=64)
 
 
 class ReleaseRequest(BaseModel):
@@ -116,6 +118,7 @@ class ReleaseRequest(BaseModel):
     # Omit to release the whole claim.
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=4)
     reason: str = Field(min_length=1, max_length=2000)
+    client_reference: str | None = Field(default=None, max_length=64)
 
 
 class AllocationLineOut(BaseModel):
@@ -179,9 +182,10 @@ def allocate_fg(
     inventory_scope.require_permission(db, current_user, inventory_scope.ALLOCATE)
     order, line = _locked_line(db, current_user, payload.sales_order_line_id)
     delivered = delivery_instruction_service.fulfilled_quantity(db, line.id, locking=True)
-    change = fg_allocation_service.allocate(db, order, line, payload.quantity, delivered)
-    audit_allocation_changes(db, request, current_user, [change], f"sales_order: {order.order_number}")
-    _follow_requirement(db, request, current_user, order, line, delivered)
+    change = fg_allocation_service.allocate(db, order, line, payload.quantity, delivered, (payload.client_reference or "").strip() or None)
+    if change is not None:
+        audit_allocation_changes(db, request, current_user, [change], f"sales_order: {order.order_number}")
+        _follow_requirement(db, request, current_user, order, line, delivered)
     db.commit()
     return _line_out(db, order, line)
 
@@ -194,7 +198,7 @@ def release_fg_allocation(
     reason. Physical stock is untouched; no production demand is created.
     Audited with actor, time and reason."""
     order, line = _locked_line(db, admin, payload.sales_order_line_id)
-    change = fg_allocation_service.release(db, line, payload.quantity, payload.reason)
+    change = fg_allocation_service.release(db, line, payload.quantity, payload.reason, (payload.client_reference or "").strip() or None)
     if change is not None:
         audit_allocation_changes(db, request, admin, [change], f"sales_order: {order.order_number}")
         delivered = delivery_instruction_service.fulfilled_quantity(db, line.id, locking=True)

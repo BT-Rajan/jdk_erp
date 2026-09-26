@@ -20,11 +20,14 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.models.bom import ACTIVE, Bom, BomComponent
 from app.models.product import Product
+from app.models.production_execution import EXECUTION_POSTED, ProductionExecution
+from app.models.production_order import ProductionOrder
 from app.models.production_plan import (
     CUSTOMER_DEMAND,
     INDEPENDENT,
@@ -282,7 +285,7 @@ class MrpRow:
     fg_on_hand: Decimal = _ZERO
     fg_allocated: Decimal = _ZERO
     fg_free: Decimal = _ZERO
-    planned_quantity: Decimal = _ZERO  # active plans (draft + planned)
+    planned_quantity: Decimal = _ZERO  # active plans' quantity not yet produced
     proposed_quantity: Decimal = _ZERO  # outstanding not yet planned
     excess_quantity: Decimal = _ZERO  # planned beyond the demand: free production
     plan_ids: list[int] = field(default_factory=list)
@@ -319,12 +322,25 @@ def _materials(db: Session, organisation_id: int, base: Decimal, components, qua
     return needs
 
 
-def _plan_status(plans: list[ProductionPlan], outstanding: Decimal) -> str:
+def produced_by_plan(db: Session, organisation_id: int) -> dict[int, Decimal]:
+    """Actual output recorded so far per Production Plan (sum of posted
+    executions on the plan's Production Orders) -- one grouped query."""
+    rows = (
+        db.query(ProductionOrder.production_plan_id, func.sum(ProductionExecution.produced_quantity))
+        .join(ProductionExecution, ProductionExecution.production_order_id == ProductionOrder.id)
+        .filter(ProductionOrder.organisation_id == organisation_id, ProductionExecution.status == EXECUTION_POSTED)
+        .group_by(ProductionOrder.production_plan_id)
+        .all()
+    )
+    return {plan_id: Decimal(total) for plan_id, total in rows}
+
+
+def _plan_status(plans: list[ProductionPlan], outstanding: Decimal, open_quantity) -> str:
     if not plans:
         return "unplanned"
     if any(p.status == PLAN_DRAFT for p in plans):
         return PLAN_DRAFT
-    if sum((p.planned_quantity for p in plans), _ZERO) < outstanding:
+    if sum((open_quantity(p) for p in plans), _ZERO) < outstanding:
         return "partially_planned"
     return PLAN_PLANNED
 
@@ -358,6 +374,11 @@ def mrp_rows(db: Session, organisation_id: int, delivered_of) -> tuple[list[MrpR
         .order_by(ProductionPlan.id)
         .all()
     )
+    produced = produced_by_plan(db, organisation_id)
+
+    def open_quantity(plan: ProductionPlan) -> Decimal:
+        return max(plan.planned_quantity - produced.get(plan.id, _ZERO), _ZERO)
+
     plans_by_requirement: dict[int, list[ProductionPlan]] = {}
     for plan in plans:
         if plan.production_requirement_id is not None:
@@ -378,7 +399,9 @@ def mrp_rows(db: Session, organisation_id: int, delivered_of) -> tuple[list[MrpR
         order = requirement.sales_order
         own_plans = plans_by_requirement.get(requirement.id, [])
         outstanding = requirement.quantity if requirement.status in REQUIREMENT_ACTIVE else _ZERO
-        planned = sum((p.planned_quantity for p in own_plans), _ZERO)
+        # Only what is still to be produced counts as planned: output
+        # already recorded is supply in FG (allocation decides who gets it).
+        planned = sum((open_quantity(p) for p in own_plans), _ZERO)
         product = products[requirement.product_id]
         row = MrpRow(
             demand_type=CUSTOMER_DEMAND,
@@ -398,7 +421,7 @@ def mrp_rows(db: Session, organisation_id: int, delivered_of) -> tuple[list[MrpR
             proposed_quantity=max(outstanding - planned, _ZERO),
             excess_quantity=max(planned - outstanding, _ZERO),
             plan_ids=[p.id for p in own_plans],
-            plan_status=_plan_status(own_plans, outstanding),
+            plan_status=_plan_status(own_plans, outstanding, open_quantity),
             bom_id=requirement.bom_id,
         )
         if requirement.status not in REQUIREMENT_ACTIVE:
@@ -411,8 +434,8 @@ def mrp_rows(db: Session, organisation_id: int, delivered_of) -> tuple[list[MrpR
         _finish(db, row, organisation_id, source.bom_base_quantity if source else None, source.components if source else [], basis, units)
         rows.append(row)
     for plan in plans:
-        if plan.source_type != INDEPENDENT:
-            continue
+        if plan.source_type != INDEPENDENT or open_quantity(plan) <= _ZERO:
+            continue  # fully produced: nothing left to produce
         product = products[plan.product_id]
         row = MrpRow(
             demand_type=INDEPENDENT,
@@ -420,21 +443,21 @@ def mrp_rows(db: Session, organisation_id: int, delivered_of) -> tuple[list[MrpR
             product_name=product.name,
             unit_of_measure_id=plan.unit_of_measure_id,
             required_by_date=plan.required_by_date,
-            planned_quantity=plan.planned_quantity,
-            excess_quantity=plan.planned_quantity,
+            planned_quantity=open_quantity(plan),
+            excess_quantity=open_quantity(plan),
             plan_ids=[plan.id],
             plan_status=plan.status,
             bom_id=plan.bom_id,
         )
         if plan.bom_id is not None:
-            _finish(db, row, organisation_id, plan.bom_base_quantity, plan.components, plan.planned_quantity, units)
+            _finish(db, row, organisation_id, plan.bom_base_quantity, plan.components, open_quantity(plan), units)
         else:
             # A draft without a snapshot yet: preview the active BOM, if any
             # (a transient object, never added to the session).
             preview = ProductionPlan(organisation_id=organisation_id, product_id=plan.product_id)
             _snapshot_from_bom(db, preview)
             row.bom_id = preview.bom_id
-            _finish(db, row, organisation_id, preview.bom_base_quantity, preview.components, plan.planned_quantity, units)
+            _finish(db, row, organisation_id, preview.bom_base_quantity, preview.components, open_quantity(plan), units)
         rows.append(row)
 
     summary: dict[int, MaterialNeed] = {}

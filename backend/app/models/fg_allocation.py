@@ -86,3 +86,6 @@ class FgAllocation(Base, TimestampMixin, OrganisationScopedMixin):
     )
     # Current open claim; 0 once fully delivered or released.
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0)
+    # Duplicate protection: the client reference of the last allocate /
+    # release applied to this claim -- a retry of it changes nothing.
+    last_client_reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
