@@ -4,6 +4,7 @@ from app.models.category import Category
 from app.models.document_template import DocumentTemplate
 from app.models.customer import Customer
 from app.models.email_account import EmailAccount
+from app.models.delivery_instruction import DeliveryInstruction, DeliveryInstructionLine
 from app.models.feasibility_check import FeasibilityCheck, FeasibilityCheckLine
 from app.models.file import FileRecord
 from app.models.finished_goods_inventory import FinishedGoodsAdjustment, FinishedGoodsInventory, FinishedGoodsMovement
@@ -73,6 +74,8 @@ __all__ = [
     "RawMaterial",
     "SalesOrder",
     "SalesOrderLine",
+    "DeliveryInstruction",
+    "DeliveryInstructionLine",
     "SalesOrderLineFulfilment",
     "ProductionRequirement",
     "ProductionRequirementComponent",

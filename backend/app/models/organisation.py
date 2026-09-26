@@ -1,6 +1,7 @@
 from datetime import time
+from decimal import Decimal
 
-from sqlalchemy import Boolean, Integer, String, Text, Time
+from sqlalchemy import Boolean, Integer, Numeric, String, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -38,6 +39,13 @@ class Organisation(Base, TimestampMixin):
     # against (app/services/feasibility_service.py). NULL = not set, which
     # that check treats as a failure needing an Admin decision.
     production_staff_available_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Delivery Scrap Allowance % (Admin-set): the delivery tolerance a
+    # future Delivery Instruction copies when it is created, so a later
+    # change never alters existing deliveries. A setting only -- it never
+    # changes a Sales Order quantity. 0.00-999.99, default 0.
+    delivery_scrap_allowance_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, default=Decimal("0"), server_default="0"
+    )
     # The AI assistant's provider API key (Anthropic "sk-ant-..." -> Claude,
     # anything else -> DeepSeek), Fernet-encrypted at rest (app/core/crypto.py)
     # like a mailbox password. Admin-set; never returned in full.

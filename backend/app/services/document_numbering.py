@@ -25,8 +25,9 @@ again. A number is written once, on insert; nothing here updates it.
 Document-type digits are business decisions, not something this module
 invents. `ESTABLISHED_TYPE_DIGITS` records the ones already in use so a
 new document type can't collide with them. Quotation is `4` (business
-decision, Sales S4) and Sales Order `6` (Sales S13.1); the Delivery Note
-digit is not defined yet -- an open business decision."""
+decision, Sales S4), Sales Order `6` (Sales S13.1) and Delivery
+Instruction `8` (Delivery D2: the next free Sales digit -- Sales documents
+use even digits, procurement odd)."""
 
 from collections.abc import Callable
 from datetime import date
@@ -47,6 +48,7 @@ PURCHASE_ORDER_PAYMENT_TYPE_DIGIT = "7"
 GOODS_RECEIPT_TYPE_DIGIT = "9"
 QUOTATION_TYPE_DIGIT = "4"
 SALES_ORDER_TYPE_DIGIT = "6"
+DELIVERY_INSTRUCTION_TYPE_DIGIT = "8"
 
 ESTABLISHED_TYPE_DIGITS = {
     RFQ_TYPE_DIGIT: "RFQ",
@@ -55,6 +57,7 @@ ESTABLISHED_TYPE_DIGITS = {
     GOODS_RECEIPT_TYPE_DIGIT: "Goods Receipt",
     QUOTATION_TYPE_DIGIT: "Quotation",
     SALES_ORDER_TYPE_DIGIT: "Sales Order",
+    DELIVERY_INSTRUCTION_TYPE_DIGIT: "Delivery Instruction",
 }
 
 

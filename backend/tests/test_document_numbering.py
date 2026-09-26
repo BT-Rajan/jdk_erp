@@ -2,7 +2,7 @@
 (app/services/document_numbering.py) future Sales documents reuse.
 
 Sales type digits are not decided, so these tests run against a
-test-only table and the test-only digit "8" -- neither is a production
+test-only table and the test-only digit "1" -- neither is a production
 document type."""
 
 from datetime import date
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base, SessionLocal
 from app.services import document_numbering
 
-TEST_ONLY_DIGIT = "8"
+TEST_ONLY_DIGIT = "1"
 
 
 class _NumberedProbe(Base):
@@ -57,13 +57,13 @@ def _insert(db, organisation_id, today):
 def test_format_sequence_organisation_and_year_isolation(db_session, organisation, other_organisation):
     assert TEST_ONLY_DIGIT not in document_numbering.ESTABLISHED_TYPE_DIGITS
 
-    assert _insert(db_session, organisation.id, date(2026, 5, 1)).number == "2680001"
-    assert _insert(db_session, organisation.id, date(2026, 5, 2)).number == "2680002"
+    assert _insert(db_session, organisation.id, date(2026, 5, 1)).number == "2610001"
+    assert _insert(db_session, organisation.id, date(2026, 5, 2)).number == "2610002"
     # Another organisation has its own sequence.
-    assert _insert(db_session, other_organisation.id, date(2026, 5, 2)).number == "2680001"
+    assert _insert(db_session, other_organisation.id, date(2026, 5, 2)).number == "2610001"
     # A new year starts again at 0001; the old year is unaffected.
-    assert _insert(db_session, organisation.id, date(2027, 1, 1)).number == "2780001"
-    assert _next(db_session, organisation.id, date(2026, 12, 31)) == "2680003"
+    assert _insert(db_session, organisation.id, date(2027, 1, 1)).number == "2710001"
+    assert _next(db_session, organisation.id, date(2026, 12, 31)) == "2610003"
 
     with pytest.raises(ValueError):
         document_numbering.yearly_prefix("12", date(2026, 1, 1))
@@ -96,11 +96,11 @@ def test_concurrent_claim_of_the_same_number_is_retried_never_duplicated(db_sess
     finally:
         competing.close()
 
-    assert attempts == ["2680001", "2680002"]
-    assert row.number == "2680002"
+    assert attempts == ["2610001", "2610002"]
+    assert row.number == "2610002"
 
     # The DB constraint itself refuses a duplicate, whatever the caller does.
-    db_session.add(_NumberedProbe(organisation_id=organisation.id, number="2680002"))
+    db_session.add(_NumberedProbe(organisation_id=organisation.id, number="2610002"))
     with pytest.raises(IntegrityError):
         db_session.flush()
     db_session.rollback()
@@ -109,16 +109,16 @@ def test_concurrent_claim_of_the_same_number_is_retried_never_duplicated(db_sess
 def test_preview_reserves_nothing_and_issued_numbers_are_never_reused(db_session, organisation):
     today = date(2026, 5, 1)
     # Previewing (e.g. opening a form) allocates nothing.
-    assert _next(db_session, organisation.id, today) == "2680001"
-    assert _next(db_session, organisation.id, today) == "2680001"
+    assert _next(db_session, organisation.id, today) == "2610001"
+    assert _next(db_session, organisation.id, today) == "2610001"
 
     first = _insert(db_session, organisation.id, today)
     # Cancelling or editing a document never changes or frees its number.
     first.status = "cancelled"
     db_session.commit()
     db_session.refresh(first)
-    assert first.number == "2680001"
-    assert _insert(db_session, organisation.id, today).number == "2680002"
+    assert first.number == "2610001"
+    assert _insert(db_session, organisation.id, today).number == "2610002"
 
 
 def test_a_retried_collision_keeps_earlier_work_in_the_same_transaction(db_session, organisation):

@@ -1,3 +1,4 @@
+from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -18,6 +19,7 @@ class OrganisationOut(BaseModel):
     currency: str
     timezone: str
     production_staff_available_per_day: int | None = None
+    delivery_scrap_allowance_percent: Decimal = Decimal("0")
     is_active: bool
 
 
@@ -39,6 +41,20 @@ class OrganisationUpdateRequest(BaseModel):
     currency: str | None = None
     timezone: str | None = None
     production_staff_available_per_day: int | None = Field(default=None, ge=0)
+    # Percent, 0-999.99 with at most 2 decimal places (Numeric(5, 2));
+    # never rounded silently -- a value it can't store exactly is refused.
+    delivery_scrap_allowance_percent: Decimal | None = Field(
+        default=None, ge=0, le=Decimal("999.99"), max_digits=5, decimal_places=2
+    )
+
+    @field_validator("delivery_scrap_allowance_percent")
+    @classmethod
+    def _allowance_required(cls, value: Decimal | None) -> Decimal | None:
+        # Sent explicitly as null: the setting always has a value (0 = none).
+        if value is None:
+            raise ValueError("must be a number; use 0 for no allowance")
+        # Exact (at most 2 places are allowed above): stored and audited as e.g. 3.00.
+        return value.quantize(Decimal("0.01"))
 
     @field_validator("name", "code")
     @classmethod

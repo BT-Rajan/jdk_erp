@@ -1,0 +1,288 @@
+"""Delivery Instructions (Delivery D2): shipment tranches of a Sales Order.
+A Sales Order may be delivered in several tranches, so there is no
+one-per-order limit; each instruction's lines carry that shipment's own
+quantity, which may be anything above zero (less than what remains is
+normal).
+
+The Delivery Scrap Allowance is cumulative per Sales Order, never per
+tranche. The order's first instruction copies the Admin setting's %;
+every later instruction of the same order copies that same %, so later
+setting changes never alter the order. For each Sales Order line
+(order_position):
+  fulfilled            = sum of quantities on fulfilled instructions
+  remaining            = ordered - fulfilled
+  ceiling              = ordered x (1 + % / 100)
+  remaining permitted  = ceiling - fulfilled
+all derived, never stored, and exact (quantities have 4 decimal places,
+the % 2, so no rounding is needed). A tranche above the remaining
+permitted quantity is flagged -- stopping it belongs to fulfilment.
+
+record_shipment (Delivery D3) changes a pending line's shipment quantity
+and pallets -- see its docstring.
+
+Records only: nothing moves or reserves stock, changes the Sales Order,
+fulfils or checks payment. The caller checks the permission, audits and
+commits."""
+
+from dataclasses import dataclass
+from datetime import date
+from decimal import ROUND_CEILING, Decimal
+
+from sqlalchemy.orm import Session
+
+from app.core.errors import ConflictError, ValidationError
+from app.models.delivery_instruction import FULFILLED, PENDING, DeliveryInstruction, DeliveryInstructionLine
+from app.models.organisation import Organisation
+from app.models.product import Product
+from app.models.sales_order import HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
+from app.models.unit import UnitOfMeasure
+from app.services import document_numbering, uom_conversion
+
+DELIVERABLE_STATUSES = (HANDED_OFF, PARTIALLY_DELIVERED)
+_HUNDRED = Decimal("100")
+
+
+@dataclass(frozen=True)
+class LineInput:
+    sales_order_line_id: int
+    quantity: Decimal
+
+
+def order_allowance(db: Session, order: SalesOrder) -> Decimal | None:
+    """The % locked on the order's first Delivery Instruction, or None
+    while it has none (business decision: locked at the first tranche)."""
+    return (
+        db.query(DeliveryInstruction.scrap_allowance_percent)
+        .filter(DeliveryInstruction.sales_order_id == order.id)
+        .order_by(DeliveryInstruction.id)
+        .limit(1)
+        .scalar()
+    )
+
+
+def ceiling(ordered: Decimal, allowance_percent: Decimal) -> Decimal:
+    """ordered x (1 + % / 100), exact."""
+    return ordered * (_HUNDRED + allowance_percent) / _HUNDRED
+
+
+def fulfilled_quantity(db: Session, sales_order_line_id: int) -> Decimal:
+    total = Decimal("0")
+    for (quantity,) in (
+        db.query(DeliveryInstructionLine.quantity)
+        .join(DeliveryInstruction, DeliveryInstruction.id == DeliveryInstructionLine.delivery_instruction_id)
+        .filter(DeliveryInstructionLine.sales_order_line_id == sales_order_line_id, DeliveryInstruction.status == FULFILLED)
+    ):
+        total += quantity
+    return total
+
+
+@dataclass(frozen=True)
+class LinePosition:
+    sales_order_line_id: int
+    ordered_quantity: Decimal
+    fulfilled_quantity: Decimal
+    remaining_quantity: Decimal
+    ceiling_quantity: Decimal
+    remaining_permitted_quantity: Decimal
+
+
+def line_position(db: Session, line: SalesOrderLine, allowance_percent: Decimal) -> LinePosition:
+    fulfilled = fulfilled_quantity(db, line.id)
+    top = ceiling(line.quantity, allowance_percent)
+    return LinePosition(line.id, line.quantity, fulfilled, line.quantity - fulfilled, top, top - fulfilled)
+
+
+def order_position(db: Session, order: SalesOrder) -> tuple[Decimal, bool, list[LinePosition]]:
+    """(allowance %, whether it is locked by an instruction, per-line
+    positions). Before the first instruction the current setting is shown,
+    not yet locked."""
+    locked = order_allowance(db, order)
+    allowance = locked if locked is not None else db.get(Organisation, order.organisation_id).delivery_scrap_allowance_percent
+    return allowance, locked is not None, [line_position(db, line, allowance) for line in order.lines]
+
+
+def exceeds_permitted(position: LinePosition, quantity: Decimal) -> bool:
+    """Would delivering `quantity` take the line above its cumulative ceiling?"""
+    return quantity > position.remaining_permitted_quantity
+
+
+def create(db: Session, order: SalesOrder, lines: list[LineInput], user_id: int, today: date) -> DeliveryInstruction:
+    if order.status not in DELIVERABLE_STATUSES:
+        raise ConflictError(f"A Delivery Instruction can't be created for a {order.status.replace('_', ' ')} Sales Order.")
+    if not lines:
+        raise ValidationError("Add at least one line to deliver.", fields={"lines": "At least one line is required."})
+    order_lines = {line.id: line for line in order.lines}
+    seen: set[int] = set()
+    for entry in lines:
+        if entry.sales_order_line_id not in order_lines:
+            raise ValidationError("A line does not belong to this Sales Order.", fields={"lines": "Invalid line."})
+        if entry.sales_order_line_id in seen:
+            raise ValidationError("Each Sales Order line can appear only once.", fields={"lines": "Duplicate line."})
+        seen.add(entry.sales_order_line_id)
+
+    locked = order_allowance(db, order)
+    allowance = locked if locked is not None else db.get(Organisation, order.organisation_id).delivery_scrap_allowance_percent
+
+    defaults = {
+        entry.sales_order_line_id: default_pallets(
+            db, order.organisation_id, db.get(UnitOfMeasure, order_lines[entry.sales_order_line_id].unit_of_measure_id), entry.quantity
+        )
+        for entry in lines
+    }
+
+    def build(number: str) -> DeliveryInstruction:
+        instruction = DeliveryInstruction(
+            organisation_id=order.organisation_id,
+            delivery_number=number,
+            sales_order_id=order.id,
+            customer_id=order.customer_id,
+            status=PENDING,
+            created_by_user_id=user_id,
+            scrap_allowance_percent=allowance,
+        )
+        instruction.lines = [
+            DeliveryInstructionLine(
+                sales_order_line_id=entry.sales_order_line_id,
+                product_id=order_lines[entry.sales_order_line_id].product_id,
+                unit_of_measure_id=order_lines[entry.sales_order_line_id].unit_of_measure_id,
+                ordered_quantity=order_lines[entry.sales_order_line_id].quantity,
+                quantity=entry.quantity,
+                pallet_count_default=defaults[entry.sales_order_line_id],
+                pallet_count=defaults[entry.sales_order_line_id],
+            )
+            for entry in lines
+        ]
+        return instruction
+
+    return document_numbering.insert_with_yearly_number(
+        db,
+        build=build,
+        number_column=DeliveryInstruction.delivery_number,
+        organisation_column=DeliveryInstruction.organisation_id,
+        organisation_id=order.organisation_id,
+        type_digit=document_numbering.DELIVERY_INSTRUCTION_TYPE_DIGIT,
+        today=today,
+        label="delivery instruction",
+    )
+
+
+# --- Shipment quantity and pallets (Delivery D3) --------------------------------
+
+# The organisation's tonne: its one active "mass" unit with one of these
+# codes (business decision, Delivery D3). None, or more than one, means no
+# pallet default -- the warehouse enters the count.
+TONNE_CODES = ("MT", "T", "TON", "TONNE")
+_UNSET = object()
+
+
+def tonne_unit(db: Session, organisation_id: int) -> UnitOfMeasure | None:
+    units = (
+        db.query(UnitOfMeasure)
+        .filter(
+            UnitOfMeasure.organisation_id == organisation_id,
+            UnitOfMeasure.is_active.is_(True),
+            UnitOfMeasure.dimension == "mass",
+            UnitOfMeasure.code.in_(TONNE_CODES),
+        )
+        .all()
+    )
+    return units[0] if len(units) == 1 else None
+
+
+def default_pallets(db: Session, organisation_id: int, unit: UnitOfMeasure | None, quantity: Decimal) -> int | None:
+    """max(1, ceil(quantity in tonnes)) through the existing unit
+    conversion -- a practical suggestion only, never a constraint on the
+    quantity. None when the unit can't be converted to tonnes."""
+    tonne = tonne_unit(db, organisation_id)
+    ratio = uom_conversion.resolve_conversion_ratio(unit, tonne) if unit is not None and tonne is not None else None
+    if ratio is None:
+        return None
+    return max(1, int((quantity * ratio).to_integral_value(rounding=ROUND_CEILING)))
+
+
+def record_shipment(
+    db: Session,
+    instruction: DeliveryInstruction,
+    line: DeliveryInstructionLine,
+    *,
+    quantity: Decimal | None,
+    unit_of_measure_id: int | None,
+    pallet_count=_UNSET,
+    override_reason: str | None,
+    is_admin: bool,
+) -> list[str]:
+    """Changes a pending line's shipment quantity and/or pallets. Returns
+    the changes as "field: old -> new" (empty if nothing changed).
+
+    Quantity: positive, in the line's stock unit (no conversion; the
+    product must still use it). Above the order line's remaining permitted
+    quantity (cumulative allowance) only an Admin, with a reason. The
+    Sales Order is never changed.
+    Pallets: a whole number >= 1. The default is recalculated from the
+    quantity every time; the count used follows it unless the warehouse
+    set one, which is kept until cleared by sending null. A product that
+    can't be converted to tonnes has no default, so its count must be
+    entered."""
+    if instruction.status != PENDING:
+        raise ConflictError(f"Only a pending delivery can be changed (this one is {instruction.status.replace('_', ' ')}).")
+    if unit_of_measure_id is not None and unit_of_measure_id != line.unit_of_measure_id:
+        raise ValidationError(
+            "The quantity must be in the product's stock unit; nothing is converted.",
+            fields={"unit_of_measure_id": "Must be the delivery line's stock unit."},
+        )
+    product = db.get(Product, line.product_id)
+    if product is None or product.unit_of_measure_id != line.unit_of_measure_id:
+        raise ConflictError("The product's stock unit has changed since this delivery was created; nothing is converted.")
+
+    new_quantity = quantity if quantity is not None else line.quantity
+    reason = (override_reason or "").strip() or None
+    position = line_position(db, db.get(SalesOrderLine, line.sales_order_line_id), instruction.scrap_allowance_percent)
+    if exceeds_permitted(position, new_quantity):
+        permitted = format(position.remaining_permitted_quantity.normalize(), "f")
+        if not is_admin:
+            raise ValidationError(
+                f"The quantity is above what may still be delivered on this order line ({permitted}).",
+                fields={"quantity": "Above the remaining permitted quantity."},
+            )
+        if reason is None:
+            raise ValidationError(
+                "An Admin override above the remaining permitted quantity needs a reason.",
+                fields={"override_reason": "Required above the remaining permitted quantity."},
+            )
+    else:
+        reason = None
+
+    new_default = default_pallets(db, instruction.organisation_id, db.get(UnitOfMeasure, line.unit_of_measure_id), new_quantity)
+    if pallet_count is _UNSET:
+        manual = line.pallet_count_manual
+        count = line.pallet_count if manual else new_default
+    elif pallet_count is None:
+        manual, count = False, new_default
+    else:
+        if isinstance(pallet_count, bool) or not isinstance(pallet_count, int) or pallet_count < 1:
+            raise ValidationError("Pallets must be a whole number of at least 1.", fields={"pallet_count": "At least 1."})
+        manual, count = True, pallet_count
+    if count is None:
+        raise ValidationError(
+            "This product can't be converted to tonnes -- enter the pallet count.",
+            fields={"pallet_count": "Required for this product."},
+        )
+
+    changes = []
+    for field, old, new in (
+        ("quantity", line.quantity, new_quantity),
+        ("pallet_count", line.pallet_count, count),
+        ("pallet_count_default", line.pallet_count_default, new_default),
+        ("pallet_count_manual", line.pallet_count_manual, manual),
+        ("quantity_override_reason", line.quantity_override_reason, reason),
+    ):
+        if old != new:
+            changes.append(f"line {line.sales_order_line_id} {field}: {old} -> {new}")
+    line.quantity = new_quantity
+    line.pallet_count = count
+    line.pallet_count_default = new_default
+    line.pallet_count_manual = manual
+    line.quantity_override_reason = reason
+    db.add(line)
+    db.flush()
+    return changes
