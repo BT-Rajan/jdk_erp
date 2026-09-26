@@ -32,6 +32,8 @@ interface Product {
   unit_of_measure_id: number
   description: string | null
   selling_price: string
+  min_selling_price: string | null
+  max_selling_price: string | null
   manufacturing_lead_time_days: number | null
   customer_lead_time_days: number | null
   is_active: boolean
@@ -64,6 +66,8 @@ const productSchema = z.object({
   unit_of_measure_id: z.string().min(1, 'Unit of measure is required'),
   description: z.string(),
   selling_price: z.string().min(1, 'Selling price is required').refine((v) => DECIMAL_RE.test(v), 'Enter a valid amount'),
+  min_selling_price: z.string().refine((v) => v === '' || DECIMAL_RE.test(v), 'Enter a valid amount'),
+  max_selling_price: z.string().refine((v) => v === '' || DECIMAL_RE.test(v), 'Enter a valid amount'),
   manufacturing_lead_time_days: z.string().refine((v) => v === '' || INTEGER_RE.test(v), 'Enter a whole number of days'),
   customer_lead_time_days: z.string().refine((v) => v === '' || INTEGER_RE.test(v), 'Enter a whole number of days'),
 })
@@ -76,6 +80,8 @@ const emptyDefaults: ProductFormValues = {
   unit_of_measure_id: '',
   description: '',
   selling_price: '',
+  min_selling_price: '',
+  max_selling_price: '',
   manufacturing_lead_time_days: '',
   customer_lead_time_days: '',
 }
@@ -87,6 +93,8 @@ function toFormValues(product: Product): ProductFormValues {
     unit_of_measure_id: String(product.unit_of_measure_id),
     description: product.description ?? '',
     selling_price: product.selling_price,
+    min_selling_price: product.min_selling_price ?? '',
+    max_selling_price: product.max_selling_price ?? '',
     manufacturing_lead_time_days: product.manufacturing_lead_time_days == null ? '' : String(product.manufacturing_lead_time_days),
     customer_lead_time_days: product.customer_lead_time_days == null ? '' : String(product.customer_lead_time_days),
   }
@@ -216,6 +224,8 @@ export function ProductsPage() {
         unit_of_measure_id: Number(values.unit_of_measure_id),
         description: values.description || null,
         selling_price: values.selling_price,
+        min_selling_price: values.min_selling_price || null,
+        max_selling_price: values.max_selling_price || null,
         manufacturing_lead_time_days: values.manufacturing_lead_time_days === '' ? null : Number(values.manufacturing_lead_time_days),
         customer_lead_time_days: values.customer_lead_time_days === '' ? null : Number(values.customer_lead_time_days),
       }
@@ -406,6 +416,18 @@ export function ProductsPage() {
               hint="Current/default reference price only -- not historical transaction pricing."
               {...register('selling_price')}
               error={errors.selling_price?.message}
+            />
+            <TextField
+              label="Minimum Selling Price"
+              hint="Quoting below this needs Admin approval. Leave both blank and every quoted price needs approval."
+              {...register('min_selling_price')}
+              error={errors.min_selling_price?.message}
+            />
+            <TextField
+              label="Maximum Selling Price"
+              hint="Quoting above this needs Admin approval."
+              {...register('max_selling_price')}
+              error={errors.max_selling_price?.message}
             />
             <TextField
               label="Manufacturing Lead Time (days)"

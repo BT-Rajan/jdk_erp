@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import BusinessRuleError, ConflictError, ValidationError
+from app.core.errors import BusinessRuleError, ValidationError
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderLine
 from app.models.raw_material import RawMaterial
 from app.models.unit import UnitOfMeasure
@@ -31,9 +31,7 @@ from app.models.rfq import (
     RfqResponseLine,
     RfqSupplierInvitation,
 )
-from app.services import purchase_order_service, uom_conversion
-
-_MAX_YEARLY_SEQUENCE = 9999
+from app.services import document_numbering, purchase_order_service, uom_conversion
 
 
 def generate_rfq_number(db: Session, organisation_id: int, today: date | None = None) -> str:
@@ -43,13 +41,15 @@ def generate_rfq_number(db: Session, organisation_id: int, today: date | None = 
     starts with this year's `YY3` prefix -- the same count-and-retry
     discipline every other code generator in this codebase uses, just
     scoped by year (docs/audit/RFQ_AUDIT.md #2)."""
-    today = today or date.today()
-    prefix = f"{today.year % 100:02d}3"
-    existing = db.query(Rfq).filter(Rfq.organisation_id == organisation_id, Rfq.rfq_number.like(f"{prefix}%")).count()
-    sequence = existing + 1
-    if sequence > _MAX_YEARLY_SEQUENCE:
-        raise ConflictError("This organisation has reached the maximum number of RFQs for this year.")
-    return f"{prefix}{sequence:04d}"
+    return document_numbering.next_yearly_number(
+        db,
+        number_column=Rfq.rfq_number,
+        organisation_column=Rfq.organisation_id,
+        organisation_id=organisation_id,
+        type_digit=document_numbering.RFQ_TYPE_DIGIT,
+        today=today or date.today(),
+        limit_message="This organisation has reached the maximum number of RFQs for this year.",
+    )
 
 
 def assert_transition_allowed(current_status: str, target_status: str) -> None:

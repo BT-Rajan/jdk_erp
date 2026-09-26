@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -154,6 +155,7 @@ def create_product(
     precedent)."""
     _resolve_active_category(db, payload.category_id, admin.organisation_id)
     _resolve_active_unit(db, payload.unit_of_measure_id, admin.organisation_id)
+    _check_price_range(payload.min_selling_price, payload.max_selling_price)
 
     product: Product | None = None
     last_error: IntegrityError | None = None
@@ -167,6 +169,8 @@ def create_product(
             unit_of_measure_id=payload.unit_of_measure_id,
             description=payload.description,
             selling_price=payload.selling_price,
+            min_selling_price=payload.min_selling_price,
+            max_selling_price=payload.max_selling_price,
             manufacturing_lead_time_days=payload.manufacturing_lead_time_days,
             customer_lead_time_days=payload.customer_lead_time_days,
         )
@@ -200,6 +204,14 @@ def create_product(
     return product
 
 
+def _check_price_range(min_price: Decimal | None, max_price: Decimal | None) -> None:
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise ValidationError(
+            "Minimum selling price must not be greater than the maximum.",
+            fields={"min_selling_price": "Must not be greater than the maximum selling price."},
+        )
+
+
 @router.patch("/{product_id}", response_model=ProductOut)
 def update_product(
     product_id: int,
@@ -222,6 +234,11 @@ def update_product(
                 "unit_of_measure_id cannot be changed once this product has a BOM.",
                 fields={"unit_of_measure_id": "Cannot change once a BOM exists for this product."},
             )
+
+    _check_price_range(
+        updates.get("min_selling_price", product.min_selling_price),
+        updates.get("max_selling_price", product.max_selling_price),
+    )
 
     before = {field: getattr(product, field) for field in updates}
     for field, value in updates.items():

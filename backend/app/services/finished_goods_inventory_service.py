@@ -235,6 +235,22 @@ def get_quantity_on_hand(db: Session, *, product_id: int, warehouse_id: int):
     return row.quantity_on_hand if row is not None else 0
 
 
+def get_organisation_quantity_on_hand(db: Session, *, organisation_id: int, product_id: int):
+    """Read-only: the product's on-hand quantity across every warehouse of
+    the organisation, summed from the same snapshot get_quantity_on_hand
+    reads (JDK has one warehouse today). In the product's own stock unit.
+    There is no reservation concept yet, so on hand is what's available."""
+    total = (
+        db.query(func.coalesce(func.sum(FinishedGoodsInventory.quantity_on_hand), 0))
+        .filter(
+            FinishedGoodsInventory.organisation_id == organisation_id,
+            FinishedGoodsInventory.product_id == product_id,
+        )
+        .scalar()
+    )
+    return Decimal(str(total))
+
+
 def list_stock_positions(db: Session, *, organisation_id: int) -> list[FinishedGoodsInventory]:
     """Every (Product, Warehouse) pair this organisation has a Finished
     Goods snapshot row for -- the Stock Position screen's own data

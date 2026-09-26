@@ -12,17 +12,23 @@ Frozen rules:
 - Every decision uses Kuwait server time (app/core/timezone.JDK_TIMEZONE),
   never the organisation's display `timezone` column and never a
   client-supplied time -- no API accepts "now" from the caller.
-- Same day means the required date is today's Kuwait date and the
-  current Kuwait time is at or before the organisation's
-  `same_day_cutoff_time` (14:00 by default).
-- For a later date, count only working days after today, up to and
-  including the required date: 0-2 -> within 2 working days, 3 or more
-  -> more than 2 working days.
+- A required date that is itself non-working (Friday, Saturday or a
+  holiday) is `not_servable`: not a normal delivery date. It is a
+  result, not an error -- a later Sales workflow sends it to Admin.
+  The requested date is never moved.
+- The applicable working day is today while the current Kuwait time is
+  at or before the organisation's `same_day_cutoff_time` (14:00 by
+  default); after the cut-off it is the next working day (Sales S5).
+- A required date equal to the applicable working day is same day.
+  Otherwise count only working days after the applicable day, up to
+  and including the required date: 0-2 -> within 2 working days, 3 or
+  more -> more than 2 working days. (A request for today made after the
+  cut-off falls before the applicable day: 0 working days after it,
+  i.e. within 2 working days.)
+- Time-dependent by nature: computed from the current Kuwait time on
+  every call, never stored here.
 
-Two inputs are deliberately NOT classified, because no business rule
-for them exists yet and this service must not invent one:
-- today's date after the same-day cut-off -> SameDayCutoffPassedError;
-- a date before today -> ValidationError.
+A date before today is not classified at all -> ValidationError.
 
 Read-only: nothing here writes, commits, or touches any Sales,
 inventory or production record."""
@@ -31,7 +37,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import BusinessRuleError, ValidationError
+from app.core.errors import ValidationError
 from app.core.timezone import now_jdk, to_jdk_time
 from app.models.organisation import Organisation
 from app.models.organisation_holiday import OrganisationHoliday
@@ -43,15 +49,14 @@ WORKING_WEEKDAY_NAMES = ("sunday", "monday", "tuesday", "wednesday", "thursday")
 SAME_DAY = "same_day"
 WITHIN_2_WORKING_DAYS = "within_2_working_days"
 MORE_THAN_2_WORKING_DAYS = "more_than_2_working_days"
-DELIVERY_WINDOWS = (SAME_DAY, WITHIN_2_WORKING_DAYS, MORE_THAN_2_WORKING_DAYS)
+NOT_SERVABLE = "not_servable"
+DELIVERY_WINDOWS = (SAME_DAY, WITHIN_2_WORKING_DAYS, MORE_THAN_2_WORKING_DAYS, NOT_SERVABLE)
 
 _WITHIN_WORKING_DAYS_LIMIT = 2
-
-
-class SameDayCutoffPassedError(BusinessRuleError):
-    """Today's date was requested after the same-day cut-off. There is no
-    agreed business classification for this case yet (Sales S1 open
-    decision), so it is refused rather than guessed."""
+# Holidays are fetched this far past a missed cut-off's "today" when
+# looking for the next working day -- far longer than any real run of
+# consecutive non-working days.
+_NEXT_WORKING_DAY_HORIZON_DAYS = 31
 
 
 def is_working_day(day: date, holidays: set[date]) -> bool:
@@ -69,6 +74,14 @@ def get_holiday_dates(db: Session, organisation_id: int, start: date, end: date)
         .all()
     )
     return {row[0] for row in rows}
+
+
+def next_working_day(day: date, holidays: set[date]) -> date:
+    """The first working day strictly after `day`."""
+    candidate = day + timedelta(days=1)
+    while not is_working_day(candidate, holidays):
+        candidate += timedelta(days=1)
+    return candidate
 
 
 def count_working_days_after(today: date, until: date, holidays: set[date]) -> int:
@@ -100,19 +113,24 @@ def classify_delivery_window(
             "The required delivery date is in the past.", fields={"required_date": "Must be today or later."}
         )
 
-    if required_date == today:
-        cutoff = (
-            db.query(Organisation.same_day_cutoff_time).filter(Organisation.id == organisation_id).scalar()
-        )
-        if current.time() <= cutoff:
-            return SAME_DAY
-        raise SameDayCutoffPassedError(
-            f"Same-day delivery cut-off ({cutoff.strftime('%H:%M')} Kuwait time) has passed; "
-            "no business rule yet defines how a later same-day request is classified."
+    if not is_working_day(required_date, get_holiday_dates(db, organisation_id, required_date, required_date)):
+        return NOT_SERVABLE
+
+    cutoff = db.query(Organisation.same_day_cutoff_time).filter(Organisation.id == organisation_id).scalar()
+    evaluation_start = today
+    if current.time() > cutoff:
+        # Missed the cut-off: the request is evaluated from the next
+        # working day, whatever date it asks for. The requested date
+        # itself is never changed.
+        evaluation_start = next_working_day(
+            today,
+            get_holiday_dates(db, organisation_id, today, today + timedelta(days=_NEXT_WORKING_DAY_HORIZON_DAYS)),
         )
 
-    holidays = get_holiday_dates(db, organisation_id, today + timedelta(days=1), required_date)
-    if count_working_days_after(today, required_date, holidays) <= _WITHIN_WORKING_DAYS_LIMIT:
+    if required_date == evaluation_start:
+        return SAME_DAY
+
+    holidays = get_holiday_dates(db, organisation_id, evaluation_start + timedelta(days=1), required_date)
+    if count_working_days_after(evaluation_start, required_date, holidays) <= _WITHIN_WORKING_DAYS_LIMIT:
         return WITHIN_2_WORKING_DAYS
     return MORE_THAN_2_WORKING_DAYS
-
