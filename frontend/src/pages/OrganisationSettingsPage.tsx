@@ -29,6 +29,8 @@ interface Organisation {
   currency: string
   timezone: string
   production_staff_available_per_day?: number | null
+  /** Decimal string from the API, e.g. "2.50"; default "0.00". */
+  delivery_scrap_allowance_percent?: string
   is_active: boolean
 }
 
@@ -52,6 +54,10 @@ const schema = z.object({
   production_staff_available_per_day: z
     .string()
     .refine((value) => value === '' || /^\d+$/.test(value), 'Enter a whole number of staff'),
+  // Mirrors the server rule: 0-999.99, at most 2 decimal places, never negative.
+  delivery_scrap_allowance_percent: z
+    .string()
+    .regex(/^\d{1,3}(\.\d{1,2})?$/, 'Enter a percentage from 0 to 999.99, with up to 2 decimal places'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -68,6 +74,7 @@ function toFormValues(org: Organisation): FormValues {
     timezone: org.timezone,
     production_staff_available_per_day:
       org.production_staff_available_per_day == null ? '' : String(org.production_staff_available_per_day),
+    delivery_scrap_allowance_percent: org.delivery_scrap_allowance_percent ?? '0',
   }
 }
 
@@ -144,6 +151,8 @@ export function OrganisationSettingsPage() {
       currency: values.currency.toUpperCase(),
       production_staff_available_per_day:
         values.production_staff_available_per_day === '' ? null : Number(values.production_staff_available_per_day),
+      // Sent as a string so the exact decimal reaches the server.
+      delivery_scrap_allowance_percent: values.delivery_scrap_allowance_percent,
     }
     try {
       const { data } = await apiClient.patch<Organisation>('/api/organisations/me', payload)
@@ -232,6 +241,13 @@ export function OrganisationSettingsPage() {
             hint="Used by the 0–2 working-day feasibility manpower check. Leave blank if not set."
             {...register('production_staff_available_per_day')}
             error={errors.production_staff_available_per_day?.message}
+          />
+          <TextField
+            label="Delivery scrap allowance (%)"
+            hint="Delivery tolerance above the ordered quantity. Copied into each delivery when it is created; it never changes a Sales Order. 0 = none."
+            inputMode="decimal"
+            {...register('delivery_scrap_allowance_percent')}
+            error={errors.delivery_scrap_allowance_percent?.message}
           />
 
           <div className="flex justify-end pt-2">
