@@ -87,7 +87,7 @@ class Readiness:
     commercial_approval_required: bool = False
 
 
-def _operational(db: Session, quotation: Quotation, window: str | None, readiness: Readiness) -> None:
+def _operational(db: Session, quotation: Quotation, window: str | None, readiness: Readiness, now: datetime) -> None:
     def block(condition: str, *codes: str) -> None:
         readiness.conditions.append(condition)
         readiness.reason_codes.extend(codes)
@@ -96,7 +96,7 @@ def _operational(db: Session, quotation: Quotation, window: str | None, readines
         block(OPERATIONAL_ASSESSMENT_REQUIRED, REQUESTED_DATE_MISSING)
         return
     if window == working_calendar_service.NOT_SERVABLE:
-        _non_working_date(db, quotation, window, readiness, block)
+        _non_working_date(db, quotation, readiness, block, now)
         return
     if window not in _WINDOWS_NEEDING_FEASIBILITY:
         return
@@ -107,7 +107,7 @@ def _operational(db: Session, quotation: Quotation, window: str | None, readines
         return
     readiness.feasibility_check_id = record.id
     readiness.feasibility_state = record.state
-    if not feasibility_record_service.is_current(db, record, quotation) or record.delivery_window != window:
+    if not feasibility_record_service.is_current(db, record, quotation, now):
         block(OPERATIONAL_ASSESSMENT_REQUIRED, FEASIBILITY_STALE)
     elif record.state == CHECK_OVERRIDE_REQUIRED:
         block(ADMIN_OVERRIDE_REQUIRED, *json.loads(record.reason_codes))
@@ -119,7 +119,7 @@ def _operational(db: Session, quotation: Quotation, window: str | None, readines
         block(OPERATIONAL_ASSESSMENT_REQUIRED, FEASIBILITY_STALE)
 
 
-def _non_working_date(db: Session, quotation: Quotation, window: str, readiness: Readiness, block) -> None:
+def _non_working_date(db: Session, quotation: Quotation, readiness: Readiness, block, now: datetime) -> None:
     """A Friday/Saturday/holiday requested date needs Admin's decision on
     a current S8 record (S11.1): approved -> satisfied, rejected -> not
     servable. Until then it stays admin_override_required; with no
@@ -128,9 +128,8 @@ def _non_working_date(db: Session, quotation: Quotation, window: str, readiness:
     record = feasibility_record_service.latest_for_quotation(db, quotation.id)
     current = (
         record is not None
-        and record.delivery_window == window
         and record.state in (CHECK_OVERRIDE_REQUIRED, APPROVED, REJECTED)
-        and feasibility_record_service.is_current(db, record, quotation)
+        and feasibility_record_service.is_current(db, record, quotation, now)
     )
     if record is not None:
         readiness.feasibility_check_id = record.id
@@ -181,7 +180,7 @@ def assess(db: Session, quotation: Quotation, now: datetime | None = None) -> Re
                 db, quotation.organisation_id, quotation.requested_delivery_date, now=current
             )
         readiness.delivery_window = window
-        _operational(db, quotation, window, readiness)
+        _operational(db, quotation, window, readiness, current)
     _commercial(quotation, readiness)
     for status in _PRECEDENCE:
         if status in readiness.conditions:

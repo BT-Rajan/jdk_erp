@@ -38,6 +38,8 @@ export interface Quotation {
   price_decision_at: string | null
   delivery_window: string | null
   readiness_status: string | null
+  /** Server's answer: only the salesman owning the customer may edit a draft. */
+  can_edit: boolean
   created_at: string
   updated_at: string
   lines: QuotationLine[]

@@ -95,6 +95,9 @@ class QuotationListRowOut(QuotationOut):
 
     delivery_window: str | None = None
     readiness_status: str | None = None
+    # Server's answer to "may this caller edit it" (owner of the customer,
+    # draft) -- the UI shows Edit from this, never decides it itself.
+    can_edit: bool = False
 
 
 class SameDayShortageOut(BaseModel):

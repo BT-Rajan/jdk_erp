@@ -144,7 +144,7 @@ export function QuotationDetailPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => navigate('/sales/quotations')}>All Quotations</Button>
-            {quotation.status === 'draft' && (
+            {quotation.can_edit && (
               <Button onClick={() => navigate(`/sales/quotations/${quotation.id}/edit`)}>Edit</Button>
             )}
           </div>

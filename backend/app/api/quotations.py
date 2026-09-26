@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import AccessDeniedError, NotFoundError, ValidationError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
 from app.models.audit_event import (
@@ -26,7 +26,7 @@ from app.models.audit_event import (
 )
 from app.models.customer import Customer
 from app.models.feasibility_check import FeasibilityCheck
-from app.models.quotation import Quotation
+from app.models.quotation import DRAFT, Quotation
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.quotation import (
@@ -71,11 +71,19 @@ def _get_visible_quotation(db: Session, quotation_id: int, user: User) -> Quotat
     return quotation
 
 
-def _list_row(db: Session, quotation: Quotation) -> QuotationListRowOut:
+def _is_owner(quotation: Quotation, user: User) -> bool:
+    """Editing authority (S11.2 decision): only the salesman who owns the
+    quotation's customer -- Customer.assigned_to_user_id, the S2
+    ownership pointer -- may edit it. Seeing it is not enough."""
+    return quotation.customer is not None and quotation.customer.assigned_to_user_id == user.id
+
+
+def _list_row(db: Session, quotation: Quotation, user: User) -> QuotationListRowOut:
     readiness = quotation_readiness_service.assess(db, quotation)
     row = QuotationListRowOut.model_validate(quotation)
     row.delivery_window = readiness.delivery_window
     row.readiness_status = readiness.status
+    row.can_edit = quotation.status == DRAFT and _is_owner(quotation, user)
     return row
 
 
@@ -98,14 +106,14 @@ def list_quotations(
         )
     query = query.order_by(Quotation.id.desc())
     quotations, pagination = paginate(query, page, page_size)
-    return PaginatedResponse(data=[_list_row(db, q_) for q_ in quotations], pagination=pagination)
+    return PaginatedResponse(data=[_list_row(db, q_, current_user) for q_ in quotations], pagination=pagination)
 
 
 @router.get("/{quotation_id}", response_model=QuotationListRowOut)
 def get_quotation(
     quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> QuotationListRowOut:
-    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user))
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
 
 
 @router.patch("/{quotation_id}", response_model=QuotationListRowOut)
@@ -116,16 +124,22 @@ def update_quotation(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> QuotationListRowOut:
-    """Controlled edit of a draft quotation (Sales S10). The quotation and
-    any new customer must both be in the caller's scope (404 otherwise)
-    and the customer active. Lines are re-validated and re-priced on the
-    server. Changing customer, date or lines makes earlier feasibility
-    stale. Audited."""
+    """Controlled edit of a draft quotation (Sales S10). A quotation outside
+    the caller's scope is a 404; one the caller can see but doesn't own
+    (S11.2: only the salesman owning its customer may edit) is a 403 --
+    heads, Admins and other viewers included. A new customer must be in
+    scope, owned by the caller and active. Lines are re-validated and
+    re-priced on the server. Changing customer, date or lines makes
+    earlier feasibility stale. Audited."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if not _is_owner(quotation, current_user):
+        raise AccessDeniedError("Only the salesman who owns this customer can edit the quotation.")
     updates = payload.model_dump(exclude_unset=True)
     customer_id = None
     if updates.get("customer_id") is not None:
         customer = customer_scope.get_accessible_customer(db, current_user, updates["customer_id"])
+        if customer.assigned_to_user_id != current_user.id:
+            raise AccessDeniedError("A quotation can only be moved to a customer you own.")
         if not customer.is_active:
             raise ValidationError(
                 "This customer is inactive and cannot be quoted.", fields={"customer_id": "Customer is inactive."}
@@ -167,7 +181,7 @@ def update_quotation(
         )
     db.commit()
     db.expire_all()
-    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user))
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
 
 
 @router.put("/{quotation_id}/price-decision", response_model=QuotationListRowOut)
@@ -203,7 +217,7 @@ def decide_price(
     )
     db.commit()
     db.expire_all()
-    return _list_row(db, _get_visible_quotation(db, quotation_id, admin))
+    return _list_row(db, _get_visible_quotation(db, quotation_id, admin), admin)
 
 
 @router.get("/{quotation_id}/lines", response_model=list[QuotationLineOut])

@@ -101,9 +101,9 @@ def test_editing_follows_customer_scope(client, setup):
     # Moving my quotation onto another salesman's customer is refused the same way.
     assert client.patch(f"/api/quotations/{mine['id']}", json={"customer_id": customers["b"].id}, headers=a).status_code == 404
     assert client.patch(f"/api/quotations/{mine['id']}", json={"customer_id": customers["a2"].id}, headers=a).status_code == 200
-    # The Department Head can edit within the team.
+    # S11.2: seeing it is not enough -- the Department Head can't edit a salesman's quotation.
     head_edit = client.patch(f"/api/quotations/{theirs['id']}", json={"lines": [_line(widget, "2")]}, headers=_headers(client, "head"))
-    assert head_edit.status_code == 200
+    assert head_edit.status_code == 403
 
 
 def test_edit_is_revalidated_and_repriced_on_the_server(client, db_session, organisation, setup):

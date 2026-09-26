@@ -22,7 +22,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError
-from app.core.timezone import now_jdk
+from app.core.timezone import now_jdk, to_jdk_time
 from app.models.feasibility_check import (
     ADMIN_OVERRIDE_REQUIRED,
     APPROVED,
@@ -142,17 +142,29 @@ def latest_for_quotation(db: Session, quotation_id: int) -> FeasibilityCheck | N
     )
 
 
-def is_current(db: Session, record: FeasibilityCheck, quotation: Quotation) -> bool:
-    """Authoritative only while it is the quotation's latest record and the
-    quotation's feasibility inputs (customer, requested date, products,
-    quantities, units) still match what was calculated. Anything else needs a fresh
-    check -- an old result is never silently reused."""
+def is_current(db: Session, record: FeasibilityCheck, quotation: Quotation, now: datetime | None = None) -> bool:
+    """The one staleness rule. Authoritative only while it is the
+    quotation's latest record, the quotation's feasibility inputs
+    (customer, requested date, products, quantities, units) still match
+    what was calculated, AND the requested date still falls in the same
+    delivery window it was calculated for (S11.2 decision: when time
+    passing changes the window, a fresh check is needed). A requested date
+    that has passed has no window, so nothing is current for it. Anything
+    else needs a fresh check -- an old result is never silently reused."""
     latest = latest_for_quotation(db, quotation.id)
     if latest is None or latest.id != record.id:
         return False
-    return _inputs(record.customer_id, record.requested_delivery_date, record.lines) == _inputs(
+    if _inputs(record.customer_id, record.requested_delivery_date, record.lines) != _inputs(
         quotation.customer_id, quotation.requested_delivery_date, quotation.lines
+    ):
+        return False
+    current = now or now_jdk()
+    if quotation.requested_delivery_date < to_jdk_time(current).date():
+        return False
+    window = working_calendar_service.classify_delivery_window(
+        db, quotation.organisation_id, quotation.requested_delivery_date, now=current
     )
+    return window == record.delivery_window
 
 
 def decide(db: Session, record: FeasibilityCheck, quotation: Quotation, decision: str, reason: str, user_id: int) -> str:

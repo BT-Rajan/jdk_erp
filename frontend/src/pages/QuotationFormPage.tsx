@@ -81,8 +81,12 @@ export function QuotationFormPage() {
         setProducts(productsResponse.data.data)
         setUnits(unitsResponse.data.data)
         const loaded = quotationResponse ? quotationResponse.data : null
-        if (loaded && loaded.status !== 'draft') {
-          setLoadError(`Quotation ${loaded.quotation_number} can no longer be edited.`)
+        if (loaded && !loaded.can_edit) {
+          setLoadError(
+            loaded.status !== 'draft'
+              ? `Quotation ${loaded.quotation_number} can no longer be edited.`
+              : `Only the salesman who owns this customer can edit quotation ${loaded.quotation_number}.`,
+          )
         }
         setQuotation(loaded)
         if (loaded) {

@@ -118,11 +118,7 @@ def evaluate_quotation(db: Session, quotation: Quotation, now: datetime | None =
         from app.services import feasibility_record_service
 
         record = feasibility_record_service.latest_for_quotation(db, quotation.id)
-        if (
-            record is not None
-            and record.delivery_window == window
-            and feasibility_record_service.is_current(db, record, quotation)
-        ):
+        if record is not None and feasibility_record_service.is_current(db, record, quotation, now):
             if record.state == APPROVED:
                 decision = SERVABLE
             elif record.state == REJECTED:
