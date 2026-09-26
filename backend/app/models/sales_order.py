@@ -14,7 +14,11 @@ from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 # migration 0052 marked them handed off (source `migration`).
 HANDED_OFF = "handed_off"
 CANCELLED = "cancelled"
-SALES_ORDER_STATUSES = (HANDED_OFF, CANCELLED)
+# Delivery statuses (Delivery D2): recognised so delivery eligibility can
+# name them; nothing sets them yet -- later Delivery passes will.
+PARTIALLY_DELIVERED = "partially_delivered"
+COMPLETED = "completed"
+SALES_ORDER_STATUSES = (HANDED_OFF, PARTIALLY_DELIVERED, COMPLETED, CANCELLED)
 
 # How an order reached hand-off: `automatic` on creation (S14.2), or
 # `migration` for orders that existed before it.

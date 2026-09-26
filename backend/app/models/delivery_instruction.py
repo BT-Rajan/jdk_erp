@@ -1,0 +1,86 @@
+"""Delivery Instructions (Delivery D2): one physical shipment/tranche of a
+Sales Order. A Sales Order may have several; each is created manually by
+warehouse staff with the `inventory:deliver` grant.
+
+Each line keeps what applied when the tranche was created -- the Sales
+Order line's ordered quantity, product and stock unit, the quantity
+planned for this shipment, and the Delivery Scrap Allowance % copied from
+the Admin setting -- so later changes to the setting or the order never
+alter it. `max_permitted_quantity` = quantity x (1 + allowance / 100),
+stored exactly (no rounding).
+
+Only the `pending` state exists yet. Nothing here moves or reserves
+stock, changes the Sales Order or counts pallets."""
+
+from decimal import Decimal
+
+from sqlalchemy import CheckConstraint, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+from app.models.mixins import OrganisationScopedMixin, TimestampMixin
+
+PENDING = "pending"
+DELIVERY_INSTRUCTION_STATUSES = (PENDING,)
+
+
+class DeliveryInstruction(Base, TimestampMixin, OrganisationScopedMixin):
+    __tablename__ = "delivery_instructions"
+    __table_args__ = (
+        UniqueConstraint("organisation_id", "delivery_number", name="uq_delivery_instructions_organisation_id_delivery_number"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    delivery_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    sales_order_id: Mapped[int] = mapped_column(ForeignKey("sales_orders.id", ondelete="RESTRICT"), nullable=False, index=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=PENDING, server_default=PENDING)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    lines: Mapped[list["DeliveryInstructionLine"]] = relationship(
+        back_populates="delivery_instruction", cascade="all, delete-orphan", order_by="DeliveryInstructionLine.id"
+    )
+    # Display only.
+    sales_order = relationship("SalesOrder", viewonly=True, lazy="joined")
+    customer = relationship("Customer", viewonly=True, lazy="joined")
+
+    @property
+    def sales_order_number(self) -> str | None:
+        return self.sales_order.order_number if self.sales_order is not None else None
+
+    @property
+    def customer_name(self) -> str | None:
+        return self.customer.name if self.customer is not None else None
+
+
+class DeliveryInstructionLine(Base):
+    __tablename__ = "delivery_instruction_lines"
+    __table_args__ = (
+        UniqueConstraint("delivery_instruction_id", "sales_order_line_id", name="uq_delivery_instruction_lines_instruction_line"),
+        CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("scrap_allowance_percent >= 0", name="allowance_not_negative"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Explicit short FK names: MySQL identifiers are limited to 64 chars.
+    delivery_instruction_id: Mapped[int] = mapped_column(
+        ForeignKey("delivery_instructions.id", ondelete="CASCADE", name="fk_delivery_instruction_lines_instruction_id"),
+        nullable=False,
+        index=True,
+    )
+    sales_order_line_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_lines.id", ondelete="RESTRICT", name="fk_delivery_instruction_lines_sales_order_line_id"),
+        nullable=False,
+        index=True,
+    )
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), nullable=False)
+    unit_of_measure_id: Mapped[int] = mapped_column(
+        ForeignKey("units_of_measure.id", ondelete="RESTRICT", name="fk_delivery_instruction_lines_unit_of_measure_id"),
+        nullable=False,
+    )
+    ordered_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    scrap_allowance_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    max_permitted_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+
+    delivery_instruction: Mapped[DeliveryInstruction] = relationship(back_populates="lines")

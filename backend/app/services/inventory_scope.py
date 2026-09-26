@@ -44,6 +44,9 @@ ADJUST = "adjust"
 OPENING_STOCK = "opening_stock"
 RECONCILE = "reconcile"
 VIEW = "view"
+# Delivery Instructions (Delivery D2): create and read shipment tranches of
+# Sales Orders -- warehouse work, granted independently of stock adjustment.
+DELIVER = "deliver"
 
 
 def can_perform(db: Session, user: User, action: str) -> bool:

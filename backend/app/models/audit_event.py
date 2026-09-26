@@ -122,6 +122,7 @@ SALES_ORDER_CANCELLED = "sales_order_cancelled"
 SALES_ORDER_HANDED_OFF = "sales_order_handed_off"
 FULFILMENT_ASSESSED = "fulfilment_assessed"
 ASSISTANT_KEY_UPDATED = "assistant_key_updated"
+DELIVERY_INSTRUCTION_CREATED = "delivery_instruction_created"
 QUOTATION_PRICE_DECIDED = "price_decided"
 FEASIBILITY_RECORDED = "feasibility_recorded"
 FEASIBILITY_DECIDED = "feasibility_decided"
@@ -147,6 +148,8 @@ INVENTORY_MODULE = "inventory"
 SALES_MODULE = "sales"
 # Production demand arising from handed-off Sales Orders (S15.2).
 PRODUCTION_MODULE = "production"
+# Delivery Instructions -- shipment tranches of Sales Orders (Delivery D2).
+DELIVERY_MODULE = "delivery"
 
 
 class AuditEvent(Base):
