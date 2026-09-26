@@ -47,6 +47,9 @@ class SalesOrderOut(BaseModel):
     cancelled_at: datetime | None
     cancelled_by_user_id: int | None
     cancellation_reason: str | None
+    handed_off_at: datetime | None = None
+    handed_off_by_user_id: int | None = None
+    handoff_source: str | None = None
     created_at: datetime
     updated_at: datetime
     lines: list[SalesOrderLineOut]

@@ -1,35 +1,65 @@
-"""Sales Orders (Sales S13), per the S13.1 decisions.
+"""Sales Orders (Sales S13, hand-off S14.2).
 
 - convert: the owning salesman turns one ACCEPTED quotation into its
-  Sales Order. Acceptance is the only prerequisite (no readiness,
-  feasibility or price re-check). The order copies the quotation's
-  commercial snapshot; the quotation becomes CONVERTED and is locked.
-- cancel: the owning salesman or their team head, reason mandatory. There
-  is no fulfilment hand-off state yet, so any open order can be cancelled.
-- admin_update: only Admin, reason mandatory; lines are re-validated and
-  re-priced exactly like quotation lines. The customer is the accepted
-  quotation's and can never change (S13.5).
+  Sales Order, which is handed off to fulfilment automatically at that
+  moment (S14.2). Creation is refused unless every hand-off prerequisite
+  holds: the customer has a phone number, an address and an
+  Admin-set payment arrangement (no payment needs to be received), and
+  the quotation's readiness (S9) is `ready` -- requested date not past,
+  prices in range or Admin-approved, feasibility current and acceptable.
+  The order copies the quotation's commercial snapshot; the quotation
+  becomes CONVERTED and is locked.
+- cancel: Admin only after hand-off, reason mandatory.
+- admin_update: Admin only, reason mandatory; the requested date,
+  quantities and prices may change -- never the customer (S13.5),
+  products or units. Returns every change as old -> new for the audit.
 
-Authority is checked by the API layer; this module enforces state. It
-reserves, produces, moves, bills and delivers nothing."""
+Authority is checked by the API layer; this module enforces state. The
+order is fulfilment's source of truth, but this module reserves,
+produces, moves, bills and delivers nothing."""
 
-from datetime import date, datetime
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, ValidationError
 from app.models.quotation import ACCEPTED, CONVERTED, Quotation
-from app.models.sales_order import CANCELLED, OPEN, SalesOrder, SalesOrderLine
-from app.services import document_numbering, quotation_service
+from app.models.sales_order import CANCELLED, HANDED_OFF, HANDOFF_AUTOMATIC, SalesOrder, SalesOrderLine
+from app.services import document_numbering, quotation_readiness_service, quotation_service
 
 _UNSET = object()
 
 
-def convert(db: Session, quotation: Quotation, user_id: int, today: date) -> SalesOrder:
-    """Creates the Sales Order from an accepted quotation and marks the
-    quotation converted, in one flush. The caller audits and commits."""
+def check_handoff_prerequisites(db: Session, quotation: Quotation, now: datetime) -> quotation_readiness_service.Readiness:
+    """The S14.2 hand-off prerequisites, all from existing data: customer
+    phone, address and payment arrangement, then the quotation's current
+    readiness (the one S9 gate -- no second feasibility or price check)."""
+    customer = quotation.customer
+    missing = {}
+    if not (customer.phone or "").strip():
+        missing["phone"] = "The customer needs a phone number."
+    if not (customer.address or "").strip():
+        missing["address"] = "The customer needs an address."
+    if customer.payment_arrangement is None:
+        missing["payment_arrangement"] = "Admin must set the customer's payment arrangement."
+    if missing:
+        raise ValidationError("The customer is not ready for a Sales Order: " + " ".join(missing.values()), fields=missing)
+    readiness = quotation_readiness_service.assess(db, quotation, now)
+    if readiness.status != quotation_readiness_service.READY:
+        raise ConflictError(
+            f"The quotation is not ready for a Sales Order ({readiness.status}: {', '.join(readiness.reason_codes)})."
+        )
+    return readiness
+
+
+def convert(db: Session, quotation: Quotation, user_id: int, now: datetime) -> SalesOrder:
+    """Creates the Sales Order from an accepted quotation, handed off to
+    fulfilment automatically, and marks the quotation converted, in one
+    flush. `now` is Kuwait time. The caller audits and commits."""
     if quotation.status != ACCEPTED:
         raise ConflictError(f"Only an accepted quotation can be converted (this one is {quotation.status}).")
+    check_handoff_prerequisites(db, quotation, now)
+    today = now.date()
 
     def build(number: str) -> SalesOrder:
         order = SalesOrder(
@@ -42,8 +72,11 @@ def convert(db: Session, quotation: Quotation, user_id: int, today: date) -> Sal
             currency=quotation.currency,
             subtotal_amount=quotation.subtotal_amount,
             total_amount=quotation.total_amount,
-            status=OPEN,
+            status=HANDED_OFF,
             created_by_user_id=user_id,
+            handed_off_at=datetime.utcnow(),
+            handed_off_by_user_id=user_id,
+            handoff_source=HANDOFF_AUTOMATIC,
         )
         order.lines = [
             SalesOrderLine(
@@ -75,62 +108,72 @@ def convert(db: Session, quotation: Quotation, user_id: int, today: date) -> Sal
 
 
 def cancel(order: SalesOrder, user_id: int, reason: str) -> None:
-    """Cancels an open order with its mandatory reason. Final."""
-    if order.status != OPEN:
-        raise ConflictError(f"Only an open order can be cancelled (this one is {order.status}).")
+    """Cancels a handed-off order with its mandatory reason. Final. What
+    this means downstream is for those modules to handle."""
+    if order.status != HANDED_OFF:
+        raise ConflictError(f"Only a handed-off order can be cancelled (this one is {order.status}).")
     order.status = CANCELLED
     order.cancelled_at = datetime.utcnow()
     order.cancelled_by_user_id = user_id
     order.cancellation_reason = reason
 
 
+def _plain(value) -> str:
+    """A Decimal without trailing zeros, for the audit trail."""
+    return format(value.normalize(), "f")
+
+
 def admin_update(
     db: Session,
     order: SalesOrder,
     *,
-    today: date,
+    today,
     customer_id: int | None = None,
     requested_delivery_date=_UNSET,
     lines: list[quotation_service.LineInput] | None = None,
 ) -> list[str]:
-    """Admin's change to an open order (the reason is audited by the
-    caller). Lines are replaced as a whole and re-priced/re-validated like
-    quotation lines; the number, status, customer and source quotation
-    never change. Returns the changed field names."""
-    if order.status != OPEN:
-        raise ConflictError(f"Only an open order can be changed (this one is {order.status}).")
-    changed: list[str] = []
+    """Admin's change to a handed-off order (the reason is audited by the
+    caller): the requested date, and each line's quantity and unit price,
+    re-validated and re-priced like quotation lines. The customer,
+    products, units, line count, number, status and source quotation never
+    change. Returns every change as "field: old -> new" (empty if
+    nothing changed)."""
+    if order.status != HANDED_OFF:
+        raise ConflictError(f"Only a handed-off order can be changed (this one is {order.status}).")
     if customer_id is not None and customer_id != order.customer_id:
         raise ValidationError(
             "The customer of a Sales Order cannot be changed.",
             fields={"customer_id": "Fixed to the source quotation's customer."},
         )
+    changes: list[str] = []
     if requested_delivery_date is not _UNSET and requested_delivery_date != order.requested_delivery_date:
         quotation_service.check_requested_date(requested_delivery_date, today)
+        changes.append(f"requested_delivery_date: {order.requested_delivery_date} -> {requested_delivery_date}")
         order.requested_delivery_date = requested_delivery_date
-        changed.append("requested_delivery_date")
     if lines is not None:
         values = quotation_service.price_lines(db, order.organisation_id, lines, order.currency)
-        old = [(l.product_id, l.quantity, l.unit_of_measure_id, l.unit_price) for l in order.lines]
-        new = [(v["product_id"], v["quantity"], v["unit_of_measure_id"], v["unit_price"]) for v in values]
-        if old != new:
-            order.lines.clear()
-            db.flush()
-            order.lines = [
-                SalesOrderLine(
-                    line_number=v["line_number"],
-                    product_id=v["product_id"],
-                    quantity=v["quantity"],
-                    unit_of_measure_id=v["unit_of_measure_id"],
-                    unit_price=v["unit_price"],
-                    line_amount=v["line_amount"],
-                )
-                for v in values
-            ]
-            subtotal = quotation_service.subtotal_of(values, order.currency)
-            order.subtotal_amount = subtotal
-            order.total_amount = subtotal
-            changed.append("lines")
+        same_products = len(values) == len(order.lines) and all(
+            (v["product_id"], v["unit_of_measure_id"]) == (line.product_id, line.unit_of_measure_id)
+            for v, line in zip(values, order.lines)
+        )
+        if not same_products:
+            raise ValidationError(
+                "Only quantities and prices can change on a Sales Order; its products and units are fixed.",
+                fields={"lines": "Keep every line's product and unit, in order."},
+            )
+        for v, line in zip(values, order.lines):
+            if v["quantity"] != line.quantity:
+                changes.append(f"line {line.line_number} quantity: {_plain(line.quantity)} -> {_plain(v['quantity'])}")
+                line.quantity = v["quantity"]
+            if v["unit_price"] != line.unit_price:
+                changes.append(f"line {line.line_number} unit_price: {_plain(line.unit_price)} -> {_plain(v['unit_price'])}")
+                line.unit_price = v["unit_price"]
+            line.line_amount = v["line_amount"]
+        subtotal = quotation_service.subtotal_of(values, order.currency)
+        if subtotal != order.total_amount:
+            changes.append(f"total_amount: {_plain(order.total_amount)} -> {_plain(subtotal)} {order.currency}")
+        order.subtotal_amount = subtotal
+        order.total_amount = subtotal
     db.add(order)
     db.flush()
-    return changed
+    return changes

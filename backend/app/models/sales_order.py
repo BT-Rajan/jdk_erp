@@ -7,12 +7,19 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
-# Lifecycle owned by Sales (S13.1): an order is open until cancelled. The
-# hand-off to fulfilment (stock, production, delivery) is defined when
-# those modules exist -- no fulfilment states live here.
-OPEN = "open"
+# Lifecycle (S14.2): an order is handed off to fulfilment automatically
+# the moment it is created, and stays handed_off until Admin cancels it.
+# Fulfilment (stock, production, QC, delivery) reads the order; no
+# fulfilment states live here. Orders created before S14.2 were `open`;
+# migration 0052 marked them handed off (source `migration`).
+HANDED_OFF = "handed_off"
 CANCELLED = "cancelled"
-SALES_ORDER_STATUSES = (OPEN, CANCELLED)
+SALES_ORDER_STATUSES = (HANDED_OFF, CANCELLED)
+
+# How an order reached hand-off: `automatic` on creation (S14.2), or
+# `migration` for orders that existed before it.
+HANDOFF_AUTOMATIC = "automatic"
+HANDOFF_MIGRATION = "migration"
 
 
 class SalesOrder(Base, TimestampMixin, OrganisationScopedMixin):
@@ -23,8 +30,10 @@ class SalesOrder(Base, TimestampMixin, OrganisationScopedMixin):
 
     `order_number` is `YY6NNNN` (document_numbering), assigned once and
     never changed; orders are never deleted, only cancelled. Amounts are
-    server-calculated. Only Admin may change an open order, always with a
-    reason (audited)."""
+    server-calculated. It is the fulfilment side's source of truth; only
+    Admin may change a handed-off order (date, quantities, prices -- never
+    the customer, products or units) or cancel it, always with a reason
+    (audited)."""
 
     __tablename__ = "sales_orders"
     __table_args__ = (
@@ -41,11 +50,17 @@ class SalesOrder(Base, TimestampMixin, OrganisationScopedMixin):
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     subtotal_amount: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default=OPEN, server_default=OPEN)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=HANDED_OFF, server_default=HANDED_OFF)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The hand-off (S14.2). handed_off_by_user_id is the authenticated user
+    # whose order creation triggered it; handoff_source says it was the
+    # automatic transition, not a separate manual action.
+    handed_off_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    handed_off_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    handoff_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     lines: Mapped[list["SalesOrderLine"]] = relationship(
         back_populates="sales_order", cascade="all, delete-orphan", order_by="SalesOrderLine.line_number"

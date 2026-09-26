@@ -29,6 +29,7 @@ from app.models.audit_event import (
     QUOTATION_UPDATED,
     SALES_MODULE,
     SALES_ORDER_CREATED,
+    SALES_ORDER_HANDED_OFF,
 )
 from app.models.customer import Customer
 from app.models.feasibility_check import FeasibilityCheck
@@ -617,13 +618,15 @@ def convert_to_sales_order(
     db: Session = Depends(get_db),
 ) -> SalesOrderOut:
     """Converts an accepted quotation into its Sales Order (S13.1): only the
-    salesman owning its customer; acceptance is the only prerequisite. The
-    quotation becomes converted and locked. Audited on both records.
-    Nothing is reserved, produced or delivered."""
+    salesman owning its customer. The order is handed off to fulfilment
+    automatically on creation, so every S14.2 hand-off prerequisite must
+    hold (sales_order_service.check_handoff_prerequisites). The quotation
+    becomes converted and locked. Audited: the conversion, the creation and
+    the automatic hand-off. Nothing is reserved, produced or delivered."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
     if not _is_owner(quotation, current_user):
         raise AccessDeniedError("Only the salesman who owns this customer can convert the quotation.")
-    order = sales_order_service.convert(db, quotation, current_user.id, now_jdk().date())
+    order = sales_order_service.convert(db, quotation, current_user.id, now_jdk())
     _audit(db, request, current_user, QUOTATION_CONVERTED, quotation, f"sales_order: {order.order_number}")
     audit_service.log_event(
         db,
@@ -637,6 +640,23 @@ def convert_to_sales_order(
         details=(
             f"number: {order.order_number}, quotation: {quotation.quotation_number}, "
             f"total: {order.total_amount} {order.currency}"
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+    # The automatic transition (S14.2): the actor is the user whose order
+    # creation triggered it; nobody pressed a separate hand-off button.
+    audit_service.log_event(
+        db,
+        action=SALES_ORDER_HANDED_OFF,
+        module=SALES_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type="sales_order",
+        entity_id=order.id,
+        result="success",
+        details=(
+            f"number: {order.order_number}, source: {order.handoff_source} (on creation), "
+            f"payment arrangement: {quotation.customer.payment_arrangement}"
         ),
         ip_address=request.client.host if request.client else None,
     )

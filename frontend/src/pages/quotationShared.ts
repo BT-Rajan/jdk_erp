@@ -167,6 +167,9 @@ export interface SalesOrder {
   status: string
   cancellation_reason: string | null
   cancelled_at: string | null
+  /** Set automatically when the order is created (S14.2). */
+  handed_off_at: string | null
+  handoff_source: string | null
   updated_at: string
   lines: SalesOrderLine[]
   /** Server's answer for the current user. */
@@ -174,5 +177,10 @@ export interface SalesOrder {
   can_edit: boolean
 }
 
-export const ORDER_STATUS_LABELS: Record<string, string> = { open: 'Open', cancelled: 'Cancelled' }
-export const ORDER_STATUS_TONES: Record<string, BadgeTone> = { open: 'success', cancelled: 'danger' }
+export const ORDER_STATUS_LABELS: Record<string, string> = { handed_off: 'Handed off', cancelled: 'Cancelled' }
+export const ORDER_STATUS_TONES: Record<string, BadgeTone> = { handed_off: 'success', cancelled: 'danger' }
+
+export const HANDOFF_SOURCE_LABELS: Record<string, string> = {
+  automatic: 'automatically on creation',
+  migration: 'on upgrade (existing order)',
+}
