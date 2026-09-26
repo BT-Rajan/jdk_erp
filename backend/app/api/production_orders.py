@@ -41,6 +41,7 @@ from app.models.sales_order import SalesOrderLine
 from app.models.user import User
 from app.services import (
     audit_service,
+    fg_allocation_service,
     inventory_service,
     production_execution_service,
     production_order_service,
@@ -125,6 +126,9 @@ class ProductionOrderOut(BaseModel):
     produced_quantity: Decimal = Decimal("0")
     remaining_quantity: Decimal = Decimal("0")
     started_at: datetime | None = None
+    # The product's Finished Goods position, read from Inventory (detail only).
+    fg_on_hand_quantity: Decimal | None = None
+    fg_free_quantity: Decimal | None = None
     executions: list[ExecutionOut] = []
     history: list[HistoryOut] = []
 
@@ -190,6 +194,9 @@ def _out(db: Session, order: ProductionOrder, with_history: bool = False) -> Pro
             )
         )
     produced = production_execution_service.produced_quantity(db, order.id)
+    fg_on_hand = fg_free = None
+    if with_history:
+        fg_on_hand, _, fg_free = fg_allocation_service.product_position(db, order.organisation_id, order.product_id)
     history = []
     if with_history:
         history = [
@@ -232,6 +239,8 @@ def _out(db: Session, order: ProductionOrder, with_history: bool = False) -> Pro
         produced_quantity=produced,
         remaining_quantity=max(order.quantity - produced, Decimal("0")),
         started_at=order.started_at,
+        fg_on_hand_quantity=fg_on_hand,
+        fg_free_quantity=fg_free,
         executions=[
             ExecutionOut(
                 id=e.id,
@@ -297,10 +306,15 @@ def list_production_orders(
     status_filter: str | None = Query(None, alias="status"),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
+    product_id: int | None = Query(None),
+    q: str | None = Query(None, max_length=30),
+    production_line_id: int | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ProductionOrderOut]:
-    production_scope.require_permission(db, current_user, production_scope.VIEW)
+    """Filters: status, scheduled date range, product, order number (`q`)
+    and production line (through the machine)."""
+    production_scope.require_view_or_execute(db, current_user)
     query = (
         db.query(ProductionOrder)
         .options(selectinload(ProductionOrder.components))
@@ -312,13 +326,21 @@ def list_production_orders(
         query = query.filter(ProductionOrder.scheduled_date >= date_from)
     if date_to is not None:
         query = query.filter(ProductionOrder.scheduled_date <= date_to)
+    if product_id is not None:
+        query = query.filter(ProductionOrder.product_id == product_id)
+    if q:
+        query = query.filter(ProductionOrder.order_number.ilike(f"%{q.strip()}%"))
+    if production_line_id is not None:
+        query = query.filter(
+            ProductionOrder.machine_id.in_(db.query(Machine.id).filter(Machine.production_line_id == production_line_id))
+        )
     orders = query.order_by(ProductionOrder.scheduled_date.desc(), ProductionOrder.id.desc()).limit(500)
     return [_out(db, o) for o in orders]
 
 
 @router.get("/{order_id}", response_model=ProductionOrderOut)
 def get_production_order(order_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> ProductionOrderOut:
-    production_scope.require_permission(db, current_user, production_scope.VIEW)
+    production_scope.require_view_or_execute(db, current_user)
     return _out(db, _get(db, current_user, order_id), with_history=True)
 
 

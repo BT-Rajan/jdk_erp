@@ -145,5 +145,12 @@ describe('Production Orders', () => {
     expect(screen.queryByRole('button', { name: 'Cancel Order' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Record Production' })).toBeInTheDocument()
   })
+
+  it('opens Record Production directly from the daily screen shortcut', async () => {
+    order = { ...ORDER, status: 'partially_completed', produced_quantity: '100', remaining_quantity: '300' }
+    renderAt('/production/orders/3?record=1')
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByLabelText(/Quantity produced/)).toBeInTheDocument()
+  })
 })
 

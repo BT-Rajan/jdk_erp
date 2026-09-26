@@ -29,6 +29,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { OrganisationSettingsPage } from '@/pages/OrganisationSettingsPage'
 import { ProductionPlanningPage } from '@/pages/ProductionPlanningPage'
 import { ProductionSchedulePage } from '@/pages/ProductionSchedulePage'
+import { ProductionTodayPage } from '@/pages/ProductionTodayPage'
 import { ProductionOrderDetailPage, ProductionOrdersPage } from '@/pages/ProductionOrdersPage'
 import { ProductionRequirementsPage } from '@/pages/ProductionRequirementsPage'
 import { ProductsPage } from '@/pages/ProductsPage'
@@ -107,6 +108,7 @@ export function App() {
           <Route path="/inventory/reconciliation" element={<InventoryReconciliationPage />} />
           <Route path="/inventory/finished-goods" element={<FinishedGoodsStockPositionPage />} />
           <Route path="/inventory/finished-goods-adjustments" element={<FinishedGoodsAdjustmentsPage />} />
+          <Route path="/production/today" element={<ProductionTodayPage />} />
           <Route path="/production/requirements" element={<ProductionRequirementsPage />} />
           <Route path="/production/planning" element={<ProductionPlanningPage />} />
           <Route path="/production/schedule" element={<ProductionSchedulePage />} />

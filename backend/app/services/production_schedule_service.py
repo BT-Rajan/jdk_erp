@@ -318,7 +318,7 @@ def entry_view(db: Session, entry: ProductionScheduleEntry) -> EntryView:
     )
 
 
-def _machine_day(db: Session, machine: Machine, entries: list[ProductionScheduleEntry]) -> MachineDay:
+def machine_day(db: Session, machine: Machine, entries: list[ProductionScheduleEntry]) -> MachineDay:
     capacity, note = daily_capacity(db, machine)
     load: Decimal | None = _ZERO
     for entry in entries:
@@ -372,7 +372,7 @@ def days(db: Session, organisation_id: int, start: date, end: date) -> list[DayV
         for machine in sorted(machines.values(), key=lambda m: m.id):
             todays = [e for e in entries if e.scheduled_date == day and e.machine_id == machine.id]
             if view.is_working_day or todays:
-                view.machines.append(_machine_day(db, machine, todays))
+                view.machines.append(machine_day(db, machine, todays))
         result.append(view)
         day += timedelta(days=1)
     return result
@@ -415,7 +415,7 @@ def plan_view(db: Session, plan: ProductionPlan) -> PlanScheduleView:
             )
             .all()
         )
-        day = _machine_day(db, db.get(Machine, key[1]), same_day)
+        day = machine_day(db, db.get(Machine, key[1]), same_day)
         if day.overload_quantity is not None and day.overload_quantity > _ZERO:
             overloaded.append(key[0])
     exceptions = []

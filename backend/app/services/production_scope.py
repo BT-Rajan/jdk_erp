@@ -35,3 +35,10 @@ def can_perform(db: Session, user: User, action: str) -> bool:
 def require_permission(db: Session, user: User, action: str) -> None:
     if not can_perform(db, user, action):
         raise AccessDeniedError("You do not have permission to do this.")
+
+
+def require_view_or_execute(db: Session, user: User) -> None:
+    """Production visibility screens (P7): planners (`view`) and the shop
+    floor (`execute`) both see them."""
+    if not (can_perform(db, user, VIEW) or can_perform(db, user, EXECUTE)):
+        raise AccessDeniedError("You do not have permission to do this.")

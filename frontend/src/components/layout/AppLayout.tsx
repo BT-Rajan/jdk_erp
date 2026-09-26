@@ -56,6 +56,7 @@ const NAV_ENTRIES: NavEntry[] = [
     label: 'Production',
     icon: <Factory size={16} />,
     items: [
+      { label: 'Today', to: '/production/today' },
       { label: 'Requirements', to: '/production/requirements' },
       { label: 'Planning', to: '/production/planning' },
       { label: 'Schedule', to: '/production/schedule' },

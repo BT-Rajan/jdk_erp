@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AccessDeniedState } from '@/components/ui/AccessDeniedState'
 import { Alert } from '@/components/ui/Alert'
 import { Badge } from '@/components/ui/Badge'
@@ -47,6 +47,8 @@ export interface ProductionOrder {
   }[]
   produced_quantity?: string
   remaining_quantity?: string
+  fg_on_hand_quantity?: string | null
+  fg_free_quantity?: string | null
   started_at?: string | null
   executions?: {
     id: number
@@ -106,16 +108,40 @@ export function ProductionOrdersPage() {
   const [status, setStatus] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [productId, setProductId] = useState('')
+  const [lineId, setLineId] = useState('')
+  const [search, setSearch] = useState('')
+  const [products, setProducts] = useState<LookupOption[]>([])
+  const [lines, setLines] = useState<LookupOption[]>([])
   const [loading, setLoading] = useState(true)
   const [denied, setDenied] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const unit = useUnitCodes()
 
   useEffect(() => {
+    Promise.all([
+      apiClient.get<PaginatedResponse<LookupOption>>('/api/products', { params: { page_size: 200 } }),
+      apiClient.get<PaginatedResponse<LookupOption>>('/api/production-lines', { params: { page_size: 200 } }),
+    ])
+      .then(([p, l]) => {
+        setProducts(p.data.data)
+        setLines(l.data.data)
+      })
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
     setLoading(true)
     apiClient
       .get<ProductionOrder[]>('/api/production-orders', {
-        params: { status: status || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined },
+        params: {
+          status: status || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          product_id: productId || undefined,
+          production_line_id: lineId || undefined,
+          q: search.trim() || undefined,
+        },
       })
       .then((res) => {
         setOrders(res.data)
@@ -126,14 +152,16 @@ export function ProductionOrdersPage() {
         else setError(err instanceof ApiError ? err.message : 'Failed to load production orders.')
       })
       .finally(() => setLoading(false))
-  }, [status, dateFrom, dateTo])
+  }, [status, dateFrom, dateTo, productId, lineId, search])
 
   if (denied) return <AccessDeniedState message="Production orders need the production view permission." />
 
   const columns: DataTableColumn<ProductionOrder>[] = [
     { key: 'number', label: 'Order', alwaysVisible: true, render: (o) => o.order_number },
     { key: 'product', label: 'Product', render: (o) => o.product_name ?? `Product ${o.product_id}` },
-    { key: 'quantity', label: 'Quantity', align: 'right', render: (o) => `${qty(o.quantity)} ${unit(o.unit_of_measure_id)}` },
+    { key: 'quantity', label: 'Planned', align: 'right', render: (o) => `${qty(o.quantity)} ${unit(o.unit_of_measure_id)}` },
+    { key: 'produced', label: 'Produced', align: 'right', hideBelow: 'sm', render: (o) => `${qty(o.produced_quantity ?? '0')} ${unit(o.unit_of_measure_id)}` },
+    { key: 'remaining', label: 'Remaining', align: 'right', hideBelow: 'sm', render: (o) => `${qty(o.remaining_quantity ?? o.quantity)} ${unit(o.unit_of_measure_id)}` },
     { key: 'date', label: 'Scheduled', render: (o) => formatDate(o.scheduled_date) },
     { key: 'line', label: 'Production Line', hideBelow: 'md', render: (o) => o.production_line_name ?? '—' },
     { key: 'source', label: 'Source', hideBelow: 'sm', render: source },
@@ -168,6 +196,23 @@ export function ProductionOrdersPage() {
           </SelectField>
           <DateField label="Scheduled from" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
           <DateField label="Scheduled to" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <SelectField label="Product" value={productId} onChange={(e) => setProductId(e.target.value)}>
+            <option value="">All</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </SelectField>
+          <SelectField label="Production line" value={lineId} onChange={(e) => setLineId(e.target.value)}>
+            <option value="">All</option>
+            {lines.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </SelectField>
+          <TextField label="Order number" value={search} onChange={(e) => setSearch(e.target.value)} />
         </FilterBar>
         <DataTable columns={columns} rows={orders} rowKey={(o) => o.id} loading={loading} emptyTitle="No production orders" emptyMessage="Create one from a schedule entry." />
       </Card>
@@ -185,6 +230,7 @@ function newReference(): string {
 export function ProductionOrderDetailPage() {
   const { orderId } = useParams()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [order, setOrder] = useState<ProductionOrder | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -212,6 +258,23 @@ export function ProductionOrderDetailPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  function openRecord() {
+    setQuantity('')
+    setNotes('')
+    setExecutedAt('')
+    setReference(newReference())
+    setDialog('record')
+  }
+
+  // Record Production shortcut (P7): /production/orders/:id?record=1 opens
+  // P6's Record Production for this order straight away.
+  useEffect(() => {
+    if (order && searchParams.get('record') === '1') {
+      setSearchParams({}, { replace: true })
+      if (EXECUTABLE.includes(order.status)) openRecord()
+    }
+  }, [order, searchParams, setSearchParams])
 
   async function act(action: () => Promise<unknown>) {
     setBusy(true)
@@ -263,17 +326,7 @@ export function ProductionOrderDetailPage() {
               </Button>
             )}
             {EXECUTABLE.includes(order.status) && (
-              <Button
-                onClick={() => {
-                  setQuantity('')
-                  setNotes('')
-                  setExecutedAt('')
-                  setReference(newReference())
-                  setDialog('record')
-                }}
-              >
-                Record Production
-              </Button>
+              <Button onClick={openRecord}>Record Production</Button>
             )}
             {['draft', 'issued', 'in_progress'].includes(order.status) && Number(order.produced_quantity ?? 0) === 0 && (
               <Button
@@ -306,6 +359,10 @@ export function ProductionOrderDetailPage() {
         <KeyValue label="Production Plan" value={`#${order.production_plan_id}`} />
         <KeyValue label="Schedule Entry" value={`#${order.production_schedule_entry_id}`} />
         <KeyValue label="Issued" value={order.issued_at ? formatDateTime(order.issued_at) : '—'} />
+        <KeyValue
+          label="Finished Goods (on hand / free)"
+          value={order.fg_on_hand_quantity == null ? '—' : `${qty(order.fg_on_hand_quantity)} / ${qty(order.fg_free_quantity ?? '0')} ${u}`}
+        />
       </Card>
 
       <Card className="space-y-3 p-6">
