@@ -17,6 +17,7 @@ import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { formatDate, formatNumber } from '@/lib/format'
 import type { LookupOption, PaginatedResponse } from './rfqShared'
+import { PlanScheduleDialog } from './ProductionSchedulePage'
 
 /** Mirror backend/app/api/production_plans.py. Every figure is the
  * server's; this page decides nothing. */
@@ -143,6 +144,7 @@ export function ProductionPlanningPage() {
   const [requiredBy, setRequiredBy] = useState('')
   const [notes, setNotes] = useState('')
   const [reason, setReason] = useState('')
+  const [schedulePlanId, setSchedulePlanId] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== ''))
@@ -341,6 +343,9 @@ export function ProductionPlanningPage() {
                 </Button>
               </>
             )}
+            {p.status === 'planned' && (
+              <Button variant="secondary" onClick={() => setSchedulePlanId(p.id)}>Schedule</Button>
+            )}
             <Button variant="danger" onClick={() => open({ kind: 'cancel', plan: p })}>Cancel</Button>
           </span>
         ),
@@ -425,6 +430,7 @@ export function ProductionPlanningPage() {
         <DataTable columns={planColumns} rows={plans} rowKey={(p) => p.id} loading={loading} emptyTitle="No plans yet" emptyMessage="Plan from the demand above, or add independent production." />
       </Card>
 
+      <PlanScheduleDialog planId={schedulePlanId} onClose={() => setSchedulePlanId(null)} />
       <Modal
         open={dialog !== null}
         title={dialogTitle}

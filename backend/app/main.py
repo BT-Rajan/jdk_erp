@@ -15,6 +15,7 @@ from app.api.delivery_instructions import router as delivery_instructions_router
 from app.api.production_requirements import router as production_requirements_router
 from app.api.fg_allocations import router as fg_allocations_router
 from app.api.production_plans import router as production_plans_router
+from app.api.production_schedule import router as production_schedule_router
 from app.api.files import router as files_router
 from app.api.jobs import router as jobs_router
 from app.api.notifications import router as notifications_router
@@ -89,6 +90,7 @@ app.include_router(delivery_instructions_router)
 app.include_router(production_requirements_router)
 app.include_router(fg_allocations_router)
 app.include_router(production_plans_router)
+app.include_router(production_schedule_router)
 app.include_router(files_router)
 app.include_router(jobs_router)
 app.include_router(notifications_router)

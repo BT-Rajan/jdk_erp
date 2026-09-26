@@ -28,11 +28,19 @@ from app.models.audit_event import (
     PRODUCTION_PLAN_CREATED,
     PRODUCTION_PLAN_PLANNED,
     PRODUCTION_PLAN_UPDATED,
+    PRODUCTION_SCHEDULE_CANCELLED,
 )
 from app.models.product import Product
 from app.models.production_plan import CUSTOMER_DEMAND, ProductionPlan
 from app.models.user import User
-from app.services import audit_service, delivery_instruction_service, production_planning_service, production_scope
+from app.api import production_schedule as production_schedule_api
+from app.services import (
+    audit_service,
+    delivery_instruction_service,
+    production_planning_service,
+    production_schedule_service,
+    production_scope,
+)
 
 router = APIRouter(tags=["production-planning"])
 
@@ -312,4 +320,9 @@ def cancel_production_plan(
     plan = _get(db, current_user, plan_id)
     previous = production_planning_service.cancel_plan(db, plan, payload.reason)
     _audit(db, request, current_user, PRODUCTION_PLAN_CANCELLED, plan, f"{previous} -> cancelled; reason: {payload.reason.strip()}")
+    # A cancelled plan leaves no executable schedule behind (P4).
+    for entry in production_schedule_service.cancel_for_plan(db, plan, payload.reason.strip()):
+        production_schedule_api.audit_entry(
+            db, request, current_user, PRODUCTION_SCHEDULE_CANCELLED, entry, f"scheduled -> cancelled; plan {plan.id} cancelled"
+        )
     return _reload(db, current_user, plan_id)

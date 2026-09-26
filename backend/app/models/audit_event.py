@@ -132,6 +132,10 @@ FG_ALLOCATION_RELEASED = "fg_allocation_released"
 FG_ALLOCATION_CONSUMED = "fg_allocation_consumed"
 # Production Plans (P3), module "production".
 PRODUCTION_PLAN_CREATED = "production_plan_created"
+# Production Schedule (P4), module "production".
+PRODUCTION_SCHEDULED = "production_scheduled"
+PRODUCTION_RESCHEDULED = "production_rescheduled"
+PRODUCTION_SCHEDULE_CANCELLED = "production_schedule_cancelled"
 PRODUCTION_PLAN_UPDATED = "production_plan_updated"
 PRODUCTION_PLAN_PLANNED = "production_plan_planned"
 PRODUCTION_PLAN_CANCELLED = "production_plan_cancelled"

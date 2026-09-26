@@ -241,9 +241,9 @@ def test_customer_and_independent_plans_never_touch_inventory_or_orders(client, 
     refused = client.post(f"/api/production-plans/{no_bom['id']}/plan", headers=_headers(client, "planner"))
     assert refused.status_code == 409 and "BOM required" in refused.json()["error"]["message"]
 
-    # Nothing moved; no Production Order or schedule exists; the order and demand are untouched.
+    # Nothing moved; no Production Order exists; the order and demand are untouched.
     assert _inventory(db_session) == before
-    assert not any("production_order" in t or "schedule" in t for t in Base.metadata.tables)
+    assert not any("production_order" in t for t in Base.metadata.tables)
     db_session.expire_all()
     assert (Decimal(db_session.get(ProductionRequirement, requirement_id).quantity), db_session.get(ProductionRequirement, requirement_id).status) == (400, "open")
     assert client.get(f"/api/sales-orders/{order['id']}", headers=_headers(client, "boss")).json()["status"] == "handed_off"

@@ -29,6 +29,8 @@ interface Organisation {
   currency: string
   timezone: string
   production_staff_available_per_day?: number | null
+  /** Decimal string, e.g. "8.00"; null = not set. */
+  production_hours_per_day?: string | null
   /** Decimal string from the API, e.g. "2.50"; default "0.00". */
   delivery_scrap_allowance_percent?: string
   is_active: boolean
@@ -54,6 +56,12 @@ const schema = z.object({
   production_staff_available_per_day: z
     .string()
     .refine((value) => value === '' || /^\d+$/.test(value), 'Enter a whole number of staff'),
+  production_hours_per_day: z
+    .string()
+    .refine(
+      (value) => value === '' || (/^\d{1,2}(\.\d{1,2})?$/.test(value) && Number(value) > 0 && Number(value) <= 24),
+      'Enter hours from 0.01 to 24',
+    ),
   // Mirrors the server rule: 0-999.99, at most 2 decimal places, never negative.
   delivery_scrap_allowance_percent: z
     .string()
@@ -74,6 +82,7 @@ function toFormValues(org: Organisation): FormValues {
     timezone: org.timezone,
     production_staff_available_per_day:
       org.production_staff_available_per_day == null ? '' : String(org.production_staff_available_per_day),
+    production_hours_per_day: org.production_hours_per_day == null ? '' : String(Number(org.production_hours_per_day)),
     delivery_scrap_allowance_percent: org.delivery_scrap_allowance_percent ?? '0',
   }
 }
@@ -151,6 +160,7 @@ export function OrganisationSettingsPage() {
       currency: values.currency.toUpperCase(),
       production_staff_available_per_day:
         values.production_staff_available_per_day === '' ? null : Number(values.production_staff_available_per_day),
+      production_hours_per_day: values.production_hours_per_day === '' ? null : values.production_hours_per_day,
       // Sent as a string so the exact decimal reaches the server.
       delivery_scrap_allowance_percent: values.delivery_scrap_allowance_percent,
     }
@@ -241,6 +251,13 @@ export function OrganisationSettingsPage() {
             hint="Used by the 0–2 working-day feasibility manpower check. Leave blank if not set."
             {...register('production_staff_available_per_day')}
             error={errors.production_staff_available_per_day?.message}
+          />
+          <TextField
+            label="Production hours per working day"
+            hint="Turns the machine's capacity (per N hours) into a daily capacity for the production schedule. Leave blank if not set."
+            inputMode="decimal"
+            {...register('production_hours_per_day')}
+            error={errors.production_hours_per_day?.message}
           />
           <TextField
             label="Delivery scrap allowance (%)"

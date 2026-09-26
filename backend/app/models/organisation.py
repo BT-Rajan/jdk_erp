@@ -39,6 +39,10 @@ class Organisation(Base, TimestampMixin):
     # against (app/services/feasibility_service.py). NULL = not set, which
     # that check treats as a failure needing an Admin decision.
     production_staff_available_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Production hours in a working day (Admin-set, P4 scheduling): turns a
+    # machine's "capacity per N hours" into a daily capacity. NULL = not
+    # set -- the schedule then shows capacity as not configured.
+    production_hours_per_day: Mapped[Decimal | None] = mapped_column(Numeric(4, 2), nullable=True)
     # Delivery Scrap Allowance % (Admin-set): the delivery tolerance a
     # future Delivery Instruction copies when it is created, so a later
     # change never alters existing deliveries. A setting only -- it never

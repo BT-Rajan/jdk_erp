@@ -58,6 +58,7 @@ const NAV_ENTRIES: NavEntry[] = [
     items: [
       { label: 'Requirements', to: '/production/requirements' },
       { label: 'Planning', to: '/production/planning' },
+      { label: 'Schedule', to: '/production/schedule' },
     ],
   },
   {
