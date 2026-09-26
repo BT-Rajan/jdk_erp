@@ -119,3 +119,36 @@ def test_preview_reserves_nothing_and_issued_numbers_are_never_reused(db_session
     db_session.refresh(first)
     assert first.number == "2680001"
     assert _insert(db_session, organisation.id, today).number == "2680002"
+
+
+def test_a_retried_collision_keeps_earlier_work_in_the_same_transaction(db_session, organisation):
+    """The retry runs in a SAVEPOINT: losing the number race must undo only
+    the colliding insert, never what the caller already flushed."""
+    today = date(2026, 5, 1)
+    db_session.add(_NumberedProbe(organisation_id=organisation.id, number="TAKEN"))
+    db_session.commit()
+    db_session.add(_NumberedProbe(organisation_id=organisation.id, number="EARLIER-1"))
+    db_session.flush()  # earlier work in the same, still-open transaction
+
+    attempts = []
+
+    def build(number):
+        # The first attempt collides, as if another request had just
+        # committed the counted number.
+        attempts.append(number)
+        return _NumberedProbe(organisation_id=organisation.id, number="TAKEN" if len(attempts) == 1 else number)
+
+    row = document_numbering.insert_with_yearly_number(
+        db_session,
+        build=build,
+        number_column=_NumberedProbe.number,
+        organisation_column=_NumberedProbe.organisation_id,
+        organisation_id=organisation.id,
+        type_digit=TEST_ONLY_DIGIT,
+        today=today,
+    )
+    db_session.commit()
+
+    assert len(attempts) == 2 and row.number == attempts[1]
+    numbers = {n for (n,) in db_session.query(_NumberedProbe.number).filter(_NumberedProbe.organisation_id == organisation.id)}
+    assert numbers == {"TAKEN", "EARLIER-1", row.number}

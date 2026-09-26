@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import BusinessRuleError, ConflictError, ValidationError
+from app.core.database import savepoint
 from app.models.inventory import PURCHASE_ORDER_RECEIPT_LINE_REFERENCE
 from app.models.warehouse import Warehouse
 from app.models.purchase_order import (
@@ -199,13 +200,16 @@ def create_purchase_order_with_lines(
             notes=notes,
             created_by_user_id=created_by_user_id,
         )
-        db.add(purchase_order)
         try:
-            db.flush()
+            # A SAVEPOINT, not db.rollback(): a number collision undoes only
+            # this insert, never other work already flushed in the same
+            # transaction (same pattern as inventory_service._increment_inventory).
+            with savepoint(db):
+                db.add(purchase_order)
+                db.flush()
             last_error = None
             break
         except IntegrityError as exc:
-            db.rollback()
             last_error = exc
     if last_error is not None or purchase_order is None:
         raise ConflictError("Could not generate a unique purchase order number. Please try again.") from last_error
@@ -568,13 +572,16 @@ def create_receipt(
             notes=notes,
             created_by_user_id=created_by_user_id,
         )
-        db.add(receipt)
         try:
-            db.flush()
+            # A SAVEPOINT, not db.rollback(): a number collision undoes only
+            # this insert, never other work already flushed in the same
+            # transaction (same pattern as inventory_service._increment_inventory).
+            with savepoint(db):
+                db.add(receipt)
+                db.flush()
             last_error = None
             break
         except IntegrityError as exc:
-            db.rollback()
             last_error = exc
     if last_error is not None or receipt is None:
         raise ConflictError("Could not generate a unique receipt number. Please try again.") from last_error
@@ -822,12 +829,15 @@ def record_payment(
             is_final=is_final,
             created_by_user_id=created_by_user_id,
         )
-        db.add(payment)
         try:
-            db.flush()
+            # A SAVEPOINT, not db.rollback(): a number collision undoes only
+            # this insert, never other work already flushed in the same
+            # transaction (same pattern as inventory_service._increment_inventory).
+            with savepoint(db):
+                db.add(payment)
+                db.flush()
             return payment
         except IntegrityError as exc:
-            db.rollback()
             last_error = exc
     raise ConflictError("Could not generate a unique payment number. Please try again.") from last_error
 

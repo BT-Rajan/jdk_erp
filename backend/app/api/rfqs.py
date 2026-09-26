@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core.database import get_db
+from app.core.database import get_db, savepoint
 from app.core.entity_access import register_entity_access_check
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
 from app.core.list_query import apply_sort, paginate
@@ -633,13 +633,16 @@ def create_rfq(
             required_delivery_date=payload.required_delivery_date,
             requested_by_user_id=current_user.id,
         )
-        db.add(rfq)
         try:
-            db.flush()
+            # A SAVEPOINT, not db.rollback(): a number collision undoes only
+            # this insert, never other work already flushed in the same
+            # transaction (same pattern as inventory_service._increment_inventory).
+            with savepoint(db):
+                db.add(rfq)
+                db.flush()
             last_error = None
             break
         except IntegrityError as exc:
-            db.rollback()
             last_error = exc
     if last_error is not None or rfq is None:
         raise ConflictError("Could not generate a unique RFQ number. Please try again.") from last_error
@@ -993,13 +996,16 @@ def raise_new_rfq(
             notes=rfq.notes,
             requested_by_user_id=current_user.id,
         )
-        db.add(new_rfq)
         try:
-            db.flush()
+            # A SAVEPOINT, not db.rollback(): a number collision undoes only
+            # this insert, never other work already flushed in the same
+            # transaction (same pattern as inventory_service._increment_inventory).
+            with savepoint(db):
+                db.add(new_rfq)
+                db.flush()
             last_error = None
             break
         except IntegrityError as exc:
-            db.rollback()
             last_error = exc
     if last_error is not None or new_rfq is None:
         raise ConflictError("Could not generate a unique RFQ number. Please try again.") from last_error

@@ -273,3 +273,42 @@ def test_cross_organisation_purchase_order_payment_404s(
 
     response = _record_payment(client, other_headers, po["id"], "100")
     assert response.status_code == 404
+
+
+def test_payment_number_collision_retries_without_losing_earlier_work(
+    client, admin_headers, acme_supplier, warehouse_1, cement_raw_material, db_session, monkeypatch
+):
+    """A payment-number collision is retried inside a SAVEPOINT, so work
+    already flushed in the same transaction survives the retry."""
+    from app.models.purchase_order import PurchaseOrder, PurchaseOrderLine, PurchaseOrderPayment
+
+    po = _issued_po_with_line(client, admin_headers, acme_supplier, warehouse_1, cement_raw_material)
+    taken = _record_payment(client, admin_headers, po["id"], "100").json()["payments"][0]["payment_number"]
+
+    purchase_order = db_session.get(PurchaseOrder, po["id"])
+    purchase_order.notes = "flushed before the payment"
+    db_session.flush()  # earlier work in the same transaction
+
+    real = purchase_order_service.generate_payment_number
+    numbers = iter([taken])
+    monkeypatch.setattr(
+        purchase_order_service, "generate_payment_number", lambda db, org_id, today=None: next(numbers, None) or real(db, org_id, today)
+    )
+    payment = purchase_order_service.record_payment(
+        db_session,
+        purchase_order=purchase_order,
+        current_lines=db_session.query(PurchaseOrderLine).filter(PurchaseOrderLine.purchase_order_id == po["id"]).all(),
+        existing_payments=db_session.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.purchase_order_id == po["id"]).all(),
+        payment_date=date(2026, 1, 16),
+        amount=Decimal("50"),
+        payment_method="Cash",
+        reference_number=None,
+        notes=None,
+        created_by_user_id=None,
+    )
+    db_session.commit()
+
+    assert payment.payment_number != taken
+    db_session.expire_all()
+    assert db_session.get(PurchaseOrder, po["id"]).notes == "flushed before the payment"
+    assert db_session.query(PurchaseOrderPayment).filter(PurchaseOrderPayment.purchase_order_id == po["id"]).count() == 2

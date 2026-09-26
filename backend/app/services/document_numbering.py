@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError
 from app.core.timezone import now_jdk
+from app.core.database import savepoint
 
 MAX_YEARLY_SEQUENCE = 9999
 MAX_INSERT_ATTEMPTS = 5
@@ -102,8 +103,8 @@ def insert_with_yearly_number(
     """Builds the row with `build(number)`, adds and flushes it, and
     retries with a newly counted number if the unique constraint says
     that number was just taken. Returns the flushed row; the caller
-    commits. Same flush/rollback/retry shape the existing RFQ/PO create
-    paths use, so it must be the first write in its transaction."""
+    commits. Each attempt runs in its own SAVEPOINT, so a retry never
+    discards other work already done in the caller's transaction."""
     last_error: IntegrityError | None = None
     for _ in range(MAX_INSERT_ATTEMPTS):
         number = next_yearly_number(
@@ -116,11 +117,13 @@ def insert_with_yearly_number(
             limit_message=f"This organisation has reached the maximum number of {label}s for this year.",
         )
         row = build(number)
-        db.add(row)
         try:
-            db.flush()
+            # A SAVEPOINT: a collision undoes only this insert, never earlier
+            # work in the caller's transaction.
+            with savepoint(db):
+                db.add(row)
+                db.flush()
             return row
         except IntegrityError as exc:
-            db.rollback()
             last_error = exc
     raise ConflictError(f"Could not generate a unique {label} number. Please try again.") from last_error
