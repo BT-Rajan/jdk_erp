@@ -114,6 +114,7 @@ QUOTATION_CREATED = "quotation_created"
 QUOTATION_SAME_DAY_OVERRIDE_DECIDED = "same_day_override_decided"
 FEASIBILITY_RECORDED = "feasibility_recorded"
 FEASIBILITY_DECIDED = "feasibility_decided"
+QUOTATION_READINESS_ASSESSED = "readiness_assessed"
 
 SECURITY_MODULE = "security"
 COMMUNICATION_MODULE = "communication"

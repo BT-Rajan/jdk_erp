@@ -180,3 +180,19 @@ class FeasibilityDecisionRequest(BaseModel):
         if not value:
             raise ValueError("A reason is required.")
         return value
+
+
+class QuotationReadinessOut(BaseModel):
+    """Readiness is a decision input, not acceptance (Sales S9). `status`
+    is the most serious condition; `conditions` and `reason_codes` list
+    everything that currently applies."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str
+    delivery_window: str | None
+    conditions: list[str]
+    reason_codes: list[str]
+    feasibility_check_id: int | None
+    feasibility_state: str | None
+    commercial_approval_required: bool

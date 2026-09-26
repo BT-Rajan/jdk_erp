@@ -50,9 +50,10 @@ def _requested(quotation: Quotation) -> list[RequestedQuantity]:
     return [RequestedQuantity(line.product_id, line.quantity, line.unit_of_measure_id) for line in quotation.lines]
 
 
-def _inputs(requested_delivery_date, lines) -> tuple:
+def _inputs(customer_id, requested_delivery_date, lines) -> tuple:
     """The feasibility-relevant inputs, in a comparable form."""
     return (
+        customer_id,
         requested_delivery_date,
         sorted((line.product_id, _quantity_key(line.quantity), line.unit_of_measure_id) for line in lines),
     )
@@ -141,14 +142,14 @@ def latest_for_quotation(db: Session, quotation_id: int) -> FeasibilityCheck | N
 
 def is_current(db: Session, record: FeasibilityCheck, quotation: Quotation) -> bool:
     """Authoritative only while it is the quotation's latest record and the
-    quotation's feasibility inputs (requested date, products, quantities,
-    units) still match what was calculated. Anything else needs a fresh
+    quotation's feasibility inputs (customer, requested date, products,
+    quantities, units) still match what was calculated. Anything else needs a fresh
     check -- an old result is never silently reused."""
     latest = latest_for_quotation(db, quotation.id)
     if latest is None or latest.id != record.id:
         return False
-    return _inputs(record.requested_delivery_date, record.lines) == _inputs(
-        quotation.requested_delivery_date, quotation.lines
+    return _inputs(record.customer_id, record.requested_delivery_date, record.lines) == _inputs(
+        quotation.customer_id, quotation.requested_delivery_date, quotation.lines
     )
 
 

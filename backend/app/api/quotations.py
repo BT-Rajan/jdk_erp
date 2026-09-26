@@ -19,6 +19,7 @@ from app.models.audit_event import (
     FEASIBILITY_DECIDED,
     FEASIBILITY_RECORDED,
     QUOTATION_CREATED,
+    QUOTATION_READINESS_ASSESSED,
     QUOTATION_SAME_DAY_OVERRIDE_DECIDED,
     SALES_MODULE,
 )
@@ -34,6 +35,7 @@ from app.schemas.quotation import (
     QuotationCreateRequest,
     QuotationLineOut,
     QuotationOut,
+    QuotationReadinessOut,
     SameDayGateOut,
     SameDayOverrideRequest,
 )
@@ -42,6 +44,7 @@ from app.services import (
     customer_scope,
     feasibility_record_service,
     feasibility_service,
+    quotation_readiness_service,
     quotation_service,
     same_day_fg_service,
 )
@@ -341,3 +344,41 @@ def decide_feasibility_check(
     )
     db.commit()
     return _check_out(db, record, quotation)
+
+
+# --- Readiness gate (Sales S9) ----------------------------------------------
+
+
+@router.post("/{quotation_id}/readiness", response_model=QuotationReadinessOut)
+def assess_readiness(
+    quotation_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> quotation_readiness_service.Readiness:
+    """Assesses whether the quotation is commercially and operationally
+    ready for the next Sales decision, from current server data, and
+    audits the assessment. Not acceptance: the quotation, stock and
+    everything else are left unchanged; anything that later needs
+    readiness must call this, never trust a client flag."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    readiness = quotation_readiness_service.assess(db, quotation)
+    audit_service.log_event(
+        db,
+        action=QUOTATION_READINESS_ASSESSED,
+        module=SALES_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type="quotation",
+        entity_id=quotation.id,
+        result="success",
+        details=(
+            f"quotation: {quotation.quotation_number}, requested_delivery_date: {quotation.requested_delivery_date}, "
+            f"window: {readiness.delivery_window}, feasibility_check: {readiness.feasibility_check_id} "
+            f"({readiness.feasibility_state}), commercial_approval_required: {readiness.commercial_approval_required}, "
+            f"readiness: {readiness.status}, reasons: {readiness.reason_codes}"
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    return readiness
