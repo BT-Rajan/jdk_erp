@@ -4,6 +4,7 @@ from app.models.category import Category
 from app.models.document_template import DocumentTemplate
 from app.models.customer import Customer
 from app.models.email_account import EmailAccount
+from app.models.feasibility_check import FeasibilityCheck, FeasibilityCheckLine
 from app.models.file import FileRecord
 from app.models.finished_goods_inventory import FinishedGoodsAdjustment, FinishedGoodsInventory, FinishedGoodsMovement
 from app.models.inventory import InventoryAdjustment, OpeningStockEntry, RawMaterialInventory, StockMovement
@@ -54,6 +55,8 @@ __all__ = [
     "RefreshToken",
     "AuditEvent",
     "EmailAccount",
+    "FeasibilityCheck",
+    "FeasibilityCheckLine",
     "FileRecord",
     "Job",
     "Notification",

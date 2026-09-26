@@ -28,6 +28,7 @@ interface Organisation {
   email_domain: string | null
   currency: string
   timezone: string
+  production_staff_available_per_day?: number | null
   is_active: boolean
 }
 
@@ -48,6 +49,9 @@ const schema = z.object({
     .length(3, 'Currency must be a 3-letter ISO code, e.g. KWD')
     .regex(/^[A-Za-z]+$/, 'Currency must be letters only'),
   timezone: z.string().min(1, 'Timezone is required'),
+  production_staff_available_per_day: z
+    .string()
+    .refine((value) => value === '' || /^\d+$/.test(value), 'Enter a whole number of staff'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -62,6 +66,8 @@ function toFormValues(org: Organisation): FormValues {
     email_domain: org.email_domain ?? '',
     currency: org.currency,
     timezone: org.timezone,
+    production_staff_available_per_day:
+      org.production_staff_available_per_day == null ? '' : String(org.production_staff_available_per_day),
   }
 }
 
@@ -136,6 +142,8 @@ export function OrganisationSettingsPage() {
       address: values.address || null,
       email_domain: values.email_domain || null,
       currency: values.currency.toUpperCase(),
+      production_staff_available_per_day:
+        values.production_staff_available_per_day === '' ? null : Number(values.production_staff_available_per_day),
     }
     try {
       const { data } = await apiClient.patch<Organisation>('/api/organisations/me', payload)
@@ -218,6 +226,12 @@ export function OrganisationSettingsPage() {
             required
             {...register('timezone')}
             error={errors.timezone?.message}
+          />
+          <TextField
+            label="Production staff available per day"
+            hint="Used by the 0–2 working-day feasibility manpower check. Leave blank if not set."
+            {...register('production_staff_available_per_day')}
+            error={errors.production_staff_available_per_day?.message}
           />
 
           <div className="flex justify-end pt-2">

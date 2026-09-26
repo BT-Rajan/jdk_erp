@@ -8,9 +8,10 @@ reservation, no stock movement, no snapshot change.
 
 Decisions:
 - every requested product has enough FG on hand -> servable
-- any product is short -> admin_override_required, until Admin decides:
-  approved -> servable, rejected -> not_servable. Admin may change that
-  decision; each one is audited by the API layer.
+- any product is short -> admin_override_required, until Admin decides.
+  The only Admin decision is the one on the quotation's current S8
+  feasibility record (feasibility_record_service): approved -> servable,
+  rejected -> not_servable. This service stores no decision of its own.
 
 The gate applies only when the quotation's requested delivery date
 classifies as same_day right now (working_calendar_service); any other
@@ -24,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BusinessRuleError
 from app.models.product import Product
-from app.models.quotation import OVERRIDE_APPROVED, OVERRIDE_REJECTED, Quotation
+from app.models.quotation import Quotation
 from app.services import finished_goods_inventory_service, working_calendar_service
 
 SERVABLE = "servable"
@@ -112,8 +113,14 @@ def evaluate_quotation(db: Session, quotation: Quotation, now: datetime | None =
     )
     decision = availability.decision
     if decision == ADMIN_OVERRIDE_REQUIRED:
-        if quotation.same_day_override_decision == OVERRIDE_APPROVED:
-            decision = SERVABLE
-        elif quotation.same_day_override_decision == OVERRIDE_REJECTED:
-            decision = NOT_SERVABLE
+        # Local import: feasibility_record_service imports this module.
+        from app.models.feasibility_check import APPROVED, REJECTED
+        from app.services import feasibility_record_service
+
+        record = feasibility_record_service.latest_for_quotation(db, quotation.id)
+        if record is not None and feasibility_record_service.is_current(db, record, quotation, now):
+            if record.state == APPROVED:
+                decision = SERVABLE
+            elif record.state == REJECTED:
+                decision = NOT_SERVABLE
     return SameDayGate(delivery_window=window, applies=True, decision=decision, shortages=availability.shortages)

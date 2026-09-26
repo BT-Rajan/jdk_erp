@@ -388,6 +388,21 @@ class BalanceReconciliation:
         return self.quantity_on_hand - self.ledger_sum
 
 
+def get_organisation_quantity_on_hand(db: Session, *, organisation_id: int, raw_material_id: int) -> Decimal:
+    """Read-only: the raw material's on-hand quantity across every
+    warehouse of the organisation, summed from the same snapshot
+    get_quantity_on_hand reads. In the material's own stock unit."""
+    total = (
+        db.query(func.coalesce(func.sum(RawMaterialInventory.quantity_on_hand), 0))
+        .filter(
+            RawMaterialInventory.organisation_id == organisation_id,
+            RawMaterialInventory.raw_material_id == raw_material_id,
+        )
+        .scalar()
+    )
+    return Decimal(str(total))
+
+
 def get_ledger_sum(db: Session, *, raw_material_id: int, warehouse_id: int) -> Decimal:
     """The balance as the ledger itself implies it -- SUM(quantity) over
     every StockMovement for this pair. Only ever used for reconciliation

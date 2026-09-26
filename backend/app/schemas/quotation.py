@@ -39,6 +39,16 @@ class QuotationCreateRequest(BaseModel):
     requested_delivery_date: date | None = None
 
 
+class QuotationUpdateRequest(BaseModel):
+    """Controlled edit (Sales S10). Only the fields sent change; `lines`
+    replaces every line. Number, date, status, currency, owner, amounts,
+    readiness and approvals are never accepted from the client."""
+
+    customer_id: int | None = None
+    requested_delivery_date: date | None = None
+    lines: list[QuotationLineCreateRequest] | None = Field(default=None, min_length=1, max_length=200)
+
+
 class QuotationLineOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,13 +78,26 @@ class QuotationOut(BaseModel):
     total_amount: Decimal
     price_approval_required: bool
     requested_delivery_date: date | None
-    same_day_override_decision: str | None
-    same_day_override_reason: str | None
-    same_day_override_by_user_id: int | None
-    same_day_override_at: datetime | None
+    price_decision: str | None
+    price_decision_reason: str | None
+    price_decision_by_user_id: int | None
+    price_decision_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    customer_name: str | None = None
+    created_by_name: str | None = None
     lines: list[QuotationLineOut]
+
+
+class QuotationListRowOut(QuotationOut):
+    """A list row with the server's current readiness, so a list never
+    derives it in the browser."""
+
+    delivery_window: str | None = None
+    readiness_status: str | None = None
+    # Server's answer to "may this caller edit it" (owner of the customer,
+    # draft) -- the UI shows Edit from this, never decides it itself.
+    can_edit: bool = False
 
 
 class SameDayShortageOut(BaseModel):
@@ -97,7 +120,66 @@ class SameDayGateOut(BaseModel):
     shortages: list[SameDayShortageOut]
 
 
-class SameDayOverrideRequest(BaseModel):
+class FeasibilityStageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    stage: str
+    status: str
+    reason_codes: list[str]
+    details: list[str]
+
+
+class FeasibilityCalculationOut(BaseModel):
+    """`applies` is False unless the requested delivery date classifies
+    as within_2_working_days right now."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    delivery_window: str | None
+    applies: bool
+    decision: str | None
+    failed_stage: str | None
+    reason_codes: list[str]
+    working_days_available: int | None
+    stages: list[FeasibilityStageOut]
+
+
+class FeasibilityCheckLineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    product_id: int
+    quantity: Decimal
+    unit_of_measure_id: int
+
+
+class FeasibilityCheckOut(BaseModel):
+    """A stored feasibility result (Sales S8). `result`, `failed_stage`,
+    `reason_codes` and `stages` are the calculation as it was made;
+    `state` and the decision fields carry the lifecycle. `is_current` is
+    False once a newer check exists or the quotation's inputs changed."""
+
+    id: int
+    quotation_id: int
+    customer_id: int
+    requested_delivery_date: date
+    delivery_window: str
+    calculation_basis: str
+    calculated_at: datetime
+    result: str
+    failed_stage: str | None
+    reason_codes: list[str]
+    stages: list[dict]
+    state: str
+    created_by_user_id: int | None
+    created_at: datetime
+    decision_reason: str | None
+    decided_by_user_id: int | None
+    decided_at: datetime | None
+    lines: list[FeasibilityCheckLineOut]
+    is_current: bool
+
+
+class FeasibilityDecisionRequest(BaseModel):
     decision: Literal["approved", "rejected"]
     reason: str = Field(min_length=1, max_length=2000)
 
@@ -108,3 +190,19 @@ class SameDayOverrideRequest(BaseModel):
         if not value:
             raise ValueError("A reason is required.")
         return value
+
+
+class QuotationReadinessOut(BaseModel):
+    """Readiness is a decision input, not acceptance (Sales S9). `status`
+    is the most serious condition; `conditions` and `reason_codes` list
+    everything that currently applies."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str
+    delivery_window: str | None
+    conditions: list[str]
+    reason_codes: list[str]
+    feasibility_check_id: int | None
+    feasibility_state: str | None
+    commercial_approval_required: bool

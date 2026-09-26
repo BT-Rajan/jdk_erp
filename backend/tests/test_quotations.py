@@ -168,7 +168,7 @@ def test_numbers_are_sequential_unique_and_have_no_edit_path(client, db_session,
 
     assert int(second["quotation_number"]) == int(first["quotation_number"]) + 1
     assert first["quotation_number"][2] == "4"
-    # This pass exposes no way to change a quotation, number included.
-    assert client.patch(f"/api/quotations/{first['id']}", json={"quotation_number": "2640099"}, headers=headers).status_code == 405
+    # The edit path (Sales S10) never accepts a number from the client.
+    assert client.patch(f"/api/quotations/{first['id']}", json={"quotation_number": "2640099"}, headers=headers).status_code == 200
     db_session.expire_all()
     assert db_session.get(Quotation, first["id"]).quotation_number == first["quotation_number"]

@@ -171,6 +171,7 @@ def create_product(
             selling_price=payload.selling_price,
             min_selling_price=payload.min_selling_price,
             max_selling_price=payload.max_selling_price,
+            production_staff_required=payload.production_staff_required,
             manufacturing_lead_time_days=payload.manufacturing_lead_time_days,
             customer_lead_time_days=payload.customer_lead_time_days,
         )

@@ -1,6 +1,6 @@
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.validation import normalize_email
 
@@ -17,6 +17,7 @@ class OrganisationOut(BaseModel):
     email_domain: str | None
     currency: str
     timezone: str
+    production_staff_available_per_day: int | None = None
     is_active: bool
 
 
@@ -37,6 +38,7 @@ class OrganisationUpdateRequest(BaseModel):
     email_domain: str | None = None
     currency: str | None = None
     timezone: str | None = None
+    production_staff_available_per_day: int | None = Field(default=None, ge=0)
 
     @field_validator("name", "code")
     @classmethod

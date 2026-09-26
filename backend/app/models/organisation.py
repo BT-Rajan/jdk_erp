@@ -1,6 +1,6 @@
 from datetime import time
 
-from sqlalchemy import Boolean, String, Text, Time
+from sqlalchemy import Boolean, Integer, String, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -33,3 +33,8 @@ class Organisation(Base, TimestampMixin):
     same_day_cutoff_time: Mapped[time] = mapped_column(
         Time, nullable=False, default=time(14, 0), server_default="14:00:00"
     )
+    # Production staff available per working day -- the Admin-set
+    # manpower figure the 0-2 working-day feasibility check compares
+    # against (app/services/feasibility_service.py). NULL = not set, which
+    # that check treats as a failure needing an Admin decision.
+    production_staff_available_per_day: Mapped[int | None] = mapped_column(Integer, nullable=True)

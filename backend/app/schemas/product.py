@@ -18,6 +18,7 @@ class ProductOut(BaseModel):
     selling_price: Decimal
     min_selling_price: Decimal | None
     max_selling_price: Decimal | None
+    production_staff_required: int | None = None
     manufacturing_lead_time_days: int | None
     customer_lead_time_days: int | None
     is_active: bool
@@ -38,6 +39,7 @@ class ProductCreateRequest(BaseModel):
     selling_price: Decimal = Field(max_digits=14, decimal_places=2)
     min_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
     max_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
+    production_staff_required: int | None = Field(default=None, ge=0)
     manufacturing_lead_time_days: int | None = None
     customer_lead_time_days: int | None = None
 
@@ -85,6 +87,7 @@ class ProductUpdateRequest(BaseModel):
     selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
     min_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
     max_selling_price: Decimal | None = Field(default=None, max_digits=14, decimal_places=2)
+    production_staff_required: int | None = Field(default=None, ge=0)
     manufacturing_lead_time_days: int | None = None
     customer_lead_time_days: int | None = None
 
