@@ -40,24 +40,33 @@ const ORDER = {
   can_edit: true,
 }
 
+/** Line 1 already assessed for fulfilment at hand-off (S15.2). */
+let fulfilment: { sales_order_line_id: number }[] = [{ sales_order_line_id: 1 }]
+
 beforeEach(() => {
+  fulfilment = [{ sales_order_line_id: 1 }]
   getMock.mockReset().mockImplementation((url: string) => {
     if (url === '/api/sales-orders/5') return Promise.resolve({ data: ORDER })
+    if (url === '/api/sales-orders/5/fulfilment') return Promise.resolve({ data: fulfilment })
     return Promise.resolve({ data: EMPTY_PAGE })
   })
   postMock.mockReset()
   patchMock.mockReset().mockResolvedValue({ data: ORDER })
 })
 
+function renderPage() {
+  render(
+    <MemoryRouter initialEntries={['/sales/orders/5']}>
+      <Routes>
+        <Route path="/sales/orders/:orderId" element={<SalesOrderDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
 describe('SalesOrderDetailPage', () => {
   it('never offers or sends a customer change in the Admin edit (S13.5)', async () => {
-    render(
-      <MemoryRouter initialEntries={['/sales/orders/5']}>
-        <Routes>
-          <Route path="/sales/orders/:orderId" element={<SalesOrderDetailPage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
+    renderPage()
     await userEvent.click(await screen.findByRole('button', { name: 'Edit (Admin)' }))
 
     expect(screen.queryByLabelText(/customer/i)).not.toBeInTheDocument()
@@ -68,5 +77,36 @@ describe('SalesOrderDetailPage', () => {
     const [url, body] = patchMock.mock.calls[0]
     expect(url).toBe('/api/sales-orders/5')
     expect(body).not.toHaveProperty('customer_id')
+  })
+
+  it('shows an assessed line quantity read-only while the price stays editable (S16.1)', async () => {
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit (Admin)' }))
+
+    expect(screen.queryByRole('spinbutton', { name: 'Line 1 quantity' })).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('Line 1 quantity (read-only)')).toHaveTextContent('3')
+    expect(screen.getByText('Fixed: already assessed for fulfilment.')).toBeInTheDocument()
+    await userEvent.clear(screen.getByRole('spinbutton', { name: 'Line 1 unit price' }))
+    await userEvent.type(screen.getByRole('spinbutton', { name: 'Line 1 unit price' }), '95')
+    await userEvent.type(screen.getByLabelText(/reason for the change/i), 'Agreed discount')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1))
+    expect(patchMock.mock.calls[0][1].lines).toEqual([{ product_id: 7, unit_of_measure_id: 2, quantity: '3', unit_price: '95' }])
+  })
+
+  it('keeps quantity editable on a line that was never assessed', async () => {
+    fulfilment = []
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit (Admin)' }))
+
+    const quantity = await screen.findByRole('spinbutton', { name: 'Line 1 quantity' })
+    await userEvent.clear(quantity)
+    await userEvent.type(quantity, '5')
+    await userEvent.type(screen.getByLabelText(/reason for the change/i), 'Customer asked for 5')
+    await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1))
+    expect(patchMock.mock.calls[0][1].lines[0].quantity).toBe('5')
   })
 })

@@ -81,7 +81,7 @@ def upgrade() -> None:
             sa.ForeignKey(
                 "feasibility_checks.id",
                 ondelete="CASCADE",
-                name="fk_feasibility_check_lines_feasibility_check_id_feasibility_checks",
+                name="fk_feasibility_check_lines_feasibility_check_id",
             ),
             nullable=False,
         ),
