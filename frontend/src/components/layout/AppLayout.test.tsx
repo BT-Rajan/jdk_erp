@@ -69,6 +69,8 @@ describe('AppLayout', () => {
     await userEvent.click(screen.getByRole('button', { name: /settings/i }))
     expect(screen.getByRole('link', { name: 'Customers' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Working calendar' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'AI Assistant' })).toBeInTheDocument()
+    expect(within(header).getByRole('button', { name: 'Open JDK Assistant' })).toBeInTheDocument()
   })
 
   it('still gives non-admins the Master Data pages under Settings, without the admin pages', async () => {
@@ -80,6 +82,7 @@ describe('AppLayout', () => {
     expect(screen.getByRole('link', { name: 'Products' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Working calendar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'AI Assistant' })).not.toBeInTheDocument()
   })
 })
 

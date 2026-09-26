@@ -25,3 +25,6 @@ cryptography>=41
 # requirement), not speculative. A well-established, pure-Python library
 # with no system-level dependency (no wkhtmltopdf/headless-browser).
 reportlab>=4.0
+# The JDK Assistant's Claude provider (app/services/assistant_service.py).
+# DeepSeek, the other provider, is plain HTTPS via the standard library.
+anthropic>=1.0

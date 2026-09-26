@@ -7,6 +7,7 @@ import { CategoriesPage } from '@/pages/CategoriesPage'
 import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentSettingsPage } from '@/pages/DocumentSettingsPage'
+import { AssistantSettingsPage } from '@/pages/AssistantSettingsPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
 import { QuotationDetailPage } from '@/pages/QuotationDetailPage'
 import { QuotationFormPage } from '@/pages/QuotationFormPage'
@@ -110,6 +111,7 @@ export function App() {
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings/organisation" element={<OrganisationSettingsPage />} />
           <Route path="/settings/email" element={<EmailSettingsPage />} />
+          <Route path="/settings/assistant" element={<AssistantSettingsPage />} />
           <Route path="/settings/documents" element={<DocumentSettingsPage />} />
           <Route path="/settings/working-calendar" element={<WorkingCalendarSettingsPage />} />
           <Route path="/styleguide" element={<StyleGuidePage />} />
