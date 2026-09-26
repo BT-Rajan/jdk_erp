@@ -150,6 +150,9 @@ export interface SalesOrderLine {
   unit_of_measure_id: number
   unit_price: string
   line_amount: string
+  /** Delivery progress, derived on the server from fulfilled deliveries. */
+  fulfilled_quantity?: string
+  remaining_quantity?: string | null
 }
 
 export interface SalesOrder {
@@ -177,8 +180,18 @@ export interface SalesOrder {
   can_edit: boolean
 }
 
-export const ORDER_STATUS_LABELS: Record<string, string> = { handed_off: 'Handed off', cancelled: 'Cancelled' }
-export const ORDER_STATUS_TONES: Record<string, BadgeTone> = { handed_off: 'success', cancelled: 'danger' }
+export const ORDER_STATUS_LABELS: Record<string, string> = {
+  handed_off: 'Handed off',
+  partially_delivered: 'Partially delivered',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+}
+export const ORDER_STATUS_TONES: Record<string, BadgeTone> = {
+  handed_off: 'info',
+  partially_delivered: 'warning',
+  completed: 'success',
+  cancelled: 'danger',
+}
 
 export const HANDOFF_SOURCE_LABELS: Record<string, string> = {
   automatic: 'automatically on creation',

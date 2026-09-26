@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,6 +58,8 @@ class DeliveryLinePositionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     sales_order_line_id: int
+    product_id: int
+    unit_of_measure_id: int
     ordered_quantity: Decimal
     fulfilled_quantity: Decimal
     remaining_quantity: Decimal
@@ -67,6 +69,12 @@ class DeliveryLinePositionOut(BaseModel):
 
 class DeliveryPositionOut(BaseModel):
     sales_order_id: int
+    sales_order_number: str
+    sales_order_status: str
+    customer_name: str | None = None
+    requested_delivery_date: date | None = None
+    # Whether a new Delivery Instruction may be created now (server rule).
+    can_create: bool = False
     scrap_allowance_percent: Decimal
     # False until the order's first Delivery Instruction locks the %.
     allowance_locked: bool
@@ -88,3 +96,15 @@ class DeliveryShipmentUpdateRequest(BaseModel):
 
 class DeliveryNotFulfilledRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class DeliverableOrderOut(BaseModel):
+    """A Sales Order that can take a Delivery Instruction now."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    order_number: str
+    customer_name: str | None = None
+    requested_delivery_date: date | None = None
+    status: str

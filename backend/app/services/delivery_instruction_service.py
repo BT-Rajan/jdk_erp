@@ -86,6 +86,8 @@ def fulfilled_quantity(db: Session, sales_order_line_id: int, *, locking: bool =
 @dataclass(frozen=True)
 class LinePosition:
     sales_order_line_id: int
+    product_id: int
+    unit_of_measure_id: int
     ordered_quantity: Decimal
     fulfilled_quantity: Decimal
     remaining_quantity: Decimal
@@ -96,7 +98,9 @@ class LinePosition:
 def line_position(db: Session, line: SalesOrderLine, allowance_percent: Decimal, *, locking: bool = False) -> LinePosition:
     fulfilled = fulfilled_quantity(db, line.id, locking=locking)
     top = ceiling(line.quantity, allowance_percent)
-    return LinePosition(line.id, line.quantity, fulfilled, line.quantity - fulfilled, top, top - fulfilled)
+    return LinePosition(
+        line.id, line.product_id, line.unit_of_measure_id, line.quantity, fulfilled, line.quantity - fulfilled, top, top - fulfilled
+    )
 
 
 def order_position(db: Session, order: SalesOrder) -> tuple[Decimal, bool, list[LinePosition]]:

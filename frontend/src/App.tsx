@@ -17,6 +17,9 @@ import { SalesOrdersPage } from '@/pages/SalesOrdersPage'
 import { WorkingCalendarSettingsPage } from '@/pages/WorkingCalendarSettingsPage'
 import { FinancePaymentsPage } from '@/pages/FinancePaymentsPage'
 import { FinishedGoodsAdjustmentsPage } from '@/pages/FinishedGoodsAdjustmentsPage'
+import { DeliveriesPage } from '@/pages/DeliveriesPage'
+import { DeliveryInstructionPage } from '@/pages/DeliveryInstructionPage'
+import { DeliveryOrderPage } from '@/pages/DeliveryOrderPage'
 import { FinishedGoodsStockPositionPage } from '@/pages/FinishedGoodsStockPositionPage'
 import { GoodsReceivingPage } from '@/pages/GoodsReceivingPage'
 import { InventoryAdjustmentsPage } from '@/pages/InventoryAdjustmentsPage'
@@ -100,6 +103,9 @@ export function App() {
           <Route path="/inventory/reconciliation" element={<InventoryReconciliationPage />} />
           <Route path="/inventory/finished-goods" element={<FinishedGoodsStockPositionPage />} />
           <Route path="/inventory/finished-goods-adjustments" element={<FinishedGoodsAdjustmentsPage />} />
+          <Route path="/deliveries" element={<DeliveriesPage />} />
+          <Route path="/deliveries/orders/:orderId" element={<DeliveryOrderPage />} />
+          <Route path="/deliveries/:instructionId" element={<DeliveryInstructionPage />} />
           <Route path="/sales/quotations" element={<QuotationsPage />} />
           <Route path="/sales/quotations/new" element={<QuotationFormPage />} />
           <Route path="/sales/quotations/:quotationId" element={<QuotationDetailPage />} />

@@ -6,6 +6,7 @@ pallets) and every state transition (fulfilled, not fulfilled, retried)
 are audited."""
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
@@ -24,10 +25,12 @@ from app.models.audit_event import (
     SALES_MODULE,
     SALES_ORDER_DELIVERY_STATUS,
 )
+from app.models.customer import Customer
 from app.models.delivery_instruction import DeliveryInstruction, DeliveryInstructionLine
 from app.models.sales_order import SalesOrder
 from app.models.user import User
 from app.schemas.delivery_instruction import (
+    DeliverableOrderOut,
     DeliveryInstructionCreateRequest,
     DeliveryInstructionOut,
     DeliveryLinePositionOut,
@@ -65,6 +68,30 @@ def list_delivery_instructions(
     return PaginatedResponse(data=[DeliveryInstructionOut.model_validate(r) for r in rows], pagination=pagination)
 
 
+@router.get("/eligible-orders", response_model=PaginatedResponse[DeliverableOrderOut])
+def list_deliverable_orders(
+    q: str | None = Query(None, max_length=100),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PaginatedResponse[DeliverableOrderOut]:
+    """Sales Orders that can take a Delivery Instruction now (handed off or
+    partially delivered -- the service's one rule), for warehouse staff
+    across all customers. `q` matches the order number or customer."""
+    inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
+    query = db.query(SalesOrder).filter(
+        SalesOrder.organisation_id == current_user.organisation_id,
+        SalesOrder.status.in_(delivery_instruction_service.DELIVERABLE_STATUSES),
+    )
+    if q:
+        query = query.join(Customer, Customer.id == SalesOrder.customer_id).filter(
+            or_(SalesOrder.order_number.ilike(f"%{q}%"), Customer.name.ilike(f"%{q}%"))
+        )
+    rows, pagination = paginate(query.order_by(SalesOrder.id.desc()), page, page_size)
+    return PaginatedResponse(data=[DeliverableOrderOut.model_validate(r) for r in rows], pagination=pagination)
+
+
 @router.get("/position", response_model=DeliveryPositionOut)
 def get_delivery_position(
     sales_order_id: int = Query(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -83,6 +110,11 @@ def get_delivery_position(
     allowance, locked, positions = delivery_instruction_service.order_position(db, order)
     return DeliveryPositionOut(
         sales_order_id=order.id,
+        sales_order_number=order.order_number,
+        sales_order_status=order.status,
+        customer_name=order.customer_name,
+        requested_delivery_date=order.requested_delivery_date,
+        can_create=order.status in delivery_instruction_service.DELIVERABLE_STATUSES,
         scrap_allowance_percent=allowance,
         allowance_locked=locked,
         lines=[DeliveryLinePositionOut.model_validate(p) for p in positions],
