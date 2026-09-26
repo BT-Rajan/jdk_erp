@@ -18,8 +18,9 @@ Frozen rules:
   The requested date is never moved.
 - Same day means the required date is today's Kuwait date and the
   current Kuwait time is at or before the organisation's
-  `same_day_cutoff_time` (14:00 by default). After the cut-off, a
-  request for today is evaluated from the next working day instead.
+  `same_day_cutoff_time` (14:00 by default). After the cut-off, every
+  request -- for today or any later date -- is evaluated from the next
+  working day instead of today.
 - Otherwise count only working days after the evaluation start (today,
   or the next working day after a missed cut-off), up to and including
   the required date: 0-2 -> within 2 working days, 3 or more -> more
@@ -113,15 +114,16 @@ def classify_delivery_window(
     if not is_working_day(required_date, get_holiday_dates(db, organisation_id, required_date, required_date)):
         return NOT_SERVABLE
 
+    cutoff = db.query(Organisation.same_day_cutoff_time).filter(Organisation.id == organisation_id).scalar()
+    before_cutoff = current.time() <= cutoff
+    if required_date == today and before_cutoff:
+        return SAME_DAY
+
     evaluation_start = today
-    if required_date == today:
-        cutoff = (
-            db.query(Organisation.same_day_cutoff_time).filter(Organisation.id == organisation_id).scalar()
-        )
-        if current.time() <= cutoff:
-            return SAME_DAY
-        # Missed the cut-off: evaluate from the next working day. Today's
-        # date then falls before that start, i.e. 0 working days after it.
+    if not before_cutoff:
+        # Missed the cut-off: the request is evaluated from the next
+        # working day, whatever date it asks for. A request for today
+        # then falls before that start, i.e. 0 working days after it.
         evaluation_start = next_working_day(
             today,
             get_holiday_dates(db, organisation_id, today, today + timedelta(days=_NEXT_WORKING_DAY_HORIZON_DAYS)),

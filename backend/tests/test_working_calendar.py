@@ -76,6 +76,11 @@ def test_same_day_uses_kuwait_time_and_the_configured_cutoff(client, db_session,
     # evaluated from the next working day (Tuesday).
     after_cutoff = datetime(2026, 9, 28, 11, 1, tzinfo=timezone.utc)
     assert classify(after_cutoff) == WITHIN_2_WORKING_DAYS
+    # The same shift applies to a later date: Monday 14:01 for Thursday
+    # counts from Tuesday (Wed, Thu = 2), not from Monday (3).
+    later = lambda required, now: classify_delivery_window(db_session, organisation.id, required, now=now)
+    assert later(THURSDAY, datetime(2026, 9, 28, 10, 59, tzinfo=timezone.utc)) == MORE_THAN_2_WORKING_DAYS
+    assert later(THURSDAY, after_cutoff) == WITHIN_2_WORKING_DAYS
     # "Next working day" skips Friday, Saturday and holidays: Thursday's
     # next working day is Monday when Sunday is a holiday.
     assert next_working_day(THURSDAY, {date(2026, 10, 4)}) == date(2026, 10, 5)
