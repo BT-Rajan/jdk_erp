@@ -8,6 +8,9 @@ import { CustomersPage } from '@/pages/CustomersPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentSettingsPage } from '@/pages/DocumentSettingsPage'
 import { EmailSettingsPage } from '@/pages/EmailSettingsPage'
+import { QuotationDetailPage } from '@/pages/QuotationDetailPage'
+import { QuotationFormPage } from '@/pages/QuotationFormPage'
+import { QuotationsPage } from '@/pages/QuotationsPage'
 import { WorkingCalendarSettingsPage } from '@/pages/WorkingCalendarSettingsPage'
 import { FinancePaymentsPage } from '@/pages/FinancePaymentsPage'
 import { FinishedGoodsAdjustmentsPage } from '@/pages/FinishedGoodsAdjustmentsPage'
@@ -94,6 +97,10 @@ export function App() {
           <Route path="/inventory/reconciliation" element={<InventoryReconciliationPage />} />
           <Route path="/inventory/finished-goods" element={<FinishedGoodsStockPositionPage />} />
           <Route path="/inventory/finished-goods-adjustments" element={<FinishedGoodsAdjustmentsPage />} />
+          <Route path="/sales/quotations" element={<QuotationsPage />} />
+          <Route path="/sales/quotations/new" element={<QuotationFormPage />} />
+          <Route path="/sales/quotations/:quotationId" element={<QuotationDetailPage />} />
+          <Route path="/sales/quotations/:quotationId/edit" element={<QuotationFormPage />} />
           <Route path="/finance/payments" element={<FinancePaymentsPage />} />
           <Route path="/finance/payments/:purchaseOrderId" element={<FinancePaymentsPage />} />
           <Route path="/users" element={<UsersPage />} />

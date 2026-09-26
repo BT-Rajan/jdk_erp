@@ -14,6 +14,7 @@ recalculated here:
 
 Operational rules:
 - no requested delivery date              -> operational_assessment_required
+- requested date already passed           -> operational_assessment_required
 - more_than_2_working_days                -> no feasibility needed
 - not_servable (Fri/Sat/holiday date)     -> admin_override_required; the
                                              date is never changed
@@ -38,7 +39,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.timezone import now_jdk
+from app.core.timezone import now_jdk, to_jdk_time
 from app.models.feasibility_check import (
     ADMIN_OVERRIDE_REQUIRED as CHECK_OVERRIDE_REQUIRED,
     APPROVED,
@@ -57,6 +58,9 @@ NOT_SERVABLE = "not_servable"
 _PRECEDENCE = (NOT_SERVABLE, ADMIN_OVERRIDE_REQUIRED, OPERATIONAL_ASSESSMENT_REQUIRED, COMMERCIAL_APPROVAL_REQUIRED)
 
 REQUESTED_DATE_MISSING = "requested_date_missing"
+# The requested date has gone by (it was valid when entered); the date
+# must be changed before an operational assessment can be made.
+REQUESTED_DATE_PASSED = "requested_date_passed"
 REQUESTED_DATE_NON_WORKING = "requested_date_non_working"
 FEASIBILITY_REQUIRED = "feasibility_required"
 FEASIBILITY_STALE = "feasibility_stale"
@@ -125,13 +129,19 @@ def _commercial(quotation: Quotation, readiness: Readiness) -> None:
 def assess(db: Session, quotation: Quotation, now: datetime | None = None) -> Readiness:
     """Read-only: computes readiness from current server data (Kuwait
     time). Changes nothing."""
+    current = now or now_jdk()
     window = None
-    if quotation.requested_delivery_date is not None:
-        window = working_calendar_service.classify_delivery_window(
-            db, quotation.organisation_id, quotation.requested_delivery_date, now=now or now_jdk()
-        )
-    readiness = Readiness(status=READY, delivery_window=window)
-    _operational(db, quotation, window, readiness)
+    readiness = Readiness(status=READY, delivery_window=None)
+    if quotation.requested_delivery_date is not None and quotation.requested_delivery_date < to_jdk_time(current).date():
+        readiness.conditions.append(OPERATIONAL_ASSESSMENT_REQUIRED)
+        readiness.reason_codes.append(REQUESTED_DATE_PASSED)
+    else:
+        if quotation.requested_delivery_date is not None:
+            window = working_calendar_service.classify_delivery_window(
+                db, quotation.organisation_id, quotation.requested_delivery_date, now=current
+            )
+        readiness.delivery_window = window
+        _operational(db, quotation, window, readiness)
     _commercial(quotation, readiness)
     for status in _PRECEDENCE:
         if status in readiness.conditions:

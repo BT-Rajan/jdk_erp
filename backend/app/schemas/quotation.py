@@ -39,6 +39,16 @@ class QuotationCreateRequest(BaseModel):
     requested_delivery_date: date | None = None
 
 
+class QuotationUpdateRequest(BaseModel):
+    """Controlled edit (Sales S10). Only the fields sent change; `lines`
+    replaces every line. Number, date, status, currency, owner, amounts,
+    readiness and approvals are never accepted from the client."""
+
+    customer_id: int | None = None
+    requested_delivery_date: date | None = None
+    lines: list[QuotationLineCreateRequest] | None = Field(default=None, min_length=1, max_length=200)
+
+
 class QuotationLineOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -74,7 +84,17 @@ class QuotationOut(BaseModel):
     same_day_override_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    customer_name: str | None = None
+    created_by_name: str | None = None
     lines: list[QuotationLineOut]
+
+
+class QuotationListRowOut(QuotationOut):
+    """A list row with the server's current readiness, so a list never
+    derives it in the browser."""
+
+    delivery_window: str | None = None
+    readiness_status: str | None = None
 
 
 class SameDayShortageOut(BaseModel):

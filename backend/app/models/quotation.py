@@ -70,6 +70,17 @@ class Quotation(Base, TimestampMixin, OrganisationScopedMixin):
     lines: Mapped[list["QuotationLine"]] = relationship(
         back_populates="quotation", cascade="all, delete-orphan", order_by="QuotationLine.line_number"
     )
+    # Display only: names shown on lists/detail, always read live.
+    customer = relationship("Customer", viewonly=True, lazy="joined")
+    created_by = relationship("User", foreign_keys=[created_by_user_id], viewonly=True, lazy="joined")
+
+    @property
+    def customer_name(self) -> str | None:
+        return self.customer.name if self.customer is not None else None
+
+    @property
+    def created_by_name(self) -> str | None:
+        return self.created_by.full_name if self.created_by is not None else None
 
 
 class QuotationLine(Base):

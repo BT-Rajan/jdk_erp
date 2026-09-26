@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
@@ -20,9 +21,11 @@ from app.models.audit_event import (
     FEASIBILITY_RECORDED,
     QUOTATION_CREATED,
     QUOTATION_READINESS_ASSESSED,
+    QUOTATION_UPDATED,
     QUOTATION_SAME_DAY_OVERRIDE_DECIDED,
     SALES_MODULE,
 )
+from app.models.customer import Customer
 from app.models.feasibility_check import FeasibilityCheck
 from app.models.quotation import Quotation
 from app.models.user import User
@@ -33,9 +36,11 @@ from app.schemas.quotation import (
     FeasibilityCheckOut,
     FeasibilityDecisionRequest,
     QuotationCreateRequest,
+    QuotationListRowOut,
     QuotationLineOut,
     QuotationOut,
     QuotationReadinessOut,
+    QuotationUpdateRequest,
     SameDayGateOut,
     SameDayOverrideRequest,
 )
@@ -68,23 +73,112 @@ def _get_visible_quotation(db: Session, quotation_id: int, user: User) -> Quotat
     return quotation
 
 
-@router.get("", response_model=PaginatedResponse[QuotationOut])
+def _list_row(db: Session, quotation: Quotation) -> QuotationListRowOut:
+    readiness = quotation_readiness_service.assess(db, quotation)
+    row = QuotationListRowOut.model_validate(quotation)
+    row.delivery_window = readiness.delivery_window
+    row.readiness_status = readiness.status
+    return row
+
+
+@router.get("", response_model=PaginatedResponse[QuotationListRowOut])
 def list_quotations(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    q: str | None = Query(None, max_length=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> PaginatedResponse[QuotationOut]:
-    query = _scoped_query(db, current_user).order_by(Quotation.id.desc())
+) -> PaginatedResponse[QuotationListRowOut]:
+    """Scoped server-side through the customer (S2); each row carries the
+    server's current delivery window and readiness (read-only, not
+    audited -- POST .../readiness is the recorded assessment). `q`
+    matches the quotation number or customer name."""
+    query = _scoped_query(db, current_user)
+    if q:
+        query = query.join(Customer, Customer.id == Quotation.customer_id).filter(
+            or_(Quotation.quotation_number.ilike(f"%{q}%"), Customer.name.ilike(f"%{q}%"))
+        )
+    query = query.order_by(Quotation.id.desc())
     quotations, pagination = paginate(query, page, page_size)
-    return PaginatedResponse(data=[QuotationOut.model_validate(q) for q in quotations], pagination=pagination)
+    return PaginatedResponse(data=[_list_row(db, q_) for q_ in quotations], pagination=pagination)
 
 
-@router.get("/{quotation_id}", response_model=QuotationOut)
+@router.get("/{quotation_id}", response_model=QuotationListRowOut)
 def get_quotation(
     quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> Quotation:
-    return _get_visible_quotation(db, quotation_id, current_user)
+) -> QuotationListRowOut:
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user))
+
+
+@router.patch("/{quotation_id}", response_model=QuotationListRowOut)
+def update_quotation(
+    quotation_id: int,
+    payload: QuotationUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuotationListRowOut:
+    """Controlled edit of a draft quotation (Sales S10). The quotation and
+    any new customer must both be in the caller's scope (404 otherwise)
+    and the customer active. Lines are re-validated and re-priced on the
+    server. Changing customer, date or lines makes earlier feasibility
+    stale. Audited."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    updates = payload.model_dump(exclude_unset=True)
+    customer_id = None
+    if updates.get("customer_id") is not None:
+        customer = customer_scope.get_accessible_customer(db, current_user, updates["customer_id"])
+        if not customer.is_active:
+            raise ValidationError(
+                "This customer is inactive and cannot be quoted.", fields={"customer_id": "Customer is inactive."}
+            )
+        customer_id = customer.id
+    kwargs = {}
+    if "requested_delivery_date" in updates:
+        kwargs["requested_delivery_date"] = updates["requested_delivery_date"]
+    lines = None
+    if payload.lines is not None:
+        lines = [
+            quotation_service.LineInput(
+                product_id=line.product_id,
+                quantity=line.quantity,
+                unit_of_measure_id=line.unit_of_measure_id,
+                unit_price=line.unit_price,
+            )
+            for line in payload.lines
+        ]
+    changed = quotation_service.update_quotation(
+        db, quotation, today=now_jdk().date(), customer_id=customer_id, lines=lines, **kwargs
+    )
+    if changed:
+        audit_service.log_event(
+            db,
+            action=QUOTATION_UPDATED,
+            module=SALES_MODULE,
+            organisation_id=current_user.organisation_id,
+            actor_user_id=current_user.id,
+            entity_type="quotation",
+            entity_id=quotation.id,
+            result="success",
+            details=(
+                f"number: {quotation.quotation_number}, changed: {', '.join(changed)}, "
+                f"customer_id: {quotation.customer_id}, requested_delivery_date: {quotation.requested_delivery_date}, "
+                f"total: {quotation.total_amount} {quotation.currency}"
+            ),
+            ip_address=request.client.host if request.client else None,
+        )
+    db.commit()
+    db.expire_all()
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user))
+
+
+@router.get("/{quotation_id}/readiness", response_model=QuotationReadinessOut)
+def get_readiness(
+    quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> quotation_readiness_service.Readiness:
+    """Current readiness for display, read-only and not audited. POST to
+    the same path records an audited assessment."""
+    return quotation_readiness_service.assess(db, _get_visible_quotation(db, quotation_id, current_user))
 
 
 @router.get("/{quotation_id}/lines", response_model=list[QuotationLineOut])
