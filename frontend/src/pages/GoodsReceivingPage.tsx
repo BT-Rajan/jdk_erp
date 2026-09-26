@@ -187,6 +187,8 @@ export function GoodsReceivingPage() {
       .catch((err) => setNotice(err instanceof ApiError ? err.message : 'Failed to open the purchase order.'))
   }, [openId, open])
 
+  const openPurchaseOrder = (id: number) => navigate(`/purchase-orders/${id}`)
+
   async function downloadFile(file: ReceivingFile) {
     try {
       const response = await apiClient.get(`/api/files/${file.id}`, { responseType: 'blob' })
@@ -304,6 +306,7 @@ export function GoodsReceivingPage() {
         footer={
           <>
             <Button variant="secondary" onClick={() => setTarget(null)}>Close</Button>
+            {target && <Button variant="secondary" onClick={() => openPurchaseOrder(target.id)}>Open Purchase Order</Button>}
             {target?.can_receive && <Button onClick={submitReceipt} isLoading={busy}>Submit Receipt</Button>}
           </>
         }

@@ -727,6 +727,7 @@ export function PurchaseOrdersPage() {
   const hasPayments = !!detailTarget && !['draft', 'pending_approval'].includes(detailTarget.status)
   const isOpen = !!detailTarget && !['draft', 'pending_approval', 'closed', 'cancelled'].includes(detailTarget.status)
   const openToReceiving = (id: number) => navigate('/receiving', { state: { openPurchaseOrderId: id } })
+  const openToPayments = (id: number) => navigate(`/finance/payments/${id}`)
 
   const columns: DataTableColumn<PurchaseOrder>[] = [
     { key: 'po_number', label: 'PO Number', render: (po) => po.po_number },
@@ -1045,6 +1046,11 @@ export function PurchaseOrdersPage() {
                         Payments{' '}
                         <Badge tone={PAYMENT_STATUS_TONES[detailTarget.payment_status]}>{PAYMENT_STATUS_LABELS[detailTarget.payment_status]}</Badge>
                       </h3>
+                      <Button type="button" variant="secondary" onClick={() => openToPayments(detailTarget.id)}>
+                        Open in Finance → Payments
+                      </Button>
+                    </div>
+                    <div className="mb-2 flex items-center justify-between">
                       <div className="text-sm">
                         <span className="text-gold-100/50">PO Amount </span>{detailTarget.final_amount} {detailTarget.currency}
                         {detailTarget.final_amount !== detailTarget.total_amount && (

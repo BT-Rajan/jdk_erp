@@ -187,6 +187,7 @@ export function FinancePaymentsPage() {
 
   const openPo = (po: FinancePo) => navigate(`/finance/payments/${po.id}`, { state: { record: po } })
   const backToList = () => navigate('/finance/payments')
+  const openPurchaseOrder = (id: number) => navigate(`/purchase-orders/${id}`)
 
   async function savePayment() {
     if (!target) return
@@ -404,6 +405,7 @@ export function FinancePaymentsPage() {
 
               <div className="flex flex-wrap justify-end gap-2 border-t border-ink-700 pt-4">
                 <Button variant="secondary" onClick={backToList}>Back to Payments</Button>
+                <Button variant="secondary" onClick={() => openPurchaseOrder(target.id)}>Open Purchase Order</Button>
                 {Number(target.outstanding_amount) > 0 && (
                   <Button onClick={savePayment} isLoading={busy}>Save Payment</Button>
                 )}
