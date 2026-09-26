@@ -18,9 +18,12 @@ from app.models.audit_event import (
     SALES_ORDER_CANCELLED,
     SALES_ORDER_CREATED,
     SALES_ORDER_UPDATED,
+    QUOTATION_READINESS_ASSESSED,
     AuditEvent,
 )
 from app.models.customer import Customer
+from app.models.feasibility_check import FeasibilityCheck
+from app.models.sales_order import SalesOrder
 from app.models.team import Team
 from app.models.user import User
 from app.models.user_team import UserTeam
@@ -70,9 +73,9 @@ def _line(product, quantity="3", price="100"):
     return {"product_id": product.id, "quantity": quantity, "unit_of_measure_id": product.unit_of_measure_id, "unit_price": price}
 
 
-def _accepted_quotation(client, customer, product):
+def _accepted_quotation(client, customer, product, requested="2026-10-05"):
     a = _headers(client, "salesman_a")
-    body = {"customer_id": customer.id, "requested_delivery_date": "2026-10-05", "lines": [_line(product)]}
+    body = {"customer_id": customer.id, "requested_delivery_date": requested, "lines": [_line(product)]}
     quotation = client.post("/api/quotations", json=body, headers=a).json()
     assert client.post(f"/api/quotations/{quotation['id']}/accept", headers=a).status_code == 200
     return quotation
@@ -153,3 +156,63 @@ def test_orders_follow_customer_scope(client, setup):
     assert client.post(f"/api/sales-orders/{order['id']}/cancel", json={"reason": "x"}, headers=b).status_code == 404
     head_rows = client.get("/api/sales-orders", headers=_headers(client, "head")).json()["data"]
     assert [row["id"] for row in head_rows] == [order["id"]] and head_rows[0]["can_cancel"] is True
+
+
+# --- S13.5 integrity fixes ---------------------------------------------------
+
+
+def test_the_order_customer_can_never_change(client, db_session, organisation, setup):
+    users, customer, widget = setup
+    other = Customer(organisation_id=organisation.id, code="300002", name="B Co", assigned_to_user_id=users["a"].id)
+    db_session.add(other)
+    db_session.commit()
+    order = _convert(client, _accepted_quotation(client, customer, widget)["id"]).json()
+    url, admin = f"/api/sales-orders/{order['id']}", _headers(client, "boss")
+
+    response = client.patch(url, json={"reason": "Wrong customer", "customer_id": other.id}, headers=admin)
+    assert response.status_code == 422 and "customer_id" in response.json()["error"]["fields"]
+    assert client.get(url, headers=admin).json()["customer_id"] == customer.id
+    assert db_session.query(AuditEvent).filter(AuditEvent.action == SALES_ORDER_UPDATED).count() == 0
+    # Naming the same customer is not a change; other Admin edits still work.
+    same = client.patch(url, json={"reason": "Qty", "customer_id": customer.id, "lines": [_line(widget, "4")]}, headers=admin)
+    assert same.status_code == 200 and same.json()["customer_id"] == customer.id
+
+
+def test_a_converted_quotation_locks_feasibility_and_readiness(client, db_session, setup):
+    users, customer, widget = setup
+    a, admin = _headers(client, "salesman_a"), _headers(client, "boss")
+    quotation = _accepted_quotation(client, customer, widget, requested="2026-10-02")  # Friday: needs Admin
+    base = f"/api/quotations/{quotation['id']}"
+
+    # Not converted yet: feasibility and readiness behave as before.
+    check = client.post(f"{base}/feasibility-checks", headers=a)
+    assert check.status_code == 201 and check.json()["state"] == "admin_override_required"
+    decision_url = f"{base}/feasibility-checks/{check.json()['id']}/decision"
+    assert client.put(decision_url, json={"decision": "approved", "reason": "OK"}, headers=admin).status_code == 200
+    assert client.post(f"{base}/readiness", headers=a).status_code == 200
+    audits = db_session.query(AuditEvent).filter(AuditEvent.action == QUOTATION_READINESS_ASSESSED).count()
+
+    assert _convert(client, quotation["id"]).status_code == 201
+    assert client.post(f"{base}/feasibility-checks", headers=a).status_code == 409
+    assert client.put(decision_url, json={"decision": "rejected", "reason": "No"}, headers=admin).status_code == 409
+    assert client.post(f"{base}/readiness", headers=a).status_code == 409
+    assert db_session.query(FeasibilityCheck).count() == 1
+    assert client.get(f"{base}/feasibility-checks", headers=a).json()[0]["state"] == "approved"
+    assert db_session.query(AuditEvent).filter(AuditEvent.action == QUOTATION_READINESS_ASSESSED).count() == audits
+
+
+def test_conversion_refuses_a_past_requested_date_by_kuwait_date(client, db_session, setup, monkeypatch):
+    users, customer, widget = setup
+    quotation = _accepted_quotation(client, customer, widget, requested="2026-10-05")
+
+    # 00:30 on 6 Oct in Kuwait is still 5 Oct in UTC: Kuwait's date decides.
+    monkeypatch.setattr(quotations_api, "now_jdk", lambda: datetime(2026, 10, 6, 0, 30, tzinfo=JDK_TIMEZONE))
+    response = _convert(client, quotation["id"])
+    assert response.status_code == 422 and "requested_delivery_date" in response.json()["error"]["fields"]
+    unchanged = client.get(f"/api/quotations/{quotation['id']}", headers=_headers(client, "salesman_a")).json()
+    assert (unchanged["status"], unchanged["requested_delivery_date"]) == ("accepted", "2026-10-05")
+    assert db_session.query(SalesOrder).count() == 0
+
+    # On the requested day itself (late evening, Kuwait) it still converts.
+    monkeypatch.setattr(quotations_api, "now_jdk", lambda: datetime(2026, 10, 5, 23, 30, tzinfo=JDK_TIMEZONE))
+    assert _convert(client, quotation["id"]).status_code == 201

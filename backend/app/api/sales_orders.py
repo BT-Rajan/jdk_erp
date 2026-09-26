@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
 from app.core.database import get_db
-from app.core.errors import AccessDeniedError, NotFoundError, ValidationError
+from app.core.errors import AccessDeniedError, NotFoundError
 from app.core.list_query import paginate
 from app.core.roles import ADMIN_ROLES
 from app.core.timezone import now_jdk
@@ -133,12 +133,6 @@ def update_sales_order(
     are re-validated and re-priced on the server."""
     order = _get_visible_order(db, order_id, admin)
     updates = payload.model_dump(exclude_unset=True)
-    customer_id = None
-    if updates.get("customer_id") is not None:
-        customer = customer_scope.get_accessible_customer(db, admin, updates["customer_id"])
-        if not customer.is_active:
-            raise ValidationError("This customer is inactive.", fields={"customer_id": "Customer is inactive."})
-        customer_id = customer.id
     kwargs = {}
     if "requested_delivery_date" in updates:
         kwargs["requested_delivery_date"] = updates["requested_delivery_date"]
@@ -154,7 +148,7 @@ def update_sales_order(
             for line in payload.lines
         ]
     changed = sales_order_service.admin_update(
-        db, order, today=now_jdk().date(), customer_id=customer_id, lines=lines, **kwargs
+        db, order, today=now_jdk().date(), customer_id=updates.get("customer_id"), lines=lines, **kwargs
     )
     if changed:
         _audit(

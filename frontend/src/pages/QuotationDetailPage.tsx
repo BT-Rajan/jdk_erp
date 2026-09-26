@@ -68,14 +68,15 @@ export function QuotationDetailPage() {
 
   const load = useCallback(async () => {
     const base = `/api/quotations/${quotationId}`
-    const [q, r, c] = await Promise.all([
+    const [q, c] = await Promise.all([
       apiClient.get<Quotation>(base),
-      // The audited readiness assessment (S9) -- never an unrecorded read.
-      apiClient.post<Readiness>(`${base}/readiness`),
       apiClient.get<FeasibilityCheck[]>(`${base}/feasibility-checks`),
     ])
+    // The audited readiness assessment (S9) -- never an unrecorded read.
+    // A converted quotation is locked (S13.5): no assessment is recorded.
+    const r = q.data.status === 'converted' ? null : (await apiClient.post<Readiness>(`${base}/readiness`)).data
     setQuotation(q.data)
-    setReadiness(r.data)
+    setReadiness(r)
     setChecks(c.data)
   }, [quotationId])
 
@@ -150,11 +151,12 @@ export function QuotationDetailPage() {
       </div>
     )
   }
-  if (!quotation || !readiness) return <Spinner />
+  if (!quotation) return <Spinner />
 
-  const window = readiness.delivery_window
+  const locked = quotation.status === 'converted'
+  const window = readiness ? readiness.delivery_window : quotation.delivery_window
   const canRunCheck = window !== null && FEASIBILITY_WINDOWS.has(window)
-  const canDecide = isAdmin && latestCheck !== null && latestCheck.is_current && DECIDABLE_STATES.has(latestCheck.state)
+  const canDecide = !locked && isAdmin && latestCheck !== null && latestCheck.is_current && DECIDABLE_STATES.has(latestCheck.state)
 
   return (
     <div className="space-y-6">
@@ -229,22 +231,24 @@ export function QuotationDetailPage() {
         <KeyValue label="Last Updated" value={formatDateTime(quotation.updated_at)} />
       </Card>
 
-      <Card className="space-y-3 p-6">
-        <FormSectionHeading>Readiness</FormSectionHeading>
-        <div>
-          <Badge tone={READINESS_TONES[readiness.status] ?? 'neutral'}>{READINESS_LABELS[readiness.status] ?? readiness.status}</Badge>
-        </div>
-        {readiness.reason_codes.length > 0 && (
-          <ul className="list-disc space-y-1 pl-5 text-sm text-gold-100/80">
-            {readiness.reason_codes.map((code) => (
-              <li key={code}>{reasonLabel(code)}</li>
-            ))}
-          </ul>
-        )}
-        {readiness.status === 'ready' && (
-          <p className="text-sm text-gold-100/60">This quotation is ready for the next Sales decision.</p>
-        )}
-      </Card>
+      {readiness && (
+        <Card className="space-y-3 p-6">
+          <FormSectionHeading>Readiness</FormSectionHeading>
+          <div>
+            <Badge tone={READINESS_TONES[readiness.status] ?? 'neutral'}>{READINESS_LABELS[readiness.status] ?? readiness.status}</Badge>
+          </div>
+          {readiness.reason_codes.length > 0 && (
+            <ul className="list-disc space-y-1 pl-5 text-sm text-gold-100/80">
+              {readiness.reason_codes.map((code) => (
+                <li key={code}>{reasonLabel(code)}</li>
+              ))}
+            </ul>
+          )}
+          {readiness.status === 'ready' && (
+            <p className="text-sm text-gold-100/60">This quotation is ready for the next Sales decision.</p>
+          )}
+        </Card>
+      )}
 
       {canRunCheck && (
         <Card className="space-y-3 p-6">
@@ -266,13 +270,15 @@ export function QuotationDetailPage() {
           ) : (
             <p className="text-sm text-gold-100/60">Feasibility has not been checked yet.</p>
           )}
-          <div>
-            <Button variant="secondary" onClick={runCheck} isLoading={busy === 'check'} disabled={busy !== null}>
-              {latestCheck ? 'Re-check Feasibility' : 'Check Feasibility'}
-            </Button>
-          </div>
+          {!locked && (
+            <div>
+              <Button variant="secondary" onClick={runCheck} isLoading={busy === 'check'} disabled={busy !== null}>
+                {latestCheck ? 'Re-check Feasibility' : 'Check Feasibility'}
+              </Button>
+            </div>
+          )}
 
-          {latestCheck?.is_current && latestCheck.state === 'admin_override_required' && !isAdmin && (
+          {!locked && latestCheck?.is_current && latestCheck.state === 'admin_override_required' && !isAdmin && (
             <Alert variant="warning">An Admin must approve or reject this exception.</Alert>
           )}
           {canDecide && (

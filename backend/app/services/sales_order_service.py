@@ -7,7 +7,8 @@
 - cancel: the owning salesman or their team head, reason mandatory. There
   is no fulfilment hand-off state yet, so any open order can be cancelled.
 - admin_update: only Admin, reason mandatory; lines are re-validated and
-  re-priced exactly like quotation lines.
+  re-priced exactly like quotation lines. The customer is the accepted
+  quotation's and can never change (S13.5).
 
 Authority is checked by the API layer; this module enforces state. It
 reserves, produces, moves, bills and delivers nothing."""
@@ -16,7 +17,7 @@ from datetime import date, datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, ValidationError
 from app.models.quotation import ACCEPTED, CONVERTED, Quotation
 from app.models.sales_order import CANCELLED, OPEN, SalesOrder, SalesOrderLine
 from app.services import document_numbering, quotation_service
@@ -29,6 +30,10 @@ def convert(db: Session, quotation: Quotation, user_id: int, today: date) -> Sal
     quotation converted, in one flush. The caller audits and commits."""
     if quotation.status != ACCEPTED:
         raise ConflictError(f"Only an accepted quotation can be converted (this one is {quotation.status}).")
+    # S13.5: an order is never created for a date already past (Kuwait
+    # business date, passed in by the caller); the date must be corrected
+    # on the quotation first -- nothing moves it forward here.
+    quotation_service.check_requested_date(quotation.requested_delivery_date, today)
 
     def build(number: str) -> SalesOrder:
         order = SalesOrder(
@@ -94,14 +99,16 @@ def admin_update(
 ) -> list[str]:
     """Admin's change to an open order (the reason is audited by the
     caller). Lines are replaced as a whole and re-priced/re-validated like
-    quotation lines; the number, status and source quotation never
-    change. Returns the changed field names."""
+    quotation lines; the number, status, customer and source quotation
+    never change. Returns the changed field names."""
     if order.status != OPEN:
         raise ConflictError(f"Only an open order can be changed (this one is {order.status}).")
     changed: list[str] = []
     if customer_id is not None and customer_id != order.customer_id:
-        order.customer_id = customer_id
-        changed.append("customer")
+        raise ValidationError(
+            "The customer of a Sales Order cannot be changed.",
+            fields={"customer_id": "Fixed to the source quotation's customer."},
+        )
     if requested_delivery_date is not _UNSET and requested_delivery_date != order.requested_delivery_date:
         quotation_service.check_requested_date(requested_delivery_date, today)
         order.requested_delivery_date = requested_delivery_date

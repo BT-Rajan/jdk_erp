@@ -81,6 +81,14 @@ def _get_visible_quotation(db: Session, quotation_id: int, user: User) -> Quotat
     return quotation
 
 
+def _ensure_not_converted(quotation: Quotation) -> None:
+    """The converted-quotation lock (S13.1): nothing may change a quotation
+    once it is a Sales Order -- edits, price and feasibility decisions,
+    new feasibility checks and readiness assessments alike (S13.5)."""
+    if quotation.status == CONVERTED:
+        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
+
+
 def _is_owner(quotation: Quotation, user: User) -> bool:
     """Editing authority (S11.2 decision): only the salesman who owns the
     quotation's customer -- Customer.assigned_to_user_id, the S2
@@ -173,8 +181,7 @@ def update_quotation(
     re-priced on the server. Changing customer, date or lines makes
     earlier feasibility stale. The status is never changed here. Audited."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
-    if quotation.status == CONVERTED:
-        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
+    _ensure_not_converted(quotation)
     if not _can_edit(quotation, current_user):
         if quotation.status == DRAFT:
             raise AccessDeniedError("Only the salesman who owns this customer can edit the quotation.")
@@ -243,8 +250,7 @@ def decide_price(
     is audited. Replacing the lines clears it. Refused when no line needs
     price approval."""
     quotation = _get_visible_quotation(db, quotation_id, admin)
-    if quotation.status == CONVERTED:
-        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
+    _ensure_not_converted(quotation)
     previous = quotation_service.decide_price(db, quotation, payload.decision, payload.reason, admin.id)
     flagged = [str(line.line_number) for line in quotation.lines if line.price_approval_required]
     audit_service.log_event(
@@ -411,6 +417,7 @@ def run_feasibility_check(
     are kept unchanged. Anyone who can see the quotation may run it; only
     Admin decides exceptions."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
+    _ensure_not_converted(quotation)
     record = feasibility_record_service.run_check(db, quotation, current_user.id)
     audit_service.log_event(
         db,
@@ -469,6 +476,7 @@ def decide_feasibility_check(
     may change an earlier decision. The calculated result is untouched.
     Every decision is audited."""
     quotation = _get_visible_quotation(db, quotation_id, admin)
+    _ensure_not_converted(quotation)
     record = _get_check(db, quotation, check_id)
     previous = feasibility_record_service.decide(db, record, quotation, payload.decision, payload.reason, admin.id)
     audit_service.log_event(
@@ -503,6 +511,7 @@ def assess_readiness(
     everything else are left unchanged; anything that later needs
     readiness must call this, never trust a client flag."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
+    _ensure_not_converted(quotation)
     readiness = quotation_readiness_service.assess(db, quotation)
     audit_service.log_event(
         db,

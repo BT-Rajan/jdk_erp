@@ -70,6 +70,8 @@ class SalesOrderUpdateRequest(BaseModel):
     from the client."""
 
     reason: str = Field(min_length=1, max_length=2000)
+    # Accepted only so a change can be refused explicitly (S13.5): the
+    # customer is fixed to the source quotation's.
     customer_id: int | None = None
     requested_delivery_date: date | None = None
     lines: list[QuotationLineCreateRequest] | None = Field(default=None, min_length=1, max_length=200)
