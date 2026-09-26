@@ -110,4 +110,40 @@ describe('Production Orders', () => {
     renderAt('/production/orders')
     expect(await screen.findByText('Access denied')).toBeInTheDocument()
   })
+
+  it('records production with only the quantity, and one reference per submission', async () => {
+    order = { ...ORDER, status: 'issued', bom_id: 1, bom_base_quantity: '1000', produced_quantity: '0', remaining_quantity: '400' }
+    postMock.mockRejectedValueOnce(new ApiError({ code: 'BUSINESS_RULE', message: 'Not enough raw material; nothing was posted.' }, 400))
+    renderAt('/production/orders/3')
+    await userEvent.click(await screen.findByRole('button', { name: 'Record Production' }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.type(within(dialog).getByLabelText(/Quantity produced/), '150')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Post Production' }))
+    expect(await within(dialog).findByText('Not enough raw material; nothing was posted.')).toBeInTheDocument()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Post Production' }))
+    await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2))
+    const [first, second] = postMock.mock.calls
+    expect(first[0]).toBe('/api/production-orders/3/executions')
+    expect(first[1]).toMatchObject({ produced_quantity: '150', executed_at: null, notes: null })
+    // A retry of the same submission carries the same reference.
+    expect(second[1].client_reference).toBe(first[1].client_reference)
+    expect(first[1].client_reference).toBeTruthy()
+  })
+
+  it('shows produced / remaining and the execution history, and no cancel once produced', async () => {
+    order = {
+      ...ORDER,
+      status: 'partially_completed',
+      produced_quantity: '600',
+      remaining_quantity: '400',
+      executions: [{ id: 1, sequence: 1, produced_quantity: '600', unit_of_measure_id: 2, executed_at: '2026-09-28T06:00:00', notes: null, status: 'posted' }],
+    }
+    renderAt('/production/orders/3')
+    expect(await screen.findByText('Posted')).toBeInTheDocument()
+    expect(screen.getAllByText('600 KG').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('400 KG').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Cancel Order' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Record Production' })).toBeInTheDocument()
+  })
 })
+

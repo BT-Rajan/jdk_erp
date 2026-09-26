@@ -11,8 +11,12 @@ entry as long as together they stay within its quantity.
 
 Lifecycle: `draft` (editable, not executable) -> `issued` (formally
 issued; product, quantity, unit, BOM snapshot, machine and date are then
-fixed) ; draft or issued -> `cancelled` (reason, kept). Execution states
-belong to the execution pass.
+fixed) -> `in_progress` (execution started) -> `partially_completed`
+(some of the quantity produced) -> `completed` (all of it produced;
+final). Cancelling (reason, kept) is possible from draft, or from issued /
+in progress only while nothing has been produced. The produced quantity
+is never stored here: it is the sum of the order's posted executions
+(production_execution.py).
 
 At issue the production basis is snapshotted onto the order: the plan's
 BOM snapshot (base quantity; each component's quantity per base and its
@@ -30,9 +34,16 @@ from app.models.mixins import OrganisationScopedMixin, TimestampMixin
 
 ORDER_DRAFT = "draft"
 ORDER_ISSUED = "issued"
+# Execution states (P6 -- Production Execution).
+ORDER_IN_PROGRESS = "in_progress"
+ORDER_PARTIALLY_COMPLETED = "partially_completed"
+ORDER_COMPLETED = "completed"
 ORDER_CANCELLED = "cancelled"
-ORDER_STATUSES = (ORDER_DRAFT, ORDER_ISSUED, ORDER_CANCELLED)
-ORDER_ACTIVE = (ORDER_DRAFT, ORDER_ISSUED)
+ORDER_STATUSES = (ORDER_DRAFT, ORDER_ISSUED, ORDER_IN_PROGRESS, ORDER_PARTIALLY_COMPLETED, ORDER_COMPLETED, ORDER_CANCELLED)
+# Every order that still holds its schedule quantity (all but cancelled).
+ORDER_ACTIVE = (ORDER_DRAFT, ORDER_ISSUED, ORDER_IN_PROGRESS, ORDER_PARTIALLY_COMPLETED, ORDER_COMPLETED)
+# Production may be recorded against these.
+ORDER_EXECUTABLE = (ORDER_ISSUED, ORDER_IN_PROGRESS, ORDER_PARTIALLY_COMPLETED)
 
 
 class ProductionOrder(Base, TimestampMixin, OrganisationScopedMixin):
@@ -40,7 +51,9 @@ class ProductionOrder(Base, TimestampMixin, OrganisationScopedMixin):
     __table_args__ = (
         UniqueConstraint("organisation_id", "order_number", name="uq_production_orders_organisation_id_order_number"),
         CheckConstraint("quantity > 0", name="quantity_positive"),
-        CheckConstraint("status IN ('draft', 'issued', 'cancelled')", name="status_valid"),
+        CheckConstraint(
+            "status IN ('draft', 'issued', 'in_progress', 'partially_completed', 'completed', 'cancelled')", name="status_valid"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -76,6 +89,10 @@ class ProductionOrder(Base, TimestampMixin, OrganisationScopedMixin):
     issued_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     issued_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL", name="fk_production_orders_issued_by_user_id"), nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL", name="fk_production_orders_started_by_user_id"), nullable=True
     )
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

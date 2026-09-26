@@ -9,6 +9,7 @@ from app.models.fg_allocation import FgAllocation, SalesReservation
 from app.models.production_plan import ProductionPlan, ProductionPlanComponent
 from app.models.production_schedule import ProductionScheduleEntry
 from app.models.production_order import ProductionOrder, ProductionOrderComponent
+from app.models.production_execution import ProductionExecution, ProductionExecutionMaterial
 from app.models.feasibility_check import FeasibilityCheck, FeasibilityCheckLine
 from app.models.file import FileRecord
 from app.models.finished_goods_inventory import FinishedGoodsAdjustment, FinishedGoodsInventory, FinishedGoodsMovement
@@ -52,6 +53,8 @@ from app.models.user_team import UserTeam
 from app.models.warehouse import Warehouse
 
 __all__ = [
+    "ProductionExecution",
+    "ProductionExecutionMaterial",
     "ProductionOrder",
     "ProductionOrderComponent",
     "ProductionScheduleEntry",

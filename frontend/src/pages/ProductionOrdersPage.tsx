@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AccessDeniedState } from '@/components/ui/AccessDeniedState'
 import { Alert } from '@/components/ui/Alert'
-import { Badge, type BadgeTone } from '@/components/ui/Badge'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
@@ -19,12 +19,13 @@ import { TextareaField } from '@/components/forms/TextareaField'
 import { ApiError, apiClient } from '@/lib/apiClient'
 import { formatDate, formatDateTime, formatNumber } from '@/lib/format'
 import type { LookupOption, PaginatedResponse } from './rfqShared'
+import { PRODUCTION_ORDER_STATUS_LABELS as STATUS_LABELS, PRODUCTION_ORDER_STATUS_TONES as STATUS_TONES } from './productionShared'
 
 /** Mirrors backend/app/api/production_orders.py's ProductionOrderOut. */
 export interface ProductionOrder {
   id: number
   order_number: string
-  status: 'draft' | 'issued' | 'cancelled'
+  status: 'draft' | 'issued' | 'in_progress' | 'partially_completed' | 'completed' | 'cancelled'
   product_id: number
   product_name: string | null
   unit_of_measure_id: number
@@ -35,7 +36,27 @@ export interface ProductionOrder {
   notes: string | null
   bom_id: number | null
   bom_base_quantity: string | null
-  components: { raw_material_id: number; raw_material_name: string; quantity: string; unit_of_measure_id: number; required_quantity: string }[]
+  components: {
+    raw_material_id: number
+    raw_material_name: string
+    quantity: string
+    unit_of_measure_id: number
+    required_quantity: string
+    consumed_quantity?: string
+    available_quantity?: string | null
+  }[]
+  produced_quantity?: string
+  remaining_quantity?: string
+  started_at?: string | null
+  executions?: {
+    id: number
+    sequence: number
+    produced_quantity: string
+    unit_of_measure_id: number
+    executed_at: string
+    notes: string | null
+    status: string
+  }[]
   production_plan_id: number
   plan_source_type: 'customer_demand' | 'independent'
   production_schedule_entry_id: number
@@ -50,13 +71,14 @@ export interface ProductionOrder {
   history: { action: string; actor_user_id: number | null; created_at: string; details: string | null }[]
 }
 
-const STATUS_LABELS: Record<string, string> = { draft: 'Draft', issued: 'Issued', cancelled: 'Cancelled' }
-const STATUS_TONES: Record<string, BadgeTone> = { draft: 'warning', issued: 'success', cancelled: 'neutral' }
+const EXECUTABLE = ['issued', 'in_progress', 'partially_completed']
 const HISTORY_LABELS: Record<string, string> = {
   production_order_created: 'Created',
   production_order_updated: 'Edited',
   production_order_issued: 'Issued',
   production_order_cancelled: 'Cancelled',
+  production_started: 'Production started',
+  production_recorded: 'Production recorded',
 }
 
 const qty = (value: string | null) => (value === null ? '—' : formatNumber(value, { maximumFractionDigits: 4 }))
@@ -153,7 +175,11 @@ export function ProductionOrdersPage() {
   )
 }
 
-type Dialog = 'edit' | 'cancel' | null
+type Dialog = 'edit' | 'cancel' | 'record' | null
+
+function newReference(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+}
 
 /** One Production Order (`/production/orders/:orderId`). */
 export function ProductionOrderDetailPage() {
@@ -168,6 +194,9 @@ export function ProductionOrderDetailPage() {
   const [quantity, setQuantity] = useState('')
   const [notes, setNotes] = useState('')
   const [reason, setReason] = useState('')
+  const [executedAt, setExecutedAt] = useState('')
+  // One reference per Record Production submission: a retry never posts twice.
+  const [reference, setReference] = useState('')
   const unit = useUnitCodes()
 
   const load = useCallback(() => {
@@ -228,7 +257,25 @@ export function ProductionOrderDetailPage() {
                 </Button>
               </>
             )}
-            {order.status !== 'cancelled' && (
+            {order.status === 'issued' && (
+              <Button variant="secondary" onClick={() => act(() => apiClient.post(`/api/production-orders/${order.id}/start`))} disabled={busy}>
+                Start
+              </Button>
+            )}
+            {EXECUTABLE.includes(order.status) && (
+              <Button
+                onClick={() => {
+                  setQuantity('')
+                  setNotes('')
+                  setExecutedAt('')
+                  setReference(newReference())
+                  setDialog('record')
+                }}
+              >
+                Record Production
+              </Button>
+            )}
+            {['draft', 'issued', 'in_progress'].includes(order.status) && Number(order.produced_quantity ?? 0) === 0 && (
               <Button
                 variant="danger"
                 onClick={() => {
@@ -249,7 +296,9 @@ export function ProductionOrderDetailPage() {
         <KeyValue label="Status">
           <Badge tone={STATUS_TONES[order.status] ?? 'neutral'}>{STATUS_LABELS[order.status] ?? order.status}</Badge>
         </KeyValue>
-        <KeyValue label="Production Quantity" value={`${qty(order.quantity)} ${u}`} />
+        <KeyValue label="Planned Quantity" value={`${qty(order.quantity)} ${u}`} />
+        <KeyValue label="Produced" value={`${qty(order.produced_quantity ?? '0')} ${u}`} />
+        <KeyValue label="Remaining" value={`${qty(order.remaining_quantity ?? order.quantity)} ${u}`} />
         <KeyValue label="Scheduled Date" value={formatDate(order.scheduled_date)} />
         <KeyValue label="Production Line" value={`${order.production_line_name ?? '—'} (${order.machine_name ?? '—'})`} />
         <KeyValue label="Source" value={source(order)} />
@@ -274,7 +323,9 @@ export function ProductionOrderDetailPage() {
                   <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
                     <th className="py-2 pr-3">Raw material</th>
                     <th className="py-2 pr-3 text-right">Per BOM base</th>
-                    <th className="py-2 text-right">Required for this order</th>
+                    <th className="py-2 pr-3 text-right">Required for this order</th>
+                    <th className="py-2 pr-3 text-right">Consumed</th>
+                    <th className="py-2 text-right">Available now</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -282,13 +333,43 @@ export function ProductionOrderDetailPage() {
                     <tr key={c.raw_material_id} className="border-t border-ink-700">
                       <td className="py-2 pr-3">{c.raw_material_name}</td>
                       <td className="py-2 pr-3 text-right">{`${qty(c.quantity)} ${unit(c.unit_of_measure_id)}`}</td>
-                      <td className="py-2 text-right">{`${qty(c.required_quantity)} ${unit(c.unit_of_measure_id)}`}</td>
+                      <td className="py-2 pr-3 text-right">{`${qty(c.required_quantity)} ${unit(c.unit_of_measure_id)}`}</td>
+                      <td className="py-2 pr-3 text-right">{`${qty(c.consumed_quantity ?? '0')} ${unit(c.unit_of_measure_id)}`}</td>
+                      <td className="py-2 text-right">{c.available_quantity == null ? '—' : `${qty(c.available_quantity)} ${unit(c.unit_of_measure_id)}`}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </>
+        )}
+      </Card>
+
+      <Card className="space-y-3 p-6">
+        <FormSectionHeading>Execution history</FormSectionHeading>
+        {(order.executions ?? []).length === 0 ? (
+          <p className="text-sm text-gold-100/60">No production recorded yet.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
+                <th className="py-2 pr-3">Execution</th>
+                <th className="py-2 pr-3">Date</th>
+                <th className="py-2 pr-3 text-right">Produced</th>
+                <th className="py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(order.executions ?? []).map((e) => (
+                <tr key={e.id} className="border-t border-ink-700">
+                  <td className="py-2 pr-3">{e.sequence}</td>
+                  <td className="py-2 pr-3">{formatDateTime(e.executed_at)}</td>
+                  <td className="py-2 pr-3 text-right">{`${qty(e.produced_quantity)} ${unit(e.unit_of_measure_id)}`}</td>
+                  <td className="py-2">{e.status === 'posted' ? 'Posted' : e.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </Card>
 
@@ -307,7 +388,7 @@ export function ProductionOrderDetailPage() {
 
       <Modal
         open={dialog !== null}
-        title={dialog === 'cancel' ? 'Cancel production order' : 'Edit draft'}
+        title={dialog === 'cancel' ? 'Cancel production order' : dialog === 'record' ? 'Record production' : 'Edit draft'}
         onClose={() => setDialog(null)}
         footer={
           <>
@@ -319,10 +400,19 @@ export function ProductionOrderDetailPage() {
               onClick={() =>
                 dialog === 'cancel'
                   ? act(() => apiClient.post(`/api/production-orders/${order.id}/cancel`, { reason }))
-                  : act(() => apiClient.patch(`/api/production-orders/${order.id}`, { quantity: quantity.trim(), notes: notes.trim() || null }))
+                  : dialog === 'record'
+                    ? act(() =>
+                        apiClient.post(`/api/production-orders/${order.id}/executions`, {
+                          produced_quantity: quantity.trim(),
+                          executed_at: executedAt ? new Date(executedAt).toISOString() : null,
+                          notes: notes.trim() || null,
+                          client_reference: reference,
+                        }),
+                      )
+                    : act(() => apiClient.patch(`/api/production-orders/${order.id}`, { quantity: quantity.trim(), notes: notes.trim() || null }))
               }
             >
-              {dialog === 'cancel' ? 'Cancel Order' : 'Save'}
+              {dialog === 'cancel' ? 'Cancel Order' : dialog === 'record' ? 'Post Production' : 'Save'}
             </Button>
           </>
         }
@@ -336,6 +426,17 @@ export function ProductionOrderDetailPage() {
             </>
           )}
           {dialog === 'cancel' && <TextareaField label="Reason" required value={reason} onChange={(e) => setReason(e.target.value)} />}
+          {dialog === 'record' && (
+            <>
+              <p className="text-sm text-gold-100/70">
+                Remaining {qty(order.remaining_quantity ?? order.quantity)} {u}. Raw materials are consumed from this order's BOM snapshot
+                and the output goes into Finished Goods stock -- not to a customer.
+              </p>
+              <TextField label="Quantity produced" required type="number" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+              <TextField label="Produced at (optional)" type="datetime-local" value={executedAt} onChange={(e) => setExecutedAt(e.target.value)} />
+              <TextareaField label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </>
+          )}
         </div>
       </Modal>
     </div>

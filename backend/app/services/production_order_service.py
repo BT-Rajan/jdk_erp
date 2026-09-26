@@ -13,8 +13,8 @@ cancelling an order never touches stock, movements or allocation.
   snapshots the plan's BOM basis with each component's requirement for
   this quantity (bom_service.required_quantity) -- never re-resolving the
   current BOM, never converting units. Nothing is corrected silently.
-- cancel: draft or issued, with a reason (history kept). Execution states
-  and their cancellation rules belong to the execution pass.
+- cancel: with a reason (history kept) -- draft, or issued / in progress
+  before any production has been recorded; never afterwards.
 Callers audit and commit."""
 
 from datetime import datetime
@@ -30,6 +30,7 @@ from app.models.production_order import (
     ORDER_ACTIVE,
     ORDER_CANCELLED,
     ORDER_DRAFT,
+    ORDER_IN_PROGRESS,
     ORDER_ISSUED,
     ProductionOrder,
     ProductionOrderComponent,
@@ -37,7 +38,7 @@ from app.models.production_order import (
 from app.models.production_plan import PLAN_PLANNED, ProductionPlan
 from app.models.production_schedule import SCHEDULED, ProductionScheduleEntry
 from app.models.raw_material import RawMaterial
-from app.services import bom_service, document_numbering
+from app.services import bom_service, document_numbering, production_execution_service
 
 _ZERO = Decimal("0")
 
@@ -206,6 +207,10 @@ def cancel(db: Session, order: ProductionOrder, reason: str) -> str:
     order = _locked(db, order)
     if order.status == ORDER_CANCELLED:
         raise ConflictError("This Production Order is already cancelled.")
+    # P6: once anything has been produced the order is history, not a
+    # plan -- cancelling it would pretend production never happened.
+    if order.status not in (ORDER_DRAFT, ORDER_ISSUED, ORDER_IN_PROGRESS) or production_execution_service.produced_quantity(db, order.id) > _ZERO:
+        raise ConflictError("Production has already been recorded on this order; it cannot be cancelled.")
     previous = order.status
     order.status = ORDER_CANCELLED
     order.cancelled_at = datetime.utcnow()

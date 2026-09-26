@@ -30,7 +30,10 @@ RECEIPT = "receipt"
 RECEIPT_REVERSAL = "receipt_reversal"
 ADJUSTMENT = "adjustment"
 OPENING_STOCK = "opening_stock"
-MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL, ADJUSTMENT, OPENING_STOCK)
+# Production Execution (P6): raw material consumed by recorded production --
+# always OUT (negative), referencing the execution's material row.
+PRODUCTION_ISSUE = "production_issue"
+MOVEMENT_TYPES = (RECEIPT, RECEIPT_REVERSAL, ADJUSTMENT, OPENING_STOCK, PRODUCTION_ISSUE)
 
 # Generic (reference_type, reference_id), not a hard FK, so a future
 # Production/Sales movement can point at its own source document the same
@@ -53,6 +56,7 @@ PURCHASE_ORDER_LINE_REFERENCE = "purchase_order_line"
 PURCHASE_ORDER_RECEIPT_LINE_REFERENCE = "purchase_order_receipt_line"
 ADJUSTMENT_REFERENCE = "inventory_adjustment"
 OPENING_STOCK_REFERENCE = "opening_stock"
+PRODUCTION_EXECUTION_MATERIAL_REFERENCE = "production_execution_material"
 
 
 class StockMovement(Base, OrganisationScopedMixin):

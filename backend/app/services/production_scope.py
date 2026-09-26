@@ -4,8 +4,9 @@ scope file uses, not a new permission system. Admin/Super Admin bypass it
 the same way.
 
 - `view`: read Production Requirements (demand/shortfall records).
-- `manage`: act on them -- today only resolving a `bom_required`
-  requirement by snapshotting the product's active BOM.
+- `manage`: plan, schedule, issue and cancel (and resolve a
+  `bom_required` requirement's BOM snapshot).
+- `execute`: start Production Orders and record actual production.
 
 Sales-side changes that move a requirement (Admin quantity edits, order
 cancellation, delivery) stay under their own existing authority."""
@@ -20,6 +21,9 @@ from app.services import authorization_service
 MODULE_KEY = "production"
 VIEW = "view"
 MANAGE = "manage"
+# Production Execution (P6): start orders and record actual production --
+# shop-floor work, granted independently of planning (`manage`).
+EXECUTE = "execute"
 
 
 def can_perform(db: Session, user: User, action: str) -> bool:
