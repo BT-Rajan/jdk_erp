@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { FinishedGoodsAdjustmentsPage } from './FinishedGoodsAdjustmentsPage'
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }))
@@ -58,19 +59,19 @@ async function selectProductAndWarehouse() {
 
 describe('FinishedGoodsAdjustmentsPage', () => {
   it('loads products and warehouses on mount', async () => {
-    render(<FinishedGoodsAdjustmentsPage />)
+    render(<MemoryRouter><FinishedGoodsAdjustmentsPage /></MemoryRouter>)
     await waitFor(() => expect(getMock).toHaveBeenCalledWith('/api/products', { params: { page_size: 200 } }))
     expect(getMock).toHaveBeenCalledWith('/api/warehouses', { params: { page_size: 200 } })
   })
 
   it('shows a load error when products/warehouses fail to load', async () => {
     getMock.mockImplementation(() => Promise.reject(new Error('boom')))
-    render(<FinishedGoodsAdjustmentsPage />)
+    render(<MemoryRouter><FinishedGoodsAdjustmentsPage /></MemoryRouter>)
     expect(await screen.findByText('Failed to load products and warehouses.')).toBeInTheDocument()
   })
 
   it('rejects submission with no product, warehouse, quantity or reason selected', async () => {
-    render(<FinishedGoodsAdjustmentsPage />)
+    render(<MemoryRouter><FinishedGoodsAdjustmentsPage /></MemoryRouter>)
     await screen.findByRole('combobox', { name: 'Product' })
 
     await userEvent.click(screen.getByRole('button', { name: 'Record Adjustment' }))
@@ -84,7 +85,7 @@ describe('FinishedGoodsAdjustmentsPage', () => {
 
   it('posts a positive quantity for Stock In', async () => {
     postMock.mockResolvedValue({ data: adjustmentResult() })
-    render(<FinishedGoodsAdjustmentsPage />)
+    render(<MemoryRouter><FinishedGoodsAdjustmentsPage /></MemoryRouter>)
     await selectProductAndWarehouse()
     await userEvent.type(screen.getByLabelText('Quantity'), '5')
     await userEvent.type(screen.getByLabelText('Reason'), 'Cycle count correction')
@@ -102,7 +103,7 @@ describe('FinishedGoodsAdjustmentsPage', () => {
 
   it('negates the quantity for Stock Out', async () => {
     postMock.mockResolvedValue({ data: adjustmentResult({ quantity: '-3.0000' }) })
-    render(<FinishedGoodsAdjustmentsPage />)
+    render(<MemoryRouter><FinishedGoodsAdjustmentsPage /></MemoryRouter>)
     await selectProductAndWarehouse()
     await userEvent.selectOptions(screen.getByLabelText('Direction'), 'Stock Out (decrease)')
     await userEvent.type(screen.getByLabelText('Quantity'), '3')
@@ -119,7 +120,7 @@ describe('FinishedGoodsAdjustmentsPage', () => {
 
   it('shows the resulting balance on success and clears the quantity/reason fields', async () => {
     postMock.mockResolvedValue({ data: adjustmentResult() })
-    render(<FinishedGoodsAdjustmentsPage />)
+    render(<MemoryRouter><FinishedGoodsAdjustmentsPage /></MemoryRouter>)
     await selectProductAndWarehouse()
     await userEvent.type(screen.getByLabelText('Quantity'), '5')
     await userEvent.type(screen.getByLabelText('Reason'), 'Cycle count correction')
@@ -135,7 +136,7 @@ describe('FinishedGoodsAdjustmentsPage', () => {
     postMock.mockRejectedValue(
       new ApiError({ code: 'BUSINESS_RULE_ERROR', message: 'This would leave negative Finished Goods stock on hand.' }, 400),
     )
-    render(<FinishedGoodsAdjustmentsPage />)
+    render(<MemoryRouter><FinishedGoodsAdjustmentsPage /></MemoryRouter>)
     await selectProductAndWarehouse()
     await userEvent.selectOptions(screen.getByLabelText('Direction'), 'Stock Out (decrease)')
     await userEvent.type(screen.getByLabelText('Quantity'), '999')

@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { InventoryReconciliationPage } from './InventoryReconciliationPage'
+import { MemoryRouter } from 'react-router-dom'
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
 
@@ -44,7 +45,7 @@ describe('InventoryReconciliationPage', () => {
       },
     })
 
-    render(<InventoryReconciliationPage />)
+    render(<MemoryRouter><InventoryReconciliationPage /></MemoryRouter>)
 
     expect(await screen.findByText('Cement')).toBeInTheDocument()
     expect(getMock).toHaveBeenCalledWith('/api/inventory/reconciliation')
@@ -58,7 +59,7 @@ describe('InventoryReconciliationPage', () => {
     const { ApiError } = await import('@/lib/apiClient')
     getMock.mockRejectedValue(new ApiError({ code: 'FORBIDDEN', message: 'You do not have permission to view this report.' }, 403))
 
-    render(<InventoryReconciliationPage />)
+    render(<MemoryRouter><InventoryReconciliationPage /></MemoryRouter>)
 
     expect(await screen.findByText('You do not have permission to view this report.')).toBeInTheDocument()
   })
@@ -66,7 +67,7 @@ describe('InventoryReconciliationPage', () => {
   it('shows an empty state when there are no snapshots yet', async () => {
     getMock.mockResolvedValue({ data: { pairs_checked: 0, mismatches_found: 0, pairs: [] } })
 
-    render(<InventoryReconciliationPage />)
+    render(<MemoryRouter><InventoryReconciliationPage /></MemoryRouter>)
 
     expect(await screen.findByText('Nothing to reconcile')).toBeInTheDocument()
   })

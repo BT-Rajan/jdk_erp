@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Alert } from '@/components/ui/Alert'
 import { Button } from '@/components/ui/Button'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -63,6 +64,21 @@ export function InventoryAdjustmentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<AdjustmentResult | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // Arriving from Stock Reconciliation: pre-select the mismatched pair.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const prefillMaterialId = (location.state as { rawMaterialId?: number } | null)?.rawMaterialId
+  const prefillWarehouseId = (location.state as { warehouseId?: number } | null)?.warehouseId
+  useEffect(() => {
+    if (!prefillMaterialId && !prefillWarehouseId) return
+    navigate(location.pathname, { replace: true, state: null })
+    setForm((prev) => ({
+      ...prev,
+      raw_material_id: prefillMaterialId ? String(prefillMaterialId) : prev.raw_material_id,
+      warehouse_id: prefillWarehouseId ? String(prefillWarehouseId) : prev.warehouse_id,
+    }))
+  }, [prefillMaterialId, prefillWarehouseId])
 
   useEffect(() => {
     let cancelled = false

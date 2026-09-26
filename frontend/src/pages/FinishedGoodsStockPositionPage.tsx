@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Alert } from '@/components/ui/Alert'
 import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -82,8 +83,14 @@ const MOVEMENT_TYPE_TONES: Record<string, BadgeTone> = {
  * any cell here at all. Correcting a balance is a separate, deliberate
  * action on FinishedGoodsAdjustmentsPage. */
 export function FinishedGoodsStockPositionPage() {
+  const navigate = useNavigate()
   const [positions, setPositions] = useState<StockPosition[] | null>(null)
   const [error, setError] = useState<string | undefined>(undefined)
+
+  const openAdjustment = (p: StockPosition) =>
+    navigate('/inventory/finished-goods-adjustments', {
+      state: { productId: p.product_id, warehouseId: p.warehouse_id ?? undefined },
+    })
 
   const [historyTarget, setHistoryTarget] = useState<StockPosition | null>(null)
   const [movements, setMovements] = useState<MovementEntry[] | null>(null)
@@ -138,14 +145,20 @@ export function FinishedGoodsStockPositionPage() {
       label: '',
       alwaysVisible: true,
       align: 'right',
-      render: (p) =>
-        p.warehouse_id !== null ? (
-          <Button variant="secondary" size="sm" onClick={() => openHistory(p)}>
-            View History
+      render: (p) => (
+        <div className="flex justify-end gap-2">
+          {p.warehouse_id !== null ? (
+            <Button variant="secondary" size="sm" onClick={() => openHistory(p)}>
+              View History
+            </Button>
+          ) : (
+            <span className="text-xs text-gold-100/40">No movements yet</span>
+          )}
+          <Button variant="secondary" size="sm" onClick={() => openAdjustment(p)}>
+            Adjust
           </Button>
-        ) : (
-          <span className="text-xs text-gold-100/40">No movements yet</span>
-        ),
+        </div>
+      ),
     },
   ]
 

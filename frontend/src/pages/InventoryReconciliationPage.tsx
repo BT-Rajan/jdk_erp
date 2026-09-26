@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Alert } from '@/components/ui/Alert'
 import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -36,8 +38,12 @@ interface ReconciliationReport {
  * something for a human to investigate and correct with a Controlled
  * Stock Adjustment; this page never fixes one itself. */
 export function InventoryReconciliationPage() {
+  const navigate = useNavigate()
   const [report, setReport] = useState<ReconciliationReport | null>(null)
   const [error, setError] = useState<string | undefined>(undefined)
+
+  const openAdjustment = (pair: ReconciliationPair) =>
+    navigate('/inventory/adjustments', { state: { rawMaterialId: pair.raw_material_id, warehouseId: pair.warehouse_id } })
 
   useEffect(() => {
     apiClient
@@ -59,6 +65,18 @@ export function InventoryReconciliationPage() {
       render: (pair) => (
         <Badge tone={pair.matches ? 'success' : 'danger'}>{pair.matches ? 'Matches' : 'Mismatch'}</Badge>
       ),
+    },
+    {
+      key: 'actions',
+      label: '',
+      alwaysVisible: true,
+      align: 'right' as const,
+      render: (pair) =>
+        pair.matches ? null : (
+          <Button variant="secondary" size="sm" onClick={() => openAdjustment(pair)}>
+            Record Adjustment
+          </Button>
+        ),
     },
   ]
 

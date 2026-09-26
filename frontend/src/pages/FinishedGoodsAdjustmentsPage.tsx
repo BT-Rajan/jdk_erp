@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Alert } from '@/components/ui/Alert'
 import { Button } from '@/components/ui/Button'
 import { PageHeader } from '@/components/ui/PageHeader'
@@ -66,6 +67,21 @@ export function FinishedGoodsAdjustmentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<AdjustmentResult | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // Arriving from Finished Goods Stock Position: pre-select that product/warehouse.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const prefillProductId = (location.state as { productId?: number } | null)?.productId
+  const prefillWarehouseId = (location.state as { warehouseId?: number } | null)?.warehouseId
+  useEffect(() => {
+    if (!prefillProductId && !prefillWarehouseId) return
+    navigate(location.pathname, { replace: true, state: null })
+    setForm((prev) => ({
+      ...prev,
+      product_id: prefillProductId ? String(prefillProductId) : prev.product_id,
+      warehouse_id: prefillWarehouseId ? String(prefillWarehouseId) : prev.warehouse_id,
+    }))
+  }, [prefillProductId, prefillWarehouseId])
 
   useEffect(() => {
     let cancelled = false

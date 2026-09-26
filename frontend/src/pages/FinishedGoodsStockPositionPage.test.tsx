@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { FinishedGoodsStockPositionPage } from './FinishedGoodsStockPositionPage'
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }))
@@ -64,7 +65,7 @@ describe('FinishedGoodsStockPositionPage', () => {
   it('fetches and lists stock positions with product, code, category, warehouse, UOM, quantity, status and active flag', async () => {
     getMock.mockResolvedValue({ data: STOCK_POSITIONS })
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
 
     expect(await screen.findByText('Widget')).toBeInTheDocument()
     expect(getMock).toHaveBeenCalledWith('/api/finished-goods-inventory')
@@ -82,7 +83,7 @@ describe('FinishedGoodsStockPositionPage', () => {
       data: [{ ...STOCK_POSITIONS[0], quantity_on_hand: '0.0000', status: 'out_of_stock' }],
     })
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
 
     expect(await screen.findByText('Out of Stock')).toBeInTheDocument()
   })
@@ -90,7 +91,7 @@ describe('FinishedGoodsStockPositionPage', () => {
   it('flags an inactive Product without hiding its stock', async () => {
     getMock.mockResolvedValue({ data: [{ ...STOCK_POSITIONS[0], product_is_active: false }] })
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
 
     expect(await screen.findByText('Widget')).toBeInTheDocument()
     expect(screen.getByText('Inactive')).toBeInTheDocument()
@@ -117,7 +118,7 @@ describe('FinishedGoodsStockPositionPage', () => {
       ],
     })
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
 
     expect(await screen.findByText('Product A')).toBeInTheDocument()
     expect(screen.getByText('No Stock Record')).toBeInTheDocument()
@@ -130,7 +131,7 @@ describe('FinishedGoodsStockPositionPage', () => {
     const { ApiError } = await import('@/lib/apiClient')
     getMock.mockRejectedValue(new ApiError({ code: 'FORBIDDEN', message: 'You do not have permission to view this.' }, 403))
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
 
     expect(await screen.findByText('You do not have permission to view this.')).toBeInTheDocument()
   })
@@ -138,7 +139,7 @@ describe('FinishedGoodsStockPositionPage', () => {
   it('shows an empty state when no Finished Goods Products exist', async () => {
     getMock.mockResolvedValue({ data: [] })
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
 
     expect(await screen.findByText('No Finished Goods Products yet')).toBeInTheDocument()
   })
@@ -150,7 +151,7 @@ describe('FinishedGoodsStockPositionPage', () => {
       return Promise.reject(new Error(`Unexpected GET ${url}`))
     })
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
     await screen.findByText('Widget')
 
     await userEvent.click(screen.getByRole('button', { name: 'View History' }))
@@ -173,7 +174,7 @@ describe('FinishedGoodsStockPositionPage', () => {
       return Promise.reject(new Error(`Unexpected GET ${url}`))
     })
 
-    render(<FinishedGoodsStockPositionPage />)
+    render(<MemoryRouter><FinishedGoodsStockPositionPage /></MemoryRouter>)
     await screen.findByText('Widget')
     await userEvent.click(screen.getByRole('button', { name: 'View History' }))
 
