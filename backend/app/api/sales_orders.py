@@ -18,9 +18,11 @@ from app.core.roles import ADMIN_ROLES
 from app.core.timezone import now_jdk
 from app.models.audit_event import SALES_MODULE, SALES_ORDER_CANCELLED, SALES_ORDER_UPDATED
 from app.models.customer import Customer
+from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
 from app.models.sales_order import HANDED_OFF, SalesOrder
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
+from app.schemas.production_requirement import LineFulfilmentOut, ProductionRequirementOut
 from app.schemas.sales_order import SalesOrderCancelRequest, SalesOrderOut, SalesOrderUpdateRequest
 from app.services import audit_service, customer_scope, quotation_service, sales_order_service
 
@@ -94,6 +96,35 @@ def get_sales_order(
     order_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> SalesOrderOut:
     return order_out(db, _get_visible_order(db, order_id, current_user), current_user)
+
+
+@router.get("/{order_id}/fulfilment", response_model=list[LineFulfilmentOut])
+def get_sales_order_fulfilment(
+    order_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[LineFulfilmentOut]:
+    """Read-only (S15.2): per line, what Finished Goods covered at hand-off
+    and the Production Requirement for any shortfall. Same visibility as
+    the order itself. There is no write path here -- the order's
+    commercial data is never changed from the production side."""
+    order = _get_visible_order(db, order_id, current_user)
+    line_numbers = {line.id: line.line_number for line in order.lines}
+    requirements = {
+        r.sales_order_line_id: r
+        for r in db.query(ProductionRequirement).filter(ProductionRequirement.sales_order_id == order.id)
+    }
+    rows = []
+    for fulfilment in (
+        db.query(SalesOrderLineFulfilment)
+        .filter(SalesOrderLineFulfilment.sales_order_id == order.id)
+        .order_by(SalesOrderLineFulfilment.id)
+    ):
+        out = LineFulfilmentOut.model_validate(fulfilment)
+        out.line_number = line_numbers.get(fulfilment.sales_order_line_id)
+        requirement = requirements.get(fulfilment.sales_order_line_id)
+        if requirement is not None:
+            out.production_requirement = ProductionRequirementOut.model_validate(requirement)
+        rows.append(out)
+    return rows
 
 
 @router.post("/{order_id}/cancel", response_model=SalesOrderOut)

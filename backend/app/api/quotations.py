@@ -30,10 +30,13 @@ from app.models.audit_event import (
     SALES_MODULE,
     SALES_ORDER_CREATED,
     SALES_ORDER_HANDED_OFF,
+    FULFILMENT_ASSESSED,
+    PRODUCTION_MODULE,
 )
 from app.models.customer import Customer
 from app.models.feasibility_check import FeasibilityCheck
 from app.models.quotation import ACCEPTED, CONVERTED, DRAFT, Quotation
+from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
 from app.models.sales_order import SalesOrder
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
@@ -640,6 +643,35 @@ def convert_to_sales_order(
         details=(
             f"number: {order.order_number}, quotation: {quotation.quotation_number}, "
             f"total: {order.total_amount} {order.currency}"
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+    # The fulfilment assessment made at hand-off (S15.2): what each line
+    # takes from stock and what becomes a Production Requirement.
+    fulfilments = db.query(SalesOrderLineFulfilment).filter(SalesOrderLineFulfilment.sales_order_id == order.id).all()
+    requirements = {
+        r.sales_order_line_id: r
+        for r in db.query(ProductionRequirement).filter(ProductionRequirement.sales_order_id == order.id)
+    }
+    line_numbers = {line.id: line.line_number for line in order.lines}
+    audit_service.log_event(
+        db,
+        action=FULFILMENT_ASSESSED,
+        module=PRODUCTION_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type="sales_order",
+        entity_id=order.id,
+        result="success",
+        details=f"number: {order.order_number}; "
+        + "; ".join(
+            f"line {line_numbers[f.sales_order_line_id]}: from stock {f.fg_covered_quantity}, to produce {f.production_quantity}"
+            + (
+                f" (requirement {requirements[f.sales_order_line_id].id}, {requirements[f.sales_order_line_id].status})"
+                if f.sales_order_line_id in requirements
+                else ""
+            )
+            for f in fulfilments
         ),
         ip_address=request.client.host if request.client else None,
     )

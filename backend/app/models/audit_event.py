@@ -120,6 +120,7 @@ SALES_ORDER_CREATED = "sales_order_created"
 SALES_ORDER_UPDATED = "sales_order_updated"
 SALES_ORDER_CANCELLED = "sales_order_cancelled"
 SALES_ORDER_HANDED_OFF = "sales_order_handed_off"
+FULFILMENT_ASSESSED = "fulfilment_assessed"
 QUOTATION_PRICE_DECIDED = "price_decided"
 FEASIBILITY_RECORDED = "feasibility_recorded"
 FEASIBILITY_DECIDED = "feasibility_decided"
@@ -143,6 +144,8 @@ PROCUREMENT_MODULE = "procurement"
 INVENTORY_MODULE = "inventory"
 # Phase 3 -- Sales documents (quotations, and later orders/delivery notes).
 SALES_MODULE = "sales"
+# Production demand arising from handed-off Sales Orders (S15.2).
+PRODUCTION_MODULE = "production"
 
 
 class AuditEvent(Base):

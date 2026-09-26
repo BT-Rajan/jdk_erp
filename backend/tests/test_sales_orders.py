@@ -146,32 +146,35 @@ def test_after_handoff_admin_changes_date_quantity_and_price_with_history(client
     users, customer, widget = setup
     order = _convert(client, _accepted_quotation(client, customer, widget)["id"]).json()
     url = f"/api/sales-orders/{order['id']}"
-    change = {"reason": "Customer asked for 5 a day later", "requested_delivery_date": "2026-10-06", "lines": [_line(widget, "5", "95")]}
+    change = {"reason": "Agreed a day later at 95", "requested_delivery_date": "2026-10-06", "lines": [_line(widget, "3", "95")]}
 
     assert client.patch(url, json=change, headers=_headers(client, "salesman_a")).status_code == 403
     assert client.patch(url, json=change, headers=_headers(client, "head")).status_code == 403
     admin = _headers(client, "boss")
     assert client.patch(url, json={**change, "reason": " "}, headers=admin).status_code == 422
     assert client.patch(url, json={k: v for k, v in change.items() if k != "reason"}, headers=admin).status_code == 422
-    other_unit = {**_line(widget, "5", "95"), "unit_of_measure_id": widget.unit_of_measure_id + 1}
+    other_unit = {**_line(widget, "3", "95"), "unit_of_measure_id": widget.unit_of_measure_id + 1}
     assert client.patch(url, json={**change, "lines": [other_unit]}, headers=admin).status_code == 422  # units fixed
     assert client.patch(url, json={**change, "lines": [_line(widget), _line(widget)]}, headers=admin).status_code == 422
     assert db_session.query(AuditEvent).filter(AuditEvent.action == SALES_ORDER_UPDATED).count() == 0
 
     changed = client.patch(url, json={**change, "order_number": "2669999", "total_amount": "1", "status": "cancelled"}, headers=admin).json()
     assert (changed["order_number"], changed["status"], changed["requested_delivery_date"]) == (order["order_number"], "handed_off", "2026-10-06")
-    assert Decimal(changed["total_amount"]) == Decimal("475")
+    assert Decimal(changed["total_amount"]) == Decimal("285")
 
     event = db_session.query(AuditEvent).filter(AuditEvent.action == SALES_ORDER_UPDATED).one()
     assert event.actor_user_id == users["admin"].id and event.created_at is not None
     for fragment in (
         "requested_delivery_date: 2026-10-05 -> 2026-10-06",
-        "line 1 quantity: 3 -> 5",
         "line 1 unit_price: 100 -> 95",
-        "total_amount: 300 -> 475",
-        "reason: Customer asked for 5 a day later",
+        "total_amount: 300 -> 285",
+        "reason: Agreed a day later at 95",
     ):
         assert fragment in event.details
+    # S15.1: the quantity was assessed for fulfilment at hand-off, so Admin
+    # must resolve that before it can change.
+    more = client.patch(url, json={"reason": "Customer wants 5", "lines": [_line(widget, "5", "95")]}, headers=admin)
+    assert more.status_code == 409 and "Resolve the affected fulfilment" in more.json()["error"]["message"]
 
     client.post(f"{url}/cancel", json={"reason": "Lost"}, headers=admin)
     assert client.patch(url, json=change, headers=admin).status_code == 409
@@ -205,7 +208,7 @@ def test_the_order_customer_can_never_change(client, db_session, organisation, s
     assert client.get(url, headers=admin).json()["customer_id"] == customer.id
     assert db_session.query(AuditEvent).filter(AuditEvent.action == SALES_ORDER_UPDATED).count() == 0
     # Naming the same customer is not a change; other Admin edits still work.
-    same = client.patch(url, json={"reason": "Qty", "customer_id": customer.id, "lines": [_line(widget, "4")]}, headers=admin)
+    same = client.patch(url, json={"reason": "Price", "customer_id": customer.id, "lines": [_line(widget, "3", "95")]}, headers=admin)
     assert same.status_code == 200 and same.json()["customer_id"] == customer.id
 
 

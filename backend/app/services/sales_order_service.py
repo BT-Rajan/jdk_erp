@@ -8,11 +8,15 @@
   the quotation's readiness (S9) is `ready` -- requested date not past,
   prices in range or Admin-approved, feasibility current and acceptable.
   The order copies the quotation's commercial snapshot; the quotation
-  becomes CONVERTED and is locked.
+  becomes CONVERTED and is locked. At the same hand-off each line's
+  fulfilment is assessed and any Finished Goods shortfall becomes a
+  Production Requirement (production_requirement_service, S15.2).
 - cancel: Admin only after hand-off, reason mandatory.
 - admin_update: Admin only, reason mandatory; the requested date,
   quantities and prices may change -- never the customer (S13.5),
-  products or units. Returns every change as old -> new for the audit.
+  products or units. A line's quantity cannot change once its
+  fulfilment was assessed; Admin must resolve that first (S15.1).
+  Returns every change as old -> new for the audit.
 
 Authority is checked by the API layer; this module enforces state. The
 order is fulfilment's source of truth, but this module reserves,
@@ -25,7 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import ConflictError, ValidationError
 from app.models.quotation import ACCEPTED, CONVERTED, Quotation
 from app.models.sales_order import CANCELLED, HANDED_OFF, HANDOFF_AUTOMATIC, SalesOrder, SalesOrderLine
-from app.services import document_numbering, quotation_readiness_service, quotation_service
+from app.services import document_numbering, production_requirement_service, quotation_readiness_service, quotation_service
 
 _UNSET = object()
 
@@ -104,6 +108,7 @@ def convert(db: Session, quotation: Quotation, user_id: int, now: datetime) -> S
     quotation.status = CONVERTED
     db.add(quotation)
     db.flush()
+    production_requirement_service.create_for_order(db, order)
     return order
 
 
@@ -160,6 +165,15 @@ def admin_update(
             raise ValidationError(
                 "Only quantities and prices can change on a Sales Order; its products and units are fixed.",
                 fields={"lines": "Keep every line's product and unit, in order."},
+            )
+        assessed = production_requirement_service.lines_with_fulfilment(db, order)
+        affected = [line.line_number for v, line in zip(values, order.lines) if v["quantity"] != line.quantity and line.id in assessed]
+        if affected:
+            raise ConflictError(
+                "The quantity of line(s) "
+                + ", ".join(str(n) for n in affected)
+                + " was already assessed for fulfilment (stock / production requirement). "
+                "Resolve the affected fulfilment first; dates and prices can still change."
             )
         for v, line in zip(values, order.lines):
             if v["quantity"] != line.quantity:
