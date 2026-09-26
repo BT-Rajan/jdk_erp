@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ActionMenu } from '@/components/ui/ActionMenu'
 import { Alert } from '@/components/ui/Alert'
-import { Badge } from '@/components/ui/Badge'
+import { Badge, type BadgeTone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable'
 import { FilterBar } from '@/components/ui/FilterBar'
@@ -70,10 +70,60 @@ interface Filters {
   search: string
 }
 
+/** Every status a PO can carry while still visible here (backend's
+ * `_VISIBLE`) -- a receivable PO is `sent`/`partially_received`; the rest
+ * only appear when arriving via openPurchaseOrderId from the PO page. */
+const STATUS_LABELS: Record<string, string> = {
+  sent: 'Sent — Awaiting Delivery',
+  partially_received: 'Partially Received',
+  reconciliation_required: 'Reconciliation Required',
+  received: 'Received — Awaiting Payment',
+  payment_reconciliation: 'Payment Reconciliation',
+  closed: 'Closed',
+}
+
+const STATUS_TONES: Record<string, BadgeTone> = {
+  sent: 'gold',
+  partially_received: 'warning',
+  reconciliation_required: 'danger',
+  received: 'info',
+  payment_reconciliation: 'danger',
+  closed: 'success',
+}
+
 const DECIMAL_RE = /^\d+(\.\d+)?$/
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
+}
+
+const MATERIALS_PREVIEW_LIMIT = 4
+
+/** Ordered / previously received / remaining per material, straight from
+ * the same line data the Receive modal uses -- no new aggregate figure is
+ * computed, since lines can mix units and a single summed quantity would
+ * be meaningless. Answers "what's expected, what arrived" from the list
+ * alone, without opening the PO. */
+function MaterialsProgress({ lines }: { lines: ReceivingLine[] }) {
+  const shown = lines.slice(0, MATERIALS_PREVIEW_LIMIT)
+  const hiddenCount = lines.length - shown.length
+  return (
+    <div className="flex flex-col gap-0.5">
+      {shown.map((line) => {
+        const remaining = Number(line.remaining_quantity)
+        return (
+          <div key={line.id} className="text-xs leading-tight">
+            <span className="text-gold-100">{line.material_name}</span>{' '}
+            <span className="text-gold-100/50">
+              {formatNumber(line.received_quantity)}/{formatNumber(line.ordered_quantity)} {line.unit_code}
+              {remaining > 0 ? ` · ${formatNumber(line.remaining_quantity)} remaining` : ' · Complete'}
+            </span>
+          </div>
+        )
+      })}
+      {hiddenCount > 0 && <div className="text-xs text-gold-100/50">+{hiddenCount} more…</div>}
+    </div>
+  )
 }
 
 async function fetchReceivable({ page, pageSize, filters }: { page: number; pageSize: number; filters: Filters }): Promise<ServerTableResult<ReceivingPo>> {
@@ -202,8 +252,14 @@ export function GoodsReceivingPage() {
   const columns: DataTableColumn<ReceivingPo>[] = [
     { key: 'po_number', label: 'PO Number', render: (po) => po.po_number },
     { key: 'supplier', label: 'Supplier', render: (po) => po.supplier_name },
-    { key: 'expected', label: 'Expected Delivery', render: (po) => formatDate(po.expected_delivery_date) },
-    { key: 'items', label: 'Items', hideBelow: 'sm', render: (po) => po.lines.length },
+    { key: 'expected', label: 'Expected Delivery', hideBelow: 'sm', render: (po) => formatDate(po.expected_delivery_date) },
+    { key: 'materials', label: 'Ordered / Received / Remaining', render: (po) => <MaterialsProgress lines={po.lines} /> },
+    {
+      key: 'status',
+      label: 'Status',
+      hideBelow: 'sm',
+      render: (po) => <Badge tone={STATUS_TONES[po.status] ?? 'neutral'}>{STATUS_LABELS[po.status] ?? po.status}</Badge>,
+    },
     {
       key: 'actions',
       label: '',
@@ -259,7 +315,9 @@ export function GoodsReceivingPage() {
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
               <div><span className="text-gold-100/50">Supplier: </span>{target.supplier_name}</div>
               <div><span className="text-gold-100/50">Expected Delivery: </span>{formatDate(target.expected_delivery_date)}</div>
-              {!target.can_receive && <div><Badge tone="warning">Not open for receiving</Badge></div>}
+              <div>
+                <Badge tone={STATUS_TONES[target.status] ?? 'neutral'}>{STATUS_LABELS[target.status] ?? target.status}</Badge>
+              </div>
               {target.delivery_instructions && (
                 <div className="col-span-2"><span className="text-gold-100/50">Instructions: </span>{target.delivery_instructions}</div>
               )}
@@ -270,7 +328,9 @@ export function GoodsReceivingPage() {
                 <tr className="text-left text-xs uppercase tracking-wide text-gold-100/50">
                   <th className="py-2 pr-3">Material</th>
                   <th className="py-2 pr-3">Ordered</th>
-                  <th className="py-2 pr-3">Already Received</th>
+                  <th className="py-2 pr-3">Previously Received</th>
+                  <th className="py-2 pr-3">Remaining</th>
+                  <th className="py-2 pr-3">UOM</th>
                   {target.can_receive && <th className="py-2 pr-3">Received Now</th>}
                   {target.can_receive && <th className="py-2 pr-3">Remarks</th>}
                 </tr>
@@ -279,8 +339,10 @@ export function GoodsReceivingPage() {
                 {target.lines.map((line) => (
                   <tr key={line.id} className="border-t border-ink-700">
                     <td className="py-2 pr-3">{line.material_name}</td>
-                    <td className="py-2 pr-3">{formatNumber(line.ordered_quantity)} {line.unit_code}</td>
-                    <td className="py-2 pr-3">{formatNumber(line.received_quantity)} {line.unit_code}</td>
+                    <td className="py-2 pr-3">{formatNumber(line.ordered_quantity)}</td>
+                    <td className="py-2 pr-3">{formatNumber(line.received_quantity)}</td>
+                    <td className="py-2 pr-3 font-medium text-gold-300">{formatNumber(line.remaining_quantity)}</td>
+                    <td className="py-2 pr-3 text-gold-100/50">{line.unit_code}</td>
                     {target.can_receive && (
                       <td className="py-2 pr-3">
                         <input
@@ -291,8 +353,7 @@ export function GoodsReceivingPage() {
                           className="w-24 rounded border border-ink-700 bg-ink-900 px-2 py-1 text-sm"
                           value={quantities[line.id] ?? ''}
                           onChange={(e) => setQuantities((prev) => ({ ...prev, [line.id]: e.target.value }))}
-                        />{' '}
-                        {line.unit_code}
+                        />
                       </td>
                     )}
                     {target.can_receive && (
@@ -322,9 +383,9 @@ export function GoodsReceivingPage() {
 
             {target.receipts.length > 0 && (
               <div>
-                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Receipts</h3>
+                <h3 className="mb-2 text-xs uppercase tracking-wide text-gold-100/50">Receipts (most recent first)</h3>
                 <ul className="flex flex-col gap-2 text-sm">
-                  {target.receipts.map((receipt) => (
+                  {target.receipts.slice().reverse().map((receipt) => (
                     <li key={receipt.id} className="rounded-md border border-ink-700 p-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium">{receipt.receipt_number}</span>
