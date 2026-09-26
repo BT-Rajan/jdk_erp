@@ -57,12 +57,9 @@ from app.models.purchase_order import (
     PurchaseOrderRevisionLine,
 )
 from app.models.raw_material import RawMaterial
-from app.services import inventory_service
+from app.services import document_numbering, inventory_service
 
 _MAX_CODE_ATTEMPTS = 5
-_MAX_YEARLY_SEQUENCE = 9999
-_MAX_YEARLY_PAYMENT_SEQUENCE = 9999
-_MAX_YEARLY_RECEIPT_SEQUENCE = 9999
 # docs/modules/purchase_orders.md #39 -- goods can only be received
 # against a PO that has been sent to the supplier.
 _RECEIVABLE_STATUSES = (SENT, PARTIALLY_RECEIVED)
@@ -129,17 +126,15 @@ def generate_po_number(db: Session, organisation_id: int, today: date | None = N
     (docs/modules/purchase_orders.md #21) -- the exact same shape and
     mechanism as app/services/rfq_service.generate_rfq_number, reused for
     a second document type rather than reinvented."""
-    today = today or date.today()
-    prefix = f"{today.year % 100:02d}5"
-    existing = (
-        db.query(PurchaseOrder)
-        .filter(PurchaseOrder.organisation_id == organisation_id, PurchaseOrder.po_number.like(f"{prefix}%"))
-        .count()
+    return document_numbering.next_yearly_number(
+        db,
+        number_column=PurchaseOrder.po_number,
+        organisation_column=PurchaseOrder.organisation_id,
+        organisation_id=organisation_id,
+        type_digit=document_numbering.PURCHASE_ORDER_TYPE_DIGIT,
+        today=today or date.today(),
+        limit_message="This organisation has reached the maximum number of purchase orders for this year.",
     )
-    sequence = existing + 1
-    if sequence > _MAX_YEARLY_SEQUENCE:
-        raise ConflictError("This organisation has reached the maximum number of purchase orders for this year.")
-    return f"{prefix}{sequence:04d}"
 
 
 def default_warehouse(db: Session, organisation_id: int) -> Warehouse:
@@ -493,17 +488,15 @@ def generate_receipt_number(db: Session, organisation_id: int, today: date | Non
     """`YY9NNNN` -- the fourth use of the same generator shape (RFQ `3`,
     PO `5`, Payment `7`), for Goods Receipt (docs/modules/purchase_orders.md
     #40)."""
-    today = today or date.today()
-    prefix = f"{today.year % 100:02d}9"
-    existing = (
-        db.query(PurchaseOrderReceipt)
-        .filter(PurchaseOrderReceipt.organisation_id == organisation_id, PurchaseOrderReceipt.receipt_number.like(f"{prefix}%"))
-        .count()
+    return document_numbering.next_yearly_number(
+        db,
+        number_column=PurchaseOrderReceipt.receipt_number,
+        organisation_column=PurchaseOrderReceipt.organisation_id,
+        organisation_id=organisation_id,
+        type_digit=document_numbering.GOODS_RECEIPT_TYPE_DIGIT,
+        today=today or date.today(),
+        limit_message="This organisation has reached the maximum number of goods receipts for this year.",
     )
-    sequence = existing + 1
-    if sequence > _MAX_YEARLY_RECEIPT_SEQUENCE:
-        raise ConflictError("This organisation has reached the maximum number of goods receipts for this year.")
-    return f"{prefix}{sequence:04d}"
 
 
 def assert_receipt_transition_allowed(current_status: str, target_status: str) -> None:
@@ -762,17 +755,15 @@ def generate_payment_number(db: Session, organisation_id: int, today: date | Non
     """`YY7NNNN` -- the same generator shape used twice already
     (RFQ's `3`, Purchase Order's `5`), extended with a third fixed digit
     (`7`) for this document type (docs/modules/purchase_orders.md #31)."""
-    today = today or date.today()
-    prefix = f"{today.year % 100:02d}7"
-    existing = (
-        db.query(PurchaseOrderPayment)
-        .filter(PurchaseOrderPayment.organisation_id == organisation_id, PurchaseOrderPayment.payment_number.like(f"{prefix}%"))
-        .count()
+    return document_numbering.next_yearly_number(
+        db,
+        number_column=PurchaseOrderPayment.payment_number,
+        organisation_column=PurchaseOrderPayment.organisation_id,
+        organisation_id=organisation_id,
+        type_digit=document_numbering.PURCHASE_ORDER_PAYMENT_TYPE_DIGIT,
+        today=today or date.today(),
+        limit_message="This organisation has reached the maximum number of payments for this year.",
     )
-    sequence = existing + 1
-    if sequence > _MAX_YEARLY_PAYMENT_SEQUENCE:
-        raise ConflictError("This organisation has reached the maximum number of payments for this year.")
-    return f"{prefix}{sequence:04d}"
 
 
 def paid_amount(payments: list[PurchaseOrderPayment]) -> Decimal:
