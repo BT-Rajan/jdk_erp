@@ -34,6 +34,7 @@ interface Product {
   selling_price: string
   min_selling_price: string | null
   max_selling_price: string | null
+  production_staff_required?: number | null
   manufacturing_lead_time_days: number | null
   customer_lead_time_days: number | null
   is_active: boolean
@@ -68,6 +69,7 @@ const productSchema = z.object({
   selling_price: z.string().min(1, 'Selling price is required').refine((v) => DECIMAL_RE.test(v), 'Enter a valid amount'),
   min_selling_price: z.string().refine((v) => v === '' || DECIMAL_RE.test(v), 'Enter a valid amount'),
   max_selling_price: z.string().refine((v) => v === '' || DECIMAL_RE.test(v), 'Enter a valid amount'),
+  production_staff_required: z.string().refine((v) => v === '' || INTEGER_RE.test(v), 'Enter a whole number of staff'),
   manufacturing_lead_time_days: z.string().refine((v) => v === '' || INTEGER_RE.test(v), 'Enter a whole number of days'),
   customer_lead_time_days: z.string().refine((v) => v === '' || INTEGER_RE.test(v), 'Enter a whole number of days'),
 })
@@ -82,6 +84,7 @@ const emptyDefaults: ProductFormValues = {
   selling_price: '',
   min_selling_price: '',
   max_selling_price: '',
+  production_staff_required: '',
   manufacturing_lead_time_days: '',
   customer_lead_time_days: '',
 }
@@ -95,6 +98,7 @@ function toFormValues(product: Product): ProductFormValues {
     selling_price: product.selling_price,
     min_selling_price: product.min_selling_price ?? '',
     max_selling_price: product.max_selling_price ?? '',
+    production_staff_required: product.production_staff_required == null ? '' : String(product.production_staff_required),
     manufacturing_lead_time_days: product.manufacturing_lead_time_days == null ? '' : String(product.manufacturing_lead_time_days),
     customer_lead_time_days: product.customer_lead_time_days == null ? '' : String(product.customer_lead_time_days),
   }
@@ -226,6 +230,7 @@ export function ProductsPage() {
         selling_price: values.selling_price,
         min_selling_price: values.min_selling_price || null,
         max_selling_price: values.max_selling_price || null,
+        production_staff_required: values.production_staff_required === '' ? null : Number(values.production_staff_required),
         manufacturing_lead_time_days: values.manufacturing_lead_time_days === '' ? null : Number(values.manufacturing_lead_time_days),
         customer_lead_time_days: values.customer_lead_time_days === '' ? null : Number(values.customer_lead_time_days),
       }
@@ -428,6 +433,12 @@ export function ProductsPage() {
               hint="Quoting above this needs Admin approval."
               {...register('max_selling_price')}
               error={errors.max_selling_price?.message}
+            />
+            <TextField
+              label="Production Staff Required"
+              hint="Staff needed to produce this product -- used by the 0–2 working-day feasibility check."
+              {...register('production_staff_required')}
+              error={errors.production_staff_required?.message}
             />
             <TextField
               label="Manufacturing Lead Time (days)"

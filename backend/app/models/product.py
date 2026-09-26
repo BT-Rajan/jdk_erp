@@ -82,6 +82,9 @@ class Product(Base, TimestampMixin, OrganisationScopedMixin):
     # Both optional; when both are set, min <= max.
     min_selling_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     max_selling_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    # Production staff needed to produce this product -- the Admin-set
+    # figure the 0-2 working-day manpower check sums. NULL = not set.
+    production_staff_required: Mapped[int | None] = mapped_column(Integer, nullable=True)
     manufacturing_lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     customer_lead_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)

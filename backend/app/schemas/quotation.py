@@ -108,3 +108,27 @@ class SameDayOverrideRequest(BaseModel):
         if not value:
             raise ValueError("A reason is required.")
         return value
+
+
+class FeasibilityStageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    stage: str
+    status: str
+    reason_codes: list[str]
+    details: list[str]
+
+
+class FeasibilityCalculationOut(BaseModel):
+    """`applies` is False unless the requested delivery date classifies
+    as within_2_working_days right now."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    delivery_window: str | None
+    applies: bool
+    decision: str | None
+    failed_stage: str | None
+    reason_codes: list[str]
+    working_days_available: int | None
+    stages: list[FeasibilityStageOut]

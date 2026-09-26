@@ -116,21 +116,32 @@ def classify_delivery_window(
     if not is_working_day(required_date, get_holiday_dates(db, organisation_id, required_date, required_date)):
         return NOT_SERVABLE
 
-    cutoff = db.query(Organisation.same_day_cutoff_time).filter(Organisation.id == organisation_id).scalar()
-    evaluation_start = today
-    if current.time() > cutoff:
-        # Missed the cut-off: the request is evaluated from the next
-        # working day, whatever date it asks for. The requested date
-        # itself is never changed.
-        evaluation_start = next_working_day(
-            today,
-            get_holiday_dates(db, organisation_id, today, today + timedelta(days=_NEXT_WORKING_DAY_HORIZON_DAYS)),
-        )
-
+    evaluation_start = applicable_working_day(db, organisation_id, current)
     if required_date == evaluation_start:
         return SAME_DAY
 
-    holidays = get_holiday_dates(db, organisation_id, evaluation_start + timedelta(days=1), required_date)
-    if count_working_days_after(evaluation_start, required_date, holidays) <= _WITHIN_WORKING_DAYS_LIMIT:
+    if working_days_until(db, organisation_id, evaluation_start, required_date) <= _WITHIN_WORKING_DAYS_LIMIT:
         return WITHIN_2_WORKING_DAYS
     return MORE_THAN_2_WORKING_DAYS
+
+
+def applicable_working_day(db: Session, organisation_id: int, current: datetime) -> date:
+    """Today (Kuwait) while `current` is at or before the same-day
+    cut-off; after it, the next working day. The requested date itself
+    is never changed."""
+    current = to_jdk_time(current)
+    today = current.date()
+    cutoff = db.query(Organisation.same_day_cutoff_time).filter(Organisation.id == organisation_id).scalar()
+    if current.time() <= cutoff:
+        return today
+    return next_working_day(
+        today,
+        get_holiday_dates(db, organisation_id, today, today + timedelta(days=_NEXT_WORKING_DAY_HORIZON_DAYS)),
+    )
+
+
+def working_days_until(db: Session, organisation_id: int, start: date, until: date) -> int:
+    """Working days after `start`, up to and including `until` -- counted
+    exactly up to 3 (enough to tell "within 2" from "more than 2")."""
+    holidays = get_holiday_dates(db, organisation_id, start + timedelta(days=1), until)
+    return count_working_days_after(start, until, holidays)

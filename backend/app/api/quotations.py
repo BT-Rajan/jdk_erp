@@ -19,13 +19,14 @@ from app.models.quotation import Quotation
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.quotation import (
+    FeasibilityCalculationOut,
     QuotationCreateRequest,
     QuotationLineOut,
     QuotationOut,
     SameDayGateOut,
     SameDayOverrideRequest,
 )
-from app.services import audit_service, customer_scope, quotation_service, same_day_fg_service
+from app.services import audit_service, customer_scope, feasibility_service, quotation_service, same_day_fg_service
 
 router = APIRouter(prefix="/api/quotations", tags=["quotations"])
 
@@ -176,3 +177,23 @@ def decide_same_day_override(
     )
     db.commit()
     return same_day_fg_service.evaluate_quotation(db, _get_visible_quotation(db, quotation_id, admin))
+
+
+@router.get("/{quotation_id}/feasibility", response_model=FeasibilityCalculationOut)
+def get_feasibility(
+    quotation_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> feasibility_service.FeasibilityCalculation:
+    """Read-only 0-2 working-day feasibility calculation (Sales S7),
+    evaluated now in Kuwait time. Nothing is stored or changed."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if quotation.requested_delivery_date is None:
+        return feasibility_service.FeasibilityCalculation(delivery_window=None, applies=False)
+    return feasibility_service.calculate(
+        db,
+        quotation.organisation_id,
+        quotation.requested_delivery_date,
+        [
+            same_day_fg_service.RequestedQuantity(line.product_id, line.quantity, line.unit_of_measure_id)
+            for line in quotation.lines
+        ],
+    )
