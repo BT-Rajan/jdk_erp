@@ -1,9 +1,9 @@
 """Delivery Instructions (Delivery D2): shipment tranches of a Sales Order,
 created manually by warehouse staff. Every route needs the
 `inventory:deliver` grant (Admins always have it) and is scoped to the
-caller's organisation. Creation and every shipment change (quantity,
-pallets) are audited. No fulfilment, stock movement or Sales Order change
-yet."""
+caller's organisation. Creation, every shipment change (quantity,
+pallets) and every state transition (fulfilled, not fulfilled, retried)
+are audited."""
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session, selectinload
@@ -14,7 +14,14 @@ from app.core.errors import NotFoundError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
 from app.core.roles import ADMIN_ROLES
-from app.models.audit_event import DELIVERY_INSTRUCTION_CREATED, DELIVERY_MODULE, DELIVERY_SHIPMENT_UPDATED
+from app.models.audit_event import (
+    DELIVERY_FULFILLED,
+    DELIVERY_INSTRUCTION_CREATED,
+    DELIVERY_MODULE,
+    DELIVERY_NOT_FULFILLED,
+    DELIVERY_RETRIED,
+    DELIVERY_SHIPMENT_UPDATED,
+)
 from app.models.delivery_instruction import DeliveryInstruction, DeliveryInstructionLine
 from app.models.sales_order import SalesOrder
 from app.models.user import User
@@ -22,6 +29,7 @@ from app.schemas.delivery_instruction import (
     DeliveryInstructionCreateRequest,
     DeliveryInstructionOut,
     DeliveryLinePositionOut,
+    DeliveryNotFulfilledRequest,
     DeliveryPositionOut,
     DeliveryShipmentUpdateRequest,
 )
@@ -192,3 +200,74 @@ def update_shipment_line(
     db.commit()
     db.expire_all()
     return _query(db, current_user).filter(DeliveryInstruction.id == instruction_id).one()
+
+
+def _get_instruction(db: Session, user: User, instruction_id: int) -> DeliveryInstruction:
+    instruction = _query(db, user).filter(DeliveryInstruction.id == instruction_id).first()
+    if instruction is None:
+        raise NotFoundError("Delivery instruction not found.")
+    return instruction
+
+
+def _audit_transition(db: Session, request: Request, user: User, action: str, instruction: DeliveryInstruction, details: str) -> None:
+    audit_service.log_event(
+        db,
+        action=action,
+        module=DELIVERY_MODULE,
+        organisation_id=user.organisation_id,
+        actor_user_id=user.id,
+        entity_type="delivery_instruction",
+        entity_id=instruction.id,
+        result="success",
+        details=f"number: {instruction.delivery_number}, sales_order: {instruction.sales_order_number}; {details}",
+        ip_address=request.client.host if request.client else None,
+    )
+
+
+def _reload(db: Session, user: User, instruction_id: int) -> DeliveryInstruction:
+    db.commit()
+    db.expire_all()
+    return _query(db, user).filter(DeliveryInstruction.id == instruction_id).one()
+
+
+@router.post("/{instruction_id}/fulfil", response_model=DeliveryInstructionOut)
+def fulfil_delivery_instruction(
+    instruction_id: int, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> DeliveryInstruction:
+    """pending -> fulfilled (Delivery D4). Refused unless every line is
+    within its order line's remaining permitted quantity (or carries an
+    Admin override). A repeated request is a 409 and changes nothing."""
+    inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
+    instruction = _get_instruction(db, current_user, instruction_id)
+    delivery_instruction_service.fulfil(db, instruction, current_user.id)
+    quantities = "; ".join(f"line {line.sales_order_line_id}: {line.quantity}" for line in instruction.lines)
+    _audit_transition(db, request, current_user, DELIVERY_FULFILLED, instruction, f"pending -> fulfilled; {quantities}")
+    return _reload(db, current_user, instruction_id)
+
+
+@router.post("/{instruction_id}/not-fulfilled", response_model=DeliveryInstructionOut)
+def mark_delivery_not_fulfilled(
+    instruction_id: int,
+    payload: DeliveryNotFulfilledRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DeliveryInstruction:
+    """pending -> not_fulfilled with a mandatory reason (Delivery D4)."""
+    inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
+    instruction = _get_instruction(db, current_user, instruction_id)
+    delivery_instruction_service.mark_not_fulfilled(db, instruction, current_user.id, payload.reason)
+    _audit_transition(db, request, current_user, DELIVERY_NOT_FULFILLED, instruction, f"pending -> not_fulfilled; reason: {instruction.not_fulfilled_reason}")
+    return _reload(db, current_user, instruction_id)
+
+
+@router.post("/{instruction_id}/retry", response_model=DeliveryInstructionOut)
+def retry_delivery_instruction(
+    instruction_id: int, request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> DeliveryInstruction:
+    """not_fulfilled -> pending: attempt the same instruction again (Delivery D4)."""
+    inventory_scope.require_permission(db, current_user, inventory_scope.DELIVER)
+    instruction = _get_instruction(db, current_user, instruction_id)
+    delivery_instruction_service.retry(db, instruction)
+    _audit_transition(db, request, current_user, DELIVERY_RETRIED, instruction, "not_fulfilled -> pending")
+    return _reload(db, current_user, instruction_id)

@@ -25,16 +25,16 @@ fulfils or checks payment. The caller checks the permission, audits and
 commits."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import ROUND_CEILING, Decimal
 
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, ValidationError
-from app.models.delivery_instruction import FULFILLED, PENDING, DeliveryInstruction, DeliveryInstructionLine
+from app.models.delivery_instruction import FULFILLED, NOT_FULFILLED, PENDING, DeliveryInstruction, DeliveryInstructionLine
 from app.models.organisation import Organisation
 from app.models.product import Product
-from app.models.sales_order import HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
+from app.models.sales_order import CANCELLED, HANDED_OFF, PARTIALLY_DELIVERED, SalesOrder, SalesOrderLine
 from app.models.unit import UnitOfMeasure
 from app.services import document_numbering, uom_conversion
 
@@ -215,9 +215,10 @@ def record_shipment(
     the changes as "field: old -> new" (empty if nothing changed).
 
     Quantity: positive, in the line's stock unit (no conversion; the
-    product must still use it). Above the order line's remaining permitted
-    quantity (cumulative allowance) only an Admin, with a reason. The
-    Sales Order is never changed.
+    product must still use it). A changed quantity above the order line's
+    remaining permitted quantity (cumulative allowance) needs an Admin,
+    with a reason; a change that leaves the quantity alone keeps any
+    earlier override. The Sales Order is never changed.
     Pallets: a whole number >= 1. The default is recalculated from the
     quantity every time; the count used follows it unless the warehouse
     set one, which is kept until cleared by sending null. A product that
@@ -237,7 +238,11 @@ def record_shipment(
     new_quantity = quantity if quantity is not None else line.quantity
     reason = (override_reason or "").strip() or None
     position = line_position(db, db.get(SalesOrderLine, line.sales_order_line_id), instruction.scrap_allowance_percent)
-    if exceeds_permitted(position, new_quantity):
+    if new_quantity == line.quantity and reason is None:
+        # Quantity untouched (e.g. a pallet-only change): nothing to re-approve;
+        # fulfilment checks the limit again anyway.
+        reason = line.quantity_override_reason
+    elif exceeds_permitted(position, new_quantity):
         permitted = format(position.remaining_permitted_quantity.normalize(), "f")
         if not is_admin:
             raise ValidationError(
@@ -286,3 +291,81 @@ def record_shipment(
     db.add(line)
     db.flush()
     return changes
+
+
+# --- Fulfilment states (Delivery D4) ----------------------------------------------
+
+
+def _conflict_for(status: str) -> ConflictError:
+    if status == FULFILLED:
+        return ConflictError("This delivery has already been fulfilled.")
+    if status == NOT_FULFILLED:
+        return ConflictError("This delivery was not fulfilled -- retry it first.")
+    return ConflictError(f"This delivery can't do that while it is {status.replace('_', ' ')}.")
+
+
+def _transition(db: Session, instruction: DeliveryInstruction, from_status: str, values: dict) -> None:
+    """Moves the instruction only if it is still in `from_status`, as one
+    conditional UPDATE -- a repeated or concurrent request finds nothing to
+    change and gets a conflict, so no transition ever applies twice."""
+    changed = (
+        db.query(DeliveryInstruction)
+        .filter(DeliveryInstruction.id == instruction.id, DeliveryInstruction.status == from_status)
+        .update(values, synchronize_session=False)
+    )
+    if not changed:
+        db.refresh(instruction)
+        raise _conflict_for(instruction.status)
+    db.refresh(instruction)
+
+
+def check_fulfilment(db: Session, instruction: DeliveryInstruction) -> None:
+    """A pending instruction of a live order whose every line is within
+    its order line's remaining permitted quantity (cumulative allowance,
+    counting only fulfilled instructions) -- or carries the Admin override
+    recorded when its quantity was set above it (Delivery D3)."""
+    if instruction.status != PENDING:
+        raise _conflict_for(instruction.status)
+    order = db.get(SalesOrder, instruction.sales_order_id)
+    if order is None or order.status == CANCELLED:
+        raise ConflictError("The Sales Order is cancelled; this delivery can't be fulfilled.")
+    for line in instruction.lines:
+        position = line_position(db, db.get(SalesOrderLine, line.sales_order_line_id), instruction.scrap_allowance_percent)
+        if exceeds_permitted(position, line.quantity) and not line.quantity_override_reason:
+            permitted = format(position.remaining_permitted_quantity.normalize(), "f")
+            raise ConflictError(
+                f"Line {line.sales_order_line_id}: {format(line.quantity.normalize(), 'f')} is above what may still be "
+                f"delivered on this order line ({permitted}); an Admin must set the quantity with an override reason."
+            )
+
+
+def fulfil(db: Session, instruction: DeliveryInstruction, user_id: int) -> None:
+    """pending -> fulfilled, after check_fulfilment. Final: its shipment
+    quantity now counts toward the Sales Order and can't change."""
+    check_fulfilment(db, instruction)
+    _transition(db, instruction, PENDING, {"status": FULFILLED, "fulfilled_at": datetime.utcnow(), "fulfilled_by_user_id": user_id})
+
+
+def mark_not_fulfilled(db: Session, instruction: DeliveryInstruction, user_id: int, reason: str) -> None:
+    """pending -> not_fulfilled with its mandatory reason; counts for nothing."""
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValidationError("Say why the delivery was not fulfilled.", fields={"reason": "Required."})
+    _transition(
+        db,
+        instruction,
+        PENDING,
+        {"status": NOT_FULFILLED, "not_fulfilled_reason": reason, "not_fulfilled_at": datetime.utcnow(), "not_fulfilled_by_user_id": user_id},
+    )
+
+
+def retry(db: Session, instruction: DeliveryInstruction) -> None:
+    """not_fulfilled -> pending: the same instruction is attempted again
+    (its quantity may be reviewed first). The failed attempt stays in the
+    audit trail."""
+    _transition(
+        db,
+        instruction,
+        NOT_FULFILLED,
+        {"status": PENDING, "not_fulfilled_reason": None, "not_fulfilled_at": None, "not_fulfilled_by_user_id": None},
+    )

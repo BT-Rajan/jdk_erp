@@ -43,6 +43,10 @@ class DeliveryInstructionOut(BaseModel):
     status: str
     # The Sales Order's allowance %, locked by its first instruction.
     scrap_allowance_percent: Decimal
+    fulfilled_at: datetime | None = None
+    fulfilled_by_user_id: int | None = None
+    not_fulfilled_reason: str | None = None
+    not_fulfilled_at: datetime | None = None
     created_by_user_id: int | None
     created_at: datetime
     lines: list[DeliveryInstructionLineOut]
@@ -80,3 +84,7 @@ class DeliveryShipmentUpdateRequest(BaseModel):
     pallet_count: int | None = Field(default=None, ge=1, strict=True)
     # Required when an Admin sets a quantity above the remaining permitted.
     override_reason: str | None = Field(default=None, max_length=2000)
+
+
+class DeliveryNotFulfilledRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
