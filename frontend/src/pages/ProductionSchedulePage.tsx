@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { AccessDeniedState } from '@/components/ui/AccessDeniedState'
 import { Alert } from '@/components/ui/Alert'
 import { Badge } from '@/components/ui/Badge'
@@ -97,6 +98,32 @@ function useUnits() {
 }
 
 type EntryDialog = { kind: 'move'; entry: ScheduleEntry } | { kind: 'cancel'; entry: ScheduleEntry } | null
+
+/** Creates a draft Production Order for a schedule entry and opens it. */
+function CreateOrderButton({ entry }: { entry: ScheduleEntry }) {
+  const navigate = useNavigate()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  async function create() {
+    setBusy(true)
+    setError(null)
+    try {
+      const { data } = await apiClient.post<{ id: number }>('/api/production-orders', { production_schedule_entry_id: entry.id })
+      navigate(`/production/orders/${data.id}`)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not create the order.')
+      setBusy(false)
+    }
+  }
+  return (
+    <span title={error ?? undefined}>
+      <Button variant="secondary" onClick={create} isLoading={busy} disabled={busy}>
+        Create Order
+      </Button>
+      {error && <span className="block text-xs text-red-400">{error}</span>}
+    </span>
+  )
+}
 
 /** Move / change quantity / cancel one schedule entry (shared by the day
  * screen and the plan dialog). The server enforces every rule. */
@@ -216,6 +243,7 @@ function EntriesTable({ entries, unit, onAction }: { entries: ScheduleEntry[]; u
                 <td className="py-2 text-right">
                   {e.status === 'scheduled' && (
                     <span className="flex justify-end gap-2">
+                      <CreateOrderButton entry={e} />
                       <Button variant="secondary" onClick={() => onAction({ kind: 'move', entry: e })}>Move</Button>
                       <Button variant="danger" onClick={() => onAction({ kind: 'cancel', entry: e })}>Cancel</Button>
                     </span>

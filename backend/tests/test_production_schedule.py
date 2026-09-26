@@ -11,13 +11,13 @@ import pytest
 
 from app.api import quotations as quotations_api
 from app.api import sales_orders as sales_orders_api
-from app.core.database import Base
 from app.core.roles import ADMIN, MANAGER, TEAM_MEMBER
 from app.core.security import hash_password
 from app.core.timezone import JDK_TIMEZONE
 from app.models.audit_event import PRODUCTION_RESCHEDULED, PRODUCTION_SCHEDULE_CANCELLED, PRODUCTION_SCHEDULED, AuditEvent
 from app.models.bom import ACTIVE, Bom, BomComponent
 from app.models.customer import Customer
+from app.models.production_order import ProductionOrder
 from app.models.finished_goods_inventory import FinishedGoodsInventory, FinishedGoodsMovement
 from app.models.inventory import RawMaterialInventory, StockMovement
 from app.models.organisation import Organisation
@@ -157,7 +157,7 @@ def test_a_plan_is_split_across_days_within_its_quantity_on_working_days_only(cl
 
     # Scheduling touched no inventory and created no Production Order.
     assert _inventory(db_session) == before
-    assert not any("production_order" in t for t in Base.metadata.tables)
+    assert db_session.query(ProductionOrder).count() == 0
 
 
 def test_daily_capacity_load_remaining_and_overload(client, db_session, setup):

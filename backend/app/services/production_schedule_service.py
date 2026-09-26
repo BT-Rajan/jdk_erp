@@ -34,7 +34,7 @@ from app.models.production_plan import CUSTOMER_DEMAND, PLAN_PLANNED, Production
 from app.models.production_schedule import SCHEDULE_CANCELLED, SCHEDULED, ProductionScheduleEntry
 from app.models.product import Product
 from app.models.unit import UnitOfMeasure
-from app.services import uom_conversion, working_calendar_service
+from app.services import production_order_service, uom_conversion, working_calendar_service
 
 _ZERO = Decimal("0")
 _Q = Decimal("0.0001")
@@ -124,6 +124,10 @@ def _sequence(db: Session, machine_id: int, day: date, wanted: int | None, exclu
     return wanted
 
 
+def _has_orders(db: Session, **filters) -> bool:
+    return production_order_service.has_active_orders(db, **filters)
+
+
 def _locked_plan(db: Session, plan_id: int, organisation_id: int) -> ProductionPlan:
     plan = (
         db.query(ProductionPlan)
@@ -185,6 +189,8 @@ def change(
     plan = _locked_plan(db, entry.production_plan_id, entry.organisation_id)
     if entry.status != SCHEDULED:
         raise ConflictError("A cancelled schedule entry cannot be changed.")
+    if _has_orders(db, entry_id=entry.id):
+        raise ConflictError("This entry has a Production Order; cancel the order first to change the schedule.")
     if plan.status != PLAN_PLANNED:
         raise ConflictError(f"Its Production Plan is {plan.status}; the entry cannot be changed.")
     changes = []
@@ -220,6 +226,8 @@ def cancel(db: Session, entry: ProductionScheduleEntry, reason: str) -> None:
         raise ValidationError("Say why the schedule entry is cancelled.", fields={"reason": "Required."})
     if entry.status != SCHEDULED:
         raise ConflictError("This schedule entry is already cancelled.")
+    if _has_orders(db, entry_id=entry.id):
+        raise ConflictError("This entry has a Production Order; cancel the order first.")
     entry.status = SCHEDULE_CANCELLED
     entry.cancelled_at = datetime.utcnow()
     entry.cancellation_reason = reason
@@ -227,7 +235,10 @@ def cancel(db: Session, entry: ProductionScheduleEntry, reason: str) -> None:
 
 
 def cancel_for_plan(db: Session, plan: ProductionPlan, reason: str) -> list[ProductionScheduleEntry]:
-    """A cancelled plan leaves no executable schedule behind."""
+    """A cancelled plan leaves no executable schedule behind. Refused while
+    the plan still has an active Production Order (cancel that first)."""
+    if _has_orders(db, plan_id=plan.id):
+        raise ConflictError("This plan has an active Production Order; cancel the order first.")
     entries = _active_entries(db, plan.id)
     for entry in entries:
         entry.status = SCHEDULE_CANCELLED

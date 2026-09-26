@@ -13,12 +13,12 @@ import pytest
 
 from app.api import quotations as quotations_api
 from app.api import sales_orders as sales_orders_api
-from app.core.database import Base
 from app.core.roles import ADMIN, TEAM_MEMBER
 from app.core.security import hash_password
 from app.core.timezone import JDK_TIMEZONE
 from app.models.bom import ACTIVE, Bom, BomComponent
 from app.models.customer import Customer
+from app.models.production_order import ProductionOrder
 from app.models.finished_goods_inventory import FinishedGoodsInventory, FinishedGoodsMovement
 from app.models.inventory import StockMovement
 from app.models.production_requirement import ProductionRequirement, SalesOrderLineFulfilment
@@ -181,5 +181,8 @@ def test_a_missing_bom_is_flagged_and_the_required_by_date_follows_the_order(cli
     assert _requirement(client)["required_by_date"] == "2026-10-12"
 
 
-def test_no_production_order_exists_in_this_pass():
-    assert not any("production_order" in name for name in Base.metadata.tables)
+def test_requirement_and_allocation_changes_create_no_production_order(client, db_session, setup):
+    customer, widget, _, _, _ = setup
+    order = _order(client, customer, widget, "1000")
+    assert _allocate(client, order, "1").status_code == 409  # nothing free; demand stays
+    assert db_session.query(ProductionOrder).count() == 0

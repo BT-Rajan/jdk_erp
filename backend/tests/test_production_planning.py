@@ -13,7 +13,6 @@ import pytest
 
 from app.api import quotations as quotations_api
 from app.api import sales_orders as sales_orders_api
-from app.core.database import Base
 from app.core.roles import ADMIN, MANAGER, TEAM_MEMBER
 from app.core.security import hash_password
 from app.core.timezone import JDK_TIMEZONE
@@ -26,6 +25,7 @@ from app.models.audit_event import (
 )
 from app.models.bom import ACTIVE, Bom, BomComponent
 from app.models.customer import Customer
+from app.models.production_order import ProductionOrder
 from app.models.finished_goods_inventory import FinishedGoodsInventory, FinishedGoodsMovement
 from app.models.inventory import RawMaterialInventory, StockMovement
 from app.models.product import Product
@@ -243,7 +243,7 @@ def test_customer_and_independent_plans_never_touch_inventory_or_orders(client, 
 
     # Nothing moved; no Production Order exists; the order and demand are untouched.
     assert _inventory(db_session) == before
-    assert not any("production_order" in t for t in Base.metadata.tables)
+    assert db_session.query(ProductionOrder).count() == 0
     db_session.expire_all()
     assert (Decimal(db_session.get(ProductionRequirement, requirement_id).quantity), db_session.get(ProductionRequirement, requirement_id).status) == (400, "open")
     assert client.get(f"/api/sales-orders/{order['id']}", headers=_headers(client, "boss")).json()["status"] == "handed_off"

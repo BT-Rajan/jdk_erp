@@ -107,7 +107,7 @@ describe('ProductionSchedulePage', () => {
 
 describe('PlanScheduleDialog', () => {
   it('shows planned / scheduled / unscheduled and schedules the rest', async () => {
-    render(<PlanScheduleDialog planId={11} onClose={() => undefined} />)
+    render(<MemoryRouter><PlanScheduleDialog planId={11} onClose={() => undefined} /></MemoryRouter>)
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('250 KG')).toBeInTheDocument()
     expect(within(dialog).getByText('Not fully scheduled')).toBeInTheDocument()
@@ -118,5 +118,14 @@ describe('PlanScheduleDialog', () => {
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith('/api/production-schedule', { production_plan_id: 11, scheduled_date: '2026-09-29', quantity: '250' }),
     )
+  })
+})
+
+describe('Create Order from a schedule entry', () => {
+  it('creates a draft Production Order for the entry', async () => {
+    postMock.mockResolvedValue({ data: { id: 77 } })
+    render(<MemoryRouter><ProductionSchedulePage /></MemoryRouter>)
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Order' }))
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/api/production-orders', { production_schedule_entry_id: 5 }))
   })
 })
