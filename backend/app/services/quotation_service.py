@@ -5,7 +5,7 @@ runs; nothing here reserves stock, touches inventory, production or
 payment, or moves a quotation beyond draft."""
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.currency import DEFAULT_CURRENCY, round_currency
 from app.core.errors import ConflictError, ValidationError
 from app.models.product import Product
-from app.models.quotation import DRAFT, Quotation, QuotationLine
+from app.models.quotation import ACCEPTED, DRAFT, REJECTED, VALIDITY_DAYS, Quotation, QuotationLine
 from app.services import document_numbering
 
 
@@ -124,6 +124,7 @@ def create_quotation(
             total_amount=subtotal,
             price_approval_required=any(values["price_approval_required"] for values in line_values),
             requested_delivery_date=requested_delivery_date,
+            valid_until=quotation_date + timedelta(days=VALIDITY_DAYS),
         )
         quotation.lines = [QuotationLine(**values) for values in line_values]
         return quotation
@@ -152,7 +153,9 @@ def update_quotation(
     requested_delivery_date=_UNSET,
     lines: list[LineInput] | None = None,
 ) -> list[str]:
-    """Controlled edit of a draft quotation (Sales S10). Only the fields
+    """Controlled edit of a quotation (Sales S10). Who may edit depends on
+    its status and is enforced by the caller (S11.2 / S12.1: the owning
+    salesman edits a draft; only Admin edits an accepted or rejected one). Only the fields
     passed change; lines are replaced as a whole and re-priced and
     re-validated exactly like creation. The number, date, status,
     currency, owner and amounts are never taken from the caller. Returns
@@ -161,8 +164,6 @@ def update_quotation(
     A change to customer, requested date or lines makes any earlier
     feasibility result stale automatically (feasibility_record_service.
     is_current compares against these inputs)."""
-    if quotation.status != DRAFT:
-        raise ConflictError("Only a draft quotation can be edited.")
     changed: list[str] = []
 
     if customer_id is not None and customer_id != quotation.customer_id:
@@ -215,4 +216,49 @@ def decide_price(db: Session, quotation: Quotation, decision: str, reason: str, 
     quotation.price_decision_by_user_id = user_id
     quotation.price_decision_at = datetime.utcnow()
     db.add(quotation)
+    return previous
+
+
+# --- Acceptance / rejection / renewal (Sales S12) ---------------------------
+
+
+def is_expired(quotation: Quotation, today: date) -> bool:
+    """A draft past its valid_until (Kuwait date). Accepted and rejected
+    quotations are decided and no longer expire."""
+    return quotation.status == DRAFT and today > quotation.valid_until
+
+
+def accept(quotation: Quotation, user_id: int, today: date) -> None:
+    """Records the customer's acceptance. Only a draft within its validity;
+    no readiness prerequisite (S12.1). The caller checks authority (owning
+    salesman), audits and commits."""
+    if quotation.status != DRAFT:
+        raise ConflictError(f"Only a draft quotation can be accepted (this one is {quotation.status}).")
+    if is_expired(quotation, today):
+        raise ConflictError("This quotation has expired -- renew it before it can be accepted.")
+    quotation.status = ACCEPTED
+    quotation.accepted_at = datetime.utcnow()
+    quotation.accepted_by_user_id = user_id
+
+
+def reject(quotation: Quotation, user_id: int, reason: str) -> None:
+    """Records a rejection with its mandatory reason. Only a draft; final.
+    The caller checks authority (owner or their team head), audits and
+    commits."""
+    if quotation.status != DRAFT:
+        raise ConflictError(f"Only a draft quotation can be rejected (this one is {quotation.status}).")
+    quotation.status = REJECTED
+    quotation.rejected_at = datetime.utcnow()
+    quotation.rejected_by_user_id = user_id
+    quotation.rejection_reason = reason
+
+
+def renew(quotation: Quotation, today: date) -> date:
+    """Restarts the 7-day validity from today for an expired draft.
+    Returns the previous valid_until. The caller checks authority (owning
+    salesman), audits and commits."""
+    if not is_expired(quotation, today):
+        raise ConflictError("Only an expired draft quotation can be renewed.")
+    previous = quotation.valid_until
+    quotation.valid_until = today + timedelta(days=VALIDITY_DAYS)
     return previous

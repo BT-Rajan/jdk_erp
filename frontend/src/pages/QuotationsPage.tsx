@@ -11,7 +11,7 @@ import { formatDate, formatDateTime, formatNumber } from '@/lib/format'
 import { useDebouncedValue } from '@/lib/useDebouncedValue'
 import { useServerTable, type ServerTableResult } from '@/lib/useServerTable'
 import type { PaginatedResponse } from './rfqShared'
-import { READINESS_LABELS, READINESS_TONES, WINDOW_LABELS, type Quotation } from './quotationShared'
+import { READINESS_LABELS, READINESS_TONES, STATUS_LABELS, STATUS_TONES, WINDOW_LABELS, type Quotation } from './quotationShared'
 
 interface Filters {
   search: string
@@ -78,6 +78,16 @@ export function QuotationsPage() {
       label: 'Total',
       align: 'right',
       render: (q) => `${formatNumber(q.total_amount, { minimumFractionDigits: 3, maximumFractionDigits: 3 })} ${q.currency}`,
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (q) => (
+        <>
+          <Badge tone={STATUS_TONES[q.status] ?? 'neutral'}>{STATUS_LABELS[q.status] ?? q.status}</Badge>
+          {q.is_expired && <Badge tone="warning" className="ml-1">Expired</Badge>}
+        </>
+      ),
     },
     {
       key: 'readiness',

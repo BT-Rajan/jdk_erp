@@ -84,7 +84,7 @@ export function QuotationFormPage() {
         if (loaded && !loaded.can_edit) {
           setLoadError(
             loaded.status !== 'draft'
-              ? `Quotation ${loaded.quotation_number} can no longer be edited.`
+              ? `Only an Admin can edit the ${loaded.status} quotation ${loaded.quotation_number}.`
               : `Only the salesman who owns this customer can edit quotation ${loaded.quotation_number}.`,
           )
         }

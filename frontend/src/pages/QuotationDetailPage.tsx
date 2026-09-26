@@ -17,6 +17,8 @@ import type { LookupOption, PaginatedResponse } from './rfqShared'
 import {
   READINESS_LABELS,
   READINESS_TONES,
+  STATUS_LABELS,
+  STATUS_TONES,
   WINDOW_LABELS,
   reasonLabel,
   type FeasibilityCheck,
@@ -61,6 +63,8 @@ export function QuotationDetailPage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [decisionReason, setDecisionReason] = useState('')
   const [priceReason, setPriceReason] = useState('')
+  const [rejectReason, setRejectReason] = useState('')
+  const [rejecting, setRejecting] = useState(false)
 
   const load = useCallback(async () => {
     const base = `/api/quotations/${quotationId}`
@@ -99,6 +103,8 @@ export function QuotationDetailPage() {
       await action()
       setDecisionReason('')
       setPriceReason('')
+      setRejectReason('')
+      setRejecting(false)
       await load()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
@@ -107,6 +113,9 @@ export function QuotationDetailPage() {
     }
   }
 
+  const accept = () => act('accept', () => apiClient.post(`/api/quotations/${quotationId}/accept`))
+  const renew = () => act('renew', () => apiClient.post(`/api/quotations/${quotationId}/renew`))
+  const reject = () => act('reject', () => apiClient.post(`/api/quotations/${quotationId}/reject`, { reason: rejectReason }))
   const runCheck = () => act('check', () => apiClient.post(`/api/quotations/${quotationId}/feasibility-checks`))
   const decide = (decision: 'approved' | 'rejected') =>
     act(decision, () =>
@@ -145,15 +154,53 @@ export function QuotationDetailPage() {
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => navigate('/sales/quotations')}>All Quotations</Button>
             {quotation.can_edit && (
-              <Button onClick={() => navigate(`/sales/quotations/${quotation.id}/edit`)}>Edit</Button>
+              <Button variant="secondary" onClick={() => navigate(`/sales/quotations/${quotation.id}/edit`)}>Edit</Button>
+            )}
+            {quotation.can_renew && (
+              <Button variant="secondary" onClick={renew} isLoading={busy === 'renew'} disabled={busy !== null}>Renew</Button>
+            )}
+            {quotation.can_reject && (
+              <Button variant="danger" onClick={() => setRejecting(true)} disabled={busy !== null}>Reject</Button>
+            )}
+            {quotation.can_accept && (
+              <Button onClick={accept} isLoading={busy === 'accept'} disabled={busy !== null}>Accept</Button>
             )}
           </div>
         }
       />
 
       <Alert variant="danger">{actionError}</Alert>
+      {quotation.is_expired && (
+        <Alert variant="warning">
+          This quotation expired on {formatDate(quotation.valid_until)} and can't be accepted until it is renewed.
+        </Alert>
+      )}
+      {quotation.status === 'rejected' && quotation.rejection_reason && (
+        <Alert variant="danger">Rejected: {quotation.rejection_reason}</Alert>
+      )}
+      {quotation.order_eligible && (
+        <Alert variant="success">Accepted -- eligible for a Sales Order.</Alert>
+      )}
+
+      {rejecting && (
+        <Card className="space-y-3 p-6">
+          <FormSectionHeading>Reject Quotation</FormSectionHeading>
+          <TextareaField label="Rejection reason" required value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setRejecting(false)} disabled={busy !== null}>Cancel</Button>
+            <Button variant="danger" onClick={reject} isLoading={busy === 'reject'} disabled={busy !== null || !rejectReason.trim()}>
+              Confirm Rejection
+            </Button>
+          </div>
+        </Card>
+      )}
 
       <Card className="grid grid-cols-1 gap-4 p-6 sm:grid-cols-2 lg:grid-cols-3">
+        <KeyValue label="Status">
+          <Badge tone={STATUS_TONES[quotation.status] ?? 'neutral'}>{STATUS_LABELS[quotation.status] ?? quotation.status}</Badge>
+          {quotation.is_expired && <Badge tone="warning" className="ml-2">Expired</Badge>}
+        </KeyValue>
+        <KeyValue label="Valid Until" value={formatDate(quotation.valid_until)} />
         <KeyValue label="Customer" value={quotation.customer_name ?? '—'} />
         <KeyValue label="Quotation Date" value={formatDate(quotation.quotation_date)} />
         <KeyValue label="Requested Delivery" value={formatDate(quotation.requested_delivery_date)} />

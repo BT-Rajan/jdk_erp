@@ -161,3 +161,12 @@ def can_assign_new_customer(db: Session, user: User, assignee_id: int | None) ->
     if user.role != MANAGER:
         return False
     return _share_a_team(db, {user.id, assignee_id})
+
+
+def is_team_head_of(db: Session, user: User, owner_user_id: int | None) -> bool:
+    """True when `user` is a manager on a team the owner also belongs to --
+    the same Department Head notion reassignment uses (S2). Used for
+    rejecting a quotation (S12.1)."""
+    if user.role != MANAGER or owner_user_id is None:
+        return False
+    return _share_a_team(db, {user.id, owner_user_id})

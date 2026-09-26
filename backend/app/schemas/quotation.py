@@ -82,6 +82,12 @@ class QuotationOut(BaseModel):
     price_decision_reason: str | None
     price_decision_by_user_id: int | None
     price_decision_at: datetime | None
+    valid_until: date
+    accepted_at: datetime | None
+    accepted_by_user_id: int | None
+    rejected_at: datetime | None
+    rejected_by_user_id: int | None
+    rejection_reason: str | None
     created_at: datetime
     updated_at: datetime
     customer_name: str | None = None
@@ -98,6 +104,24 @@ class QuotationListRowOut(QuotationOut):
     # Server's answer to "may this caller edit it" (owner of the customer,
     # draft) -- the UI shows Edit from this, never decides it itself.
     can_edit: bool = False
+    # Lifecycle (S12): all computed on the server for this caller.
+    is_expired: bool = False
+    order_eligible: bool = False
+    can_accept: bool = False
+    can_reject: bool = False
+    can_renew: bool = False
+
+
+class QuotationRejectRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("A rejection reason is required.")
+        return value
 
 
 class SameDayShortageOut(BaseModel):

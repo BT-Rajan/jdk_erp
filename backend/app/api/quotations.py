@@ -11,6 +11,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_admin
+from app.core.roles import ADMIN_ROLES
 from app.core.database import get_db
 from app.core.errors import AccessDeniedError, NotFoundError, ValidationError
 from app.core.list_query import paginate
@@ -18,15 +19,18 @@ from app.core.timezone import now_jdk
 from app.models.audit_event import (
     FEASIBILITY_DECIDED,
     FEASIBILITY_RECORDED,
+    QUOTATION_ACCEPTED,
     QUOTATION_CREATED,
     QUOTATION_PRICE_DECIDED,
     QUOTATION_READINESS_ASSESSED,
+    QUOTATION_REJECTED,
+    QUOTATION_RENEWED,
     QUOTATION_UPDATED,
     SALES_MODULE,
 )
 from app.models.customer import Customer
 from app.models.feasibility_check import FeasibilityCheck
-from app.models.quotation import DRAFT, Quotation
+from app.models.quotation import ACCEPTED, DRAFT, Quotation
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.quotation import (
@@ -39,6 +43,7 @@ from app.schemas.quotation import (
     QuotationLineOut,
     QuotationOut,
     QuotationReadinessOut,
+    QuotationRejectRequest,
     QuotationUpdateRequest,
     SameDayGateOut,
 )
@@ -78,12 +83,36 @@ def _is_owner(quotation: Quotation, user: User) -> bool:
     return quotation.customer is not None and quotation.customer.assigned_to_user_id == user.id
 
 
+def _can_edit(quotation: Quotation, user: User) -> bool:
+    """S11.2 / S12.1: the owning salesman edits a draft; once accepted or
+    rejected, only Admin/Super Admin may edit it."""
+    if quotation.status == DRAFT:
+        return _is_owner(quotation, user)
+    return user.role in ADMIN_ROLES
+
+
+def _can_reject(db: Session, quotation: Quotation, user: User) -> bool:
+    """S12.1: the owning salesman or their team head, on a draft."""
+    if quotation.status != DRAFT:
+        return False
+    owner_id = quotation.customer.assigned_to_user_id if quotation.customer is not None else None
+    return _is_owner(quotation, user) or customer_scope.is_team_head_of(db, user, owner_id)
+
+
 def _list_row(db: Session, quotation: Quotation, user: User) -> QuotationListRowOut:
+    today = now_jdk().date()
     readiness = quotation_readiness_service.assess(db, quotation)
     row = QuotationListRowOut.model_validate(quotation)
     row.delivery_window = readiness.delivery_window
     row.readiness_status = readiness.status
-    row.can_edit = quotation.status == DRAFT and _is_owner(quotation, user)
+    expired = quotation_service.is_expired(quotation, today)
+    owner = _is_owner(quotation, user)
+    row.is_expired = expired
+    row.order_eligible = quotation.status == ACCEPTED
+    row.can_edit = _can_edit(quotation, user)
+    row.can_accept = quotation.status == DRAFT and owner and not expired
+    row.can_reject = _can_reject(db, quotation, user)
+    row.can_renew = expired and owner
     return row
 
 
@@ -124,21 +153,24 @@ def update_quotation(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> QuotationListRowOut:
-    """Controlled edit of a draft quotation (Sales S10). A quotation outside
-    the caller's scope is a 404; one the caller can see but doesn't own
-    (S11.2: only the salesman owning its customer may edit) is a 403 --
-    heads, Admins and other viewers included. A new customer must be in
-    scope, owned by the caller and active. Lines are re-validated and
+    """Controlled edit (Sales S10). A quotation outside the caller's scope
+    is a 404. A draft may be edited only by the salesman owning its
+    customer (S11.2); an accepted or rejected quotation only by
+    Admin/Super Admin (S12.1) -- anyone else gets 403. When the owner
+    moves a draft to another customer, it must be one they own; every new
+    customer must be in scope and active. Lines are re-validated and
     re-priced on the server. Changing customer, date or lines makes
-    earlier feasibility stale. Audited."""
+    earlier feasibility stale. The status is never changed here. Audited."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
-    if not _is_owner(quotation, current_user):
-        raise AccessDeniedError("Only the salesman who owns this customer can edit the quotation.")
+    if not _can_edit(quotation, current_user):
+        if quotation.status == DRAFT:
+            raise AccessDeniedError("Only the salesman who owns this customer can edit the quotation.")
+        raise AccessDeniedError(f"Only an Admin can edit an {quotation.status} quotation.")
     updates = payload.model_dump(exclude_unset=True)
     customer_id = None
     if updates.get("customer_id") is not None:
         customer = customer_scope.get_accessible_customer(db, current_user, updates["customer_id"])
-        if customer.assigned_to_user_id != current_user.id:
+        if quotation.status == DRAFT and customer.assigned_to_user_id != current_user.id:
             raise AccessDeniedError("A quotation can only be moved to a customer you own.")
         if not customer.is_active:
             raise ValidationError(
@@ -476,3 +508,81 @@ def assess_readiness(
     )
     db.commit()
     return readiness
+
+
+# --- Acceptance / rejection / renewal (Sales S12) ---------------------------
+
+
+def _audit(db: Session, request: Request, user: User, action: str, quotation: Quotation, details: str) -> None:
+    audit_service.log_event(
+        db,
+        action=action,
+        module=SALES_MODULE,
+        organisation_id=user.organisation_id,
+        actor_user_id=user.id,
+        entity_type="quotation",
+        entity_id=quotation.id,
+        result="success",
+        details=f"number: {quotation.quotation_number}, {details}",
+        ip_address=request.client.host if request.client else None,
+    )
+
+
+@router.post("/{quotation_id}/accept", response_model=QuotationListRowOut)
+def accept_quotation(
+    quotation_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuotationListRowOut:
+    """Records the customer's acceptance (S12.1): only the salesman owning
+    the quotation's customer, only a draft, only within its validity. No
+    readiness prerequisite. The accepted quotation becomes eligible for a
+    Sales Order (a later pass); nothing else is created. Audited."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if not _is_owner(quotation, current_user):
+        raise AccessDeniedError("Only the salesman who owns this customer can accept the quotation.")
+    quotation_service.accept(quotation, current_user.id, now_jdk().date())
+    _audit(db, request, current_user, QUOTATION_ACCEPTED, quotation, f"total: {quotation.total_amount} {quotation.currency}")
+    db.commit()
+    db.expire_all()
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+
+
+@router.post("/{quotation_id}/reject", response_model=QuotationListRowOut)
+def reject_quotation(
+    quotation_id: int,
+    payload: QuotationRejectRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuotationListRowOut:
+    """Records a rejection (S12.1): the owning salesman or their team head,
+    only a draft, reason mandatory. Final. Audited."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if quotation.status == DRAFT and not _can_reject(db, quotation, current_user):
+        raise AccessDeniedError("Only the owning salesman or their team head can reject the quotation.")
+    quotation_service.reject(quotation, current_user.id, payload.reason)
+    _audit(db, request, current_user, QUOTATION_REJECTED, quotation, f"reason: {payload.reason}")
+    db.commit()
+    db.expire_all()
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+
+
+@router.post("/{quotation_id}/renew", response_model=QuotationListRowOut)
+def renew_quotation(
+    quotation_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> QuotationListRowOut:
+    """Renews an expired draft (S12.1): only the owning salesman; validity
+    restarts for 7 days from today (Kuwait). Nothing else changes. Audited."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if not _is_owner(quotation, current_user):
+        raise AccessDeniedError("Only the salesman who owns this customer can renew the quotation.")
+    previous = quotation_service.renew(quotation, now_jdk().date())
+    _audit(db, request, current_user, QUOTATION_RENEWED, quotation, f"valid_until: {previous} -> {quotation.valid_until}")
+    db.commit()
+    db.expire_all()
+    return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
