@@ -110,6 +110,9 @@ class QuotationListRowOut(QuotationOut):
     can_accept: bool = False
     can_reject: bool = False
     can_renew: bool = False
+    can_convert: bool = False
+    # Set once converted (S13): the Sales Order made from this quotation.
+    sales_order_id: int | None = None
 
 
 class QuotationRejectRequest(BaseModel):

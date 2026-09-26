@@ -13,13 +13,14 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user, require_admin
 from app.core.roles import ADMIN_ROLES
 from app.core.database import get_db
-from app.core.errors import AccessDeniedError, NotFoundError, ValidationError
+from app.core.errors import AccessDeniedError, ConflictError, NotFoundError, ValidationError
 from app.core.list_query import paginate
 from app.core.timezone import now_jdk
 from app.models.audit_event import (
     FEASIBILITY_DECIDED,
     FEASIBILITY_RECORDED,
     QUOTATION_ACCEPTED,
+    QUOTATION_CONVERTED,
     QUOTATION_CREATED,
     QUOTATION_PRICE_DECIDED,
     QUOTATION_READINESS_ASSESSED,
@@ -27,12 +28,15 @@ from app.models.audit_event import (
     QUOTATION_RENEWED,
     QUOTATION_UPDATED,
     SALES_MODULE,
+    SALES_ORDER_CREATED,
 )
 from app.models.customer import Customer
 from app.models.feasibility_check import FeasibilityCheck
-from app.models.quotation import ACCEPTED, DRAFT, Quotation
+from app.models.quotation import ACCEPTED, CONVERTED, DRAFT, Quotation
+from app.models.sales_order import SalesOrder
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
+from app.schemas.sales_order import SalesOrderOut
 from app.schemas.quotation import (
     FeasibilityCalculationOut,
     FeasibilityCheckLineOut,
@@ -54,6 +58,7 @@ from app.services import (
     feasibility_service,
     quotation_readiness_service,
     quotation_service,
+    sales_order_service,
     same_day_fg_service,
 )
 
@@ -85,7 +90,10 @@ def _is_owner(quotation: Quotation, user: User) -> bool:
 
 def _can_edit(quotation: Quotation, user: User) -> bool:
     """S11.2 / S12.1: the owning salesman edits a draft; once accepted or
-    rejected, only Admin/Super Admin may edit it."""
+    rejected, only Admin/Super Admin may edit it. A converted quotation is
+    locked for everyone (S13.1)."""
+    if quotation.status == CONVERTED:
+        return False
     if quotation.status == DRAFT:
         return _is_owner(quotation, user)
     return user.role in ADMIN_ROLES
@@ -113,6 +121,9 @@ def _list_row(db: Session, quotation: Quotation, user: User) -> QuotationListRow
     row.can_accept = quotation.status == DRAFT and owner and not expired
     row.can_reject = _can_reject(db, quotation, user)
     row.can_renew = expired and owner
+    row.can_convert = quotation.status == ACCEPTED and owner
+    if quotation.status == CONVERTED:
+        row.sales_order_id = db.query(SalesOrder.id).filter(SalesOrder.quotation_id == quotation.id).scalar()
     return row
 
 
@@ -162,6 +173,8 @@ def update_quotation(
     re-priced on the server. Changing customer, date or lines makes
     earlier feasibility stale. The status is never changed here. Audited."""
     quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if quotation.status == CONVERTED:
+        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
     if not _can_edit(quotation, current_user):
         if quotation.status == DRAFT:
             raise AccessDeniedError("Only the salesman who owns this customer can edit the quotation.")
@@ -230,6 +243,8 @@ def decide_price(
     is audited. Replacing the lines clears it. Refused when no line needs
     price approval."""
     quotation = _get_visible_quotation(db, quotation_id, admin)
+    if quotation.status == CONVERTED:
+        raise ConflictError("This quotation has been converted to a Sales Order and is locked.")
     previous = quotation_service.decide_price(db, quotation, payload.decision, payload.reason, admin.id)
     flagged = [str(line.line_number) for line in quotation.lines if line.price_approval_required]
     audit_service.log_event(
@@ -586,3 +601,42 @@ def renew_quotation(
     db.commit()
     db.expire_all()
     return _list_row(db, _get_visible_quotation(db, quotation_id, current_user), current_user)
+
+
+@router.post("/{quotation_id}/convert", response_model=SalesOrderOut, status_code=status.HTTP_201_CREATED)
+def convert_to_sales_order(
+    quotation_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SalesOrderOut:
+    """Converts an accepted quotation into its Sales Order (S13.1): only the
+    salesman owning its customer; acceptance is the only prerequisite. The
+    quotation becomes converted and locked. Audited on both records.
+    Nothing is reserved, produced or delivered."""
+    quotation = _get_visible_quotation(db, quotation_id, current_user)
+    if not _is_owner(quotation, current_user):
+        raise AccessDeniedError("Only the salesman who owns this customer can convert the quotation.")
+    order = sales_order_service.convert(db, quotation, current_user.id, now_jdk().date())
+    _audit(db, request, current_user, QUOTATION_CONVERTED, quotation, f"sales_order: {order.order_number}")
+    audit_service.log_event(
+        db,
+        action=SALES_ORDER_CREATED,
+        module=SALES_MODULE,
+        organisation_id=current_user.organisation_id,
+        actor_user_id=current_user.id,
+        entity_type="sales_order",
+        entity_id=order.id,
+        result="success",
+        details=(
+            f"number: {order.order_number}, quotation: {quotation.quotation_number}, "
+            f"total: {order.total_amount} {order.currency}"
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+    db.expire_all()
+    # Same server-computed flags as every other Sales Order response.
+    from app.api import sales_orders as sales_orders_api
+
+    return sales_orders_api.order_out(db, db.query(SalesOrder).filter(SalesOrder.id == order.id).one(), current_user)

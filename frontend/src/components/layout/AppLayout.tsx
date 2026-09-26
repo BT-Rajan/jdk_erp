@@ -43,7 +43,10 @@ const NAV_ENTRIES: NavEntry[] = [
     type: 'group',
     label: 'Sales',
     icon: <FileText size={16} />,
-    items: [{ label: 'Quotations', to: '/sales/quotations' }],
+    items: [
+      { label: 'Quotations', to: '/sales/quotations' },
+      { label: 'Sales Orders', to: '/sales/orders' },
+    ],
   },
   {
     type: 'group',

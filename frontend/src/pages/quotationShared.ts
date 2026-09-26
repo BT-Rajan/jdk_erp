@@ -50,6 +50,8 @@ export interface Quotation {
   can_accept: boolean
   can_reject: boolean
   can_renew: boolean
+  can_convert: boolean
+  sales_order_id: number | null
   created_at: string
   updated_at: string
   lines: QuotationLine[]
@@ -129,10 +131,48 @@ export const STATUS_LABELS: Record<string, string> = {
   draft: 'Draft',
   accepted: 'Accepted',
   rejected: 'Rejected',
+  converted: 'Converted',
 }
 
 export const STATUS_TONES: Record<string, BadgeTone> = {
   draft: 'neutral',
   accepted: 'success',
   rejected: 'danger',
+  converted: 'info',
 }
+
+/** Mirrors backend/app/schemas/sales_order.py's SalesOrderOut. */
+export interface SalesOrderLine {
+  id: number
+  line_number: number
+  product_id: number
+  quantity: string
+  unit_of_measure_id: number
+  unit_price: string
+  line_amount: string
+}
+
+export interface SalesOrder {
+  id: number
+  order_number: string
+  quotation_id: number
+  quotation_number: string | null
+  customer_id: number
+  customer_name: string | null
+  order_date: string
+  requested_delivery_date: string | null
+  currency: string
+  subtotal_amount: string
+  total_amount: string
+  status: string
+  cancellation_reason: string | null
+  cancelled_at: string | null
+  updated_at: string
+  lines: SalesOrderLine[]
+  /** Server's answer for the current user. */
+  can_cancel: boolean
+  can_edit: boolean
+}
+
+export const ORDER_STATUS_LABELS: Record<string, string> = { open: 'Open', cancelled: 'Cancelled' }
+export const ORDER_STATUS_TONES: Record<string, BadgeTone> = { open: 'success', cancelled: 'danger' }

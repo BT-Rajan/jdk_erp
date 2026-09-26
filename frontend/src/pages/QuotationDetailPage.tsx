@@ -114,6 +114,17 @@ export function QuotationDetailPage() {
   }
 
   const accept = () => act('accept', () => apiClient.post(`/api/quotations/${quotationId}/accept`))
+  async function convert() {
+    setBusy('convert')
+    setActionError(null)
+    try {
+      const { data } = await apiClient.post<{ id: number }>(`/api/quotations/${quotationId}/convert`)
+      navigate(`/sales/orders/${data.id}`)
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.')
+      setBusy(null)
+    }
+  }
   const renew = () => act('renew', () => apiClient.post(`/api/quotations/${quotationId}/renew`))
   const reject = () => act('reject', () => apiClient.post(`/api/quotations/${quotationId}/reject`, { reason: rejectReason }))
   const runCheck = () => act('check', () => apiClient.post(`/api/quotations/${quotationId}/feasibility-checks`))
@@ -165,6 +176,12 @@ export function QuotationDetailPage() {
             {quotation.can_accept && (
               <Button onClick={accept} isLoading={busy === 'accept'} disabled={busy !== null}>Accept</Button>
             )}
+            {quotation.can_convert && (
+              <Button onClick={convert} isLoading={busy === 'convert'} disabled={busy !== null}>Create Sales Order</Button>
+            )}
+            {quotation.sales_order_id && (
+              <Button variant="secondary" onClick={() => navigate(`/sales/orders/${quotation.sales_order_id}`)}>View Sales Order</Button>
+            )}
           </div>
         }
       />
@@ -180,6 +197,9 @@ export function QuotationDetailPage() {
       )}
       {quotation.order_eligible && (
         <Alert variant="success">Accepted -- eligible for a Sales Order.</Alert>
+      )}
+      {quotation.status === 'converted' && (
+        <Alert variant="info">Converted to a Sales Order -- this quotation is locked.</Alert>
       )}
 
       {rejecting && (
