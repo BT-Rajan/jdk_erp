@@ -28,6 +28,8 @@ const ROW: ProductionRequirementRow = {
   covered_quantity: '10',
   quantity: '15',
   delivered_quantity: '0',
+  required_quantity: '25',
+  allocated_quantity: '10',
   outstanding_quantity: '15',
   required_by_date: '2026-10-05',
   status: 'bom_required',

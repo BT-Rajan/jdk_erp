@@ -24,12 +24,13 @@ from app.models.audit_event import (
     PRODUCTION_REQUIREMENT_BOM_RESOLVED,
     PRODUCTION_REQUIREMENT_CANCELLED,
     PRODUCTION_REQUIREMENT_CREATED,
-    PRODUCTION_REQUIREMENT_FULFILLED,
+    PRODUCTION_REQUIREMENT_SATISFIED,
     PRODUCTION_REQUIREMENT_QUANTITY_CHANGED,
     PRODUCTION_REQUIREMENT_REOPENED,
 )
 from app.models.product import Product
 from app.models.production_requirement import (
+    REQUIREMENT_ACTIVE,
     REQUIREMENT_BOM_REQUIRED,
     REQUIREMENT_STATUSES,
     ProductionRequirement,
@@ -39,7 +40,13 @@ from app.models.sales_order import SalesOrder, SalesOrderLine
 from app.models.user import User
 from app.schemas.pagination import PaginatedResponse
 from app.schemas.production_requirement import ProductionRequirementRowOut
-from app.services import audit_service, delivery_instruction_service, production_requirement_service, production_scope
+from app.services import (
+    audit_service,
+    delivery_instruction_service,
+    fg_allocation_service,
+    production_requirement_service,
+    production_scope,
+)
 
 router = APIRouter(prefix="/api/production-requirements", tags=["production-requirements"])
 
@@ -48,7 +55,7 @@ _ACTIONS = {
     "quantity_changed": PRODUCTION_REQUIREMENT_QUANTITY_CHANGED,
     "reopened": PRODUCTION_REQUIREMENT_REOPENED,
     "cancelled": PRODUCTION_REQUIREMENT_CANCELLED,
-    "fulfilled": PRODUCTION_REQUIREMENT_FULFILLED,
+    "satisfied": PRODUCTION_REQUIREMENT_SATISFIED,
 }
 
 
@@ -97,9 +104,9 @@ def _row(db: Session, user: User, requirement: ProductionRequirement, can_manage
     row.covered_quantity = fulfilment.fg_covered_quantity if fulfilment is not None else None
     delivered = delivery_instruction_service.fulfilled_quantity(db, requirement.sales_order_line_id)
     row.delivered_quantity = delivered
-    row.outstanding_quantity = production_requirement_service.outstanding_quantity(
-        requirement, delivered, line.quantity if line is not None else Decimal("0")
-    )
+    row.required_quantity = (line.quantity - delivered) if line is not None else Decimal("0")
+    row.allocated_quantity = fg_allocation_service.line_allocation(db, requirement.sales_order_line_id)
+    row.outstanding_quantity = requirement.quantity if requirement.status in REQUIREMENT_ACTIVE else Decimal("0")
     row.can_resolve_bom = can_manage and requirement.status == REQUIREMENT_BOM_REQUIRED
     return row
 

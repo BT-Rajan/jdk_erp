@@ -203,13 +203,18 @@ def test_allocation_limits_release_and_permissions(client, db_session, setup):
     event = db_session.query(AuditEvent).filter(AuditEvent.action == FG_ALLOCATION_RELEASED).one()
     assert event.actor_user_id is not None and event.created_at and "reason: Customer asked to hold" in event.details
     assert "60 -> 40" in event.details
-    assert db_session.query(ProductionRequirement).count() == 0  # releasing creates no production demand
+    # The order still needs those 20: its uncovered demand reappears as a
+    # requirement (the requirement lifecycle follows allocation).
+    requirement = db_session.query(ProductionRequirement).one()
+    assert (requirement.quantity, requirement.status) == (20, "bom_required")  # no BOM in this fixture
 
     # Allocate again: never above what the line still needs, never without the grant.
     assert _allocate(client, order_a, "21").status_code == 409
     assert _allocate(client, order_a, "5", username="salesman_a").status_code == 403
     assert _allocate(client, order_a, "0").status_code == 422
     assert Decimal(_allocate(client, order_a, "20").json()["allocated_quantity"]) == 60
+    db_session.expire_all()
+    assert db_session.query(ProductionRequirement).one().status == "satisfied"
     # Never above the free FG: 40 free, B needs 50.
     order_b = _order(client, b, widget, "50")  # takes the 40 free at hand-off
     _release(client, order_b, reason="make room")

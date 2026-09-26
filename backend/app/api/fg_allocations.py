@@ -5,6 +5,8 @@ Allocation foundation).
   (`inventory:allocate`);
 - POST /api/fg-allocations/release: return a claim to free FG, with a
   reason (Admin only -- S15.1);
+  both recalculate the line's Production Requirement in the same
+  transaction;
 - GET  /api/fg-allocations/products/{product_id}: physical on hand,
   allocated and free FG (`inventory:view`, `allocate` or `deliver`).
 
@@ -34,7 +36,15 @@ from app.models.audit_event import (
 from app.models.product import Product
 from app.models.sales_order import SalesOrder, SalesOrderLine
 from app.models.user import User
-from app.services import audit_service, delivery_instruction_service, fg_allocation_service, inventory_scope, sales_reservation_service
+from app.api import production_requirements as production_requirements_api
+from app.services import (
+    audit_service,
+    delivery_instruction_service,
+    fg_allocation_service,
+    inventory_scope,
+    production_requirement_service,
+    sales_reservation_service,
+)
 
 router = APIRouter(prefix="/api/fg-allocations", tags=["fg-allocations"])
 
@@ -140,6 +150,13 @@ def _locked_line(db: Session, user: User, line_id: int) -> tuple[SalesOrder, Sal
     return order, line
 
 
+def _follow_requirement(db: Session, request: Request, user: User, order: SalesOrder, line: SalesOrderLine, delivered: Decimal) -> None:
+    """The line's Production Requirement follows the new allocation in the
+    same transaction (never for a cancelled order)."""
+    change = production_requirement_service.recalculate_line(db, order, line, delivered)
+    production_requirements_api.audit_changes(db, request, user, [change] if change else [], order.order_number)
+
+
 def _line_out(db: Session, order: SalesOrder, line: SalesOrderLine) -> AllocationLineOut:
     delivered = delivery_instruction_service.fulfilled_quantity(db, line.id)
     return AllocationLineOut(
@@ -164,6 +181,7 @@ def allocate_fg(
     delivered = delivery_instruction_service.fulfilled_quantity(db, line.id, locking=True)
     change = fg_allocation_service.allocate(db, order, line, payload.quantity, delivered)
     audit_allocation_changes(db, request, current_user, [change], f"sales_order: {order.order_number}")
+    _follow_requirement(db, request, current_user, order, line, delivered)
     db.commit()
     return _line_out(db, order, line)
 
@@ -179,6 +197,8 @@ def release_fg_allocation(
     change = fg_allocation_service.release(db, line, payload.quantity, payload.reason)
     if change is not None:
         audit_allocation_changes(db, request, admin, [change], f"sales_order: {order.order_number}")
+        delivered = delivery_instruction_service.fulfilled_quantity(db, line.id, locking=True)
+        _follow_requirement(db, request, admin, order, line, delivered)
     db.commit()
     return _line_out(db, order, line)
 

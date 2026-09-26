@@ -13,17 +13,19 @@ of truth -- the required-by date is read from it, never copied. Nothing
 here reserves, allocates, moves or issues stock, schedules, plans or
 executes production.
 
-Lifecycle (Production P1). A requirement is a demand/reference record --
-the shortfall of one order line -- never an instruction to manufacture
-exactly that quantity:
+Lifecycle. A requirement is a demand/reference record -- the part of one
+order line not covered by delivered or allocated FG -- never an
+instruction to manufacture exactly that quantity:
+- `quantity` is the current uncovered demand (ordered - delivered -
+  allocated) while active, recalculated with every allocation, release,
+  delivery or confirmed quantity change; the one-time hand-off figure
+  stays on SalesOrderLineFulfilment;
 - `bom_required` -> `open`: the product's active BOM is snapshotted once
   one exists (production_requirement_service.snapshot_bom);
-- `open`/`bom_required` -> `fulfilled`: the order line has been delivered
-  in full, so the demand is satisfied;
-- `open`/`bom_required` -> `cancelled`: the Sales Order was cancelled, or
-  an Admin quantity change left the line with no shortfall (such a
-  requirement returns to its previous state if a later change creates a
-  shortfall again). Never deleted; every transition is audited."""
+- active -> `satisfied` when nothing is uncovered (and back to active if
+  demand reappears on the still-open order);
+- -> `cancelled` when the Sales Order is cancelled; final.
+Never deleted; every transition is audited."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -45,9 +47,9 @@ FULFILMENT_RESULTS = (FROM_STOCK, PRODUCTION_REQUIRED)
 # recorded, flagged).
 REQUIREMENT_OPEN = "open"
 REQUIREMENT_BOM_REQUIRED = "bom_required"
-REQUIREMENT_FULFILLED = "fulfilled"
+REQUIREMENT_SATISFIED = "satisfied"
 REQUIREMENT_CANCELLED = "cancelled"
-REQUIREMENT_STATUSES = (REQUIREMENT_OPEN, REQUIREMENT_BOM_REQUIRED, REQUIREMENT_FULFILLED, REQUIREMENT_CANCELLED)
+REQUIREMENT_STATUSES = (REQUIREMENT_OPEN, REQUIREMENT_BOM_REQUIRED, REQUIREMENT_SATISFIED, REQUIREMENT_CANCELLED)
 # Still demand: may change, be resolved or be cancelled.
 REQUIREMENT_ACTIVE = (REQUIREMENT_OPEN, REQUIREMENT_BOM_REQUIRED)
 
@@ -96,6 +98,7 @@ class ProductionRequirement(Base, TimestampMixin, OrganisationScopedMixin):
     __table_args__ = (
         UniqueConstraint("sales_order_line_id", name="uq_production_requirements_sales_order_line_id"),
         CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("status IN ('open', 'bom_required', 'satisfied', 'cancelled')", name="status_valid"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -109,9 +112,9 @@ class ProductionRequirement(Base, TimestampMixin, OrganisationScopedMixin):
     # later BOM edits never change it. Null while `bom_required`.
     bom_id: Mapped[int | None] = mapped_column(ForeignKey("boms.id", ondelete="SET NULL"), nullable=True)
     bom_base_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
-    # Production P1: when the demand was satisfied or withdrawn, and why
-    # it was withdrawn. Who is in the audit trail.
-    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # When the demand was last satisfied (cleared if it reopens) or
+    # withdrawn, and why it was withdrawn. Who is in the audit trail.
+    satisfied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 

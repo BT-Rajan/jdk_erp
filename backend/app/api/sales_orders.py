@@ -208,7 +208,7 @@ def update_sales_order(
             )
             for line in payload.lines
         ]
-    changes, requirement_changes = sales_order_service.admin_update(
+    changes, requirement_changes, allocation_changes = sales_order_service.admin_update(
         db,
         order,
         today=now_jdk().date(),
@@ -220,14 +220,11 @@ def update_sales_order(
     if changes:
         _audit(db, request, admin, SALES_ORDER_UPDATED, order, f"changes: {'; '.join(changes)}; reason: {payload.reason}")
         production_requirements_api.audit_changes(db, request, admin, requirement_changes, order.order_number)
-        # A claim above a line's new quantity returns to free FG; the
+        # A claim above a line's new quantity went back to free FG; the
         # reservation follows the quantity.
         context = f"sales_order: {order.order_number}"
+        fg_allocations_api.audit_allocation_changes(db, request, admin, allocation_changes, context)
         for line in order.lines:
-            clamped = fg_allocation_service.clamp_to_line(
-                db, line, delivery_instruction_service.fulfilled_quantity(db, line.id), "Sales Order line quantity reduced"
-            )
-            fg_allocations_api.audit_allocation_changes(db, request, admin, [clamped] if clamped else [], context)
             followed = sales_reservation_service.follow_line_quantity(db, line)
             fg_allocations_api.audit_reservation_changes(db, request, admin, [followed] if followed else [], context)
         # A new Order Confirmation PDF for the changed order (commits).

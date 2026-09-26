@@ -1,9 +1,9 @@
-"""Production P1: a Production Requirement is a demand/reference record --
-the shortfall of one Sales Order line -- never a production command.
-bom_required -> open (BOM snapshot, once), -> fulfilled (the line is
-delivered in full), -> cancelled (order cancelled, or an Admin-confirmed
-quantity change leaves no shortfall). Never deleted; audited; nothing
-moves in inventory."""
+"""A Production Requirement is a demand/reference record -- the part of a
+Sales Order line not covered by delivered or allocated FG -- never a
+production command. bom_required -> open (BOM snapshot, once); active <->
+satisfied as the uncovered demand (ordered - delivered - allocated)
+reaches zero or reappears; -> cancelled with the order, final. Never
+deleted; audited; nothing moves in inventory."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -19,7 +19,7 @@ from app.models.audit_event import (
     PRODUCTION_REQUIREMENT_BOM_RESOLVED,
     PRODUCTION_REQUIREMENT_CANCELLED,
     PRODUCTION_REQUIREMENT_CREATED,
-    PRODUCTION_REQUIREMENT_FULFILLED,
+    PRODUCTION_REQUIREMENT_SATISFIED,
     PRODUCTION_REQUIREMENT_QUANTITY_CHANGED,
     PRODUCTION_REQUIREMENT_REOPENED,
     AuditEvent,
@@ -152,9 +152,10 @@ def test_hand_off_requirement_is_visible_to_production_with_its_demand_position(
     assert (row["sales_order_number"], row["line_number"], row["product_name"], row["customer_name"]) == (
         order["order_number"], 1, widget.name, "A Co",
     )
-    assert [Decimal(row[k]) for k in ("ordered_quantity", "covered_quantity", "quantity", "delivered_quantity", "outstanding_quantity")] == [
-        100, 40, 60, 0, 60,
-    ]
+    assert [
+        Decimal(row[k])
+        for k in ("ordered_quantity", "covered_quantity", "quantity", "delivered_quantity", "required_quantity", "allocated_quantity", "outstanding_quantity")
+    ] == [100, 40, 60, 0, 100, 40, 60]
     assert (row["status"], row["required_by_date"], row["bom_id"], row["can_resolve_bom"]) == ("open", "2026-10-05", bom.id, False)
     assert [(c["raw_material_id"], Decimal(c["quantity"])) for c in row["components"]] == [(cement.id, 2)]
     assert _requirements(client, status="cancelled") == [] and len(_requirements(client, q=order["order_number"])) == 1
@@ -246,14 +247,14 @@ def test_an_assessed_quantity_change_needs_confirmation_and_resolves_the_demand(
     # Increase: shortfall = 120 - 40 covered at hand-off.
     assert _edit(client, order, "120", confirm=True).status_code == 200
     assert (Decimal(_requirement(client, row["id"])["quantity"]), _requirement(client, row["id"])["status"]) == (80, "open")
-    # Reduce below what stock covered: no shortfall, the requirement is withdrawn (kept).
+    # Reduce below the allocation: the claim shrinks to 30, nothing is uncovered -> satisfied (kept).
     assert _edit(client, order, "30", confirm=True).status_code == 200
-    cancelled = _requirement(client, row["id"])
-    assert (cancelled["status"], Decimal(cancelled["quantity"])) == ("cancelled", 80)
-    # Increase again: the same requirement returns, with its original snapshot.
+    satisfied = _requirement(client, row["id"])
+    assert (satisfied["status"], Decimal(satisfied["quantity"]), Decimal(satisfied["allocated_quantity"])) == ("satisfied", 80, 30)
+    # Increase again: the same requirement returns, with its original snapshot (50 - 30 allocated).
     assert _edit(client, order, "50", confirm=True).status_code == 200
     back = _requirement(client, row["id"])
-    assert (back["status"], Decimal(back["quantity"]), back["bom_id"], back["cancellation_reason"]) == ("open", 10, bom.id, None)
+    assert (back["status"], Decimal(back["quantity"]), back["bom_id"], back["satisfied_at"]) == ("open", 20, bom.id, None)
     assert [Decimal(c["quantity"]) for c in back["components"]] == [2]
 
     # The hand-off assessment itself is never rewritten.
@@ -262,8 +263,8 @@ def test_an_assessed_quantity_change_needs_confirmation_and_resolves_the_demand(
     assert (fulfilment.fg_covered_quantity, fulfilment.production_quantity) == (40, 60)
     assert db_session.query(ProductionRequirement).count() == 1
     assert "quantity 60 -> 80" in _audits(db_session, PRODUCTION_REQUIREMENT_QUANTITY_CHANGED)[0]
-    assert "open -> cancelled" in _audits(db_session, PRODUCTION_REQUIREMENT_CANCELLED)[0]
-    assert "cancelled -> open; quantity 80 -> 10" in _audits(db_session, PRODUCTION_REQUIREMENT_REOPENED)[0]
+    assert "open -> satisfied" in _audits(db_session, PRODUCTION_REQUIREMENT_SATISFIED)[0]
+    assert "satisfied -> open; quantity 80 -> 20" in _audits(db_session, PRODUCTION_REQUIREMENT_REOPENED)[0]
     assert _inventory_counts(db_session) == before
 
 
@@ -294,13 +295,14 @@ def test_delivery_meets_the_demand_without_any_production(client, db_session, or
         client.patch(f"/api/delivery-instructions/{instruction['id']}/lines/{instruction['lines'][0]['id']}", json={"pallet_count": 1}, headers=wh)
         assert client.post(f"/api/delivery-instructions/{instruction['id']}/fulfil", headers=wh).status_code == 200
 
+    # 50 delivered: the 40 allocated plus 10 free; 50 still uncovered.
     deliver("50")
     partial = _requirement(client, row["id"])
-    assert (partial["status"], Decimal(partial["quantity"]), Decimal(partial["outstanding_quantity"])) == ("open", 60, 50)
+    assert [partial["status"]] + [Decimal(partial[k]) for k in ("quantity", "allocated_quantity", "outstanding_quantity")] == ["open", 50, 0, 50]
     deliver("50")
     done = _requirement(client, row["id"])
-    assert (done["status"], Decimal(done["quantity"]), Decimal(done["outstanding_quantity"])) == ("fulfilled", 60, 0)
-    assert done["fulfilled_at"] and len(_audits(db_session, PRODUCTION_REQUIREMENT_FULFILLED)) == 1
-    # A fulfilled requirement is final: cancelling a completed order is refused anyway.
+    assert (done["status"], Decimal(done["outstanding_quantity"])) == ("satisfied", 0)
+    assert done["satisfied_at"] and len(_audits(db_session, PRODUCTION_REQUIREMENT_SATISFIED)) == 1
+    # Cancelling a completed order is refused anyway; the record stays satisfied.
     assert client.post(f"/api/sales-orders/{order['id']}/cancel", json={"reason": "x"}, headers=_headers(client, "boss")).status_code == 409
-    assert _requirement(client, row["id"])["status"] == "fulfilled"
+    assert _requirement(client, row["id"])["status"] == "satisfied"

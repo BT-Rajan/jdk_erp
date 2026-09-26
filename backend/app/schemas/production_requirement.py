@@ -30,18 +30,20 @@ class ProductionRequirementOut(BaseModel):
     bom_base_quantity: Decimal | None
     components: list[ProductionRequirementComponentOut]
     created_at: datetime
-    # Production P1 lifecycle.
-    fulfilled_at: datetime | None = None
+    # Lifecycle.
+    satisfied_at: datetime | None = None
     cancelled_at: datetime | None = None
     cancellation_reason: str | None = None
 
 
 class ProductionRequirementRowOut(ProductionRequirementOut):
-    """The Production view of one requirement (Production P1): the demand
-    record plus its source and derived position. `quantity` is the
-    shortfall recorded at hand-off (or after a confirmed Admin change);
-    `outstanding_quantity` is the part the order line has not received
-    yet -- demand, not a production instruction."""
+    """The Production view of one requirement: the demand record plus its
+    source and live position. `required_quantity` = ordered - delivered;
+    `allocated_quantity` = the line's FG claim; `outstanding_quantity` =
+    the uncovered demand that may need production (the requirement's
+    quantity while active, 0 once satisfied or cancelled) -- demand, not a
+    production instruction. `covered_quantity` is the one-time hand-off
+    figure, kept for history."""
 
     sales_order_number: str | None = None
     sales_order_status: str | None = None
@@ -51,6 +53,8 @@ class ProductionRequirementRowOut(ProductionRequirementOut):
     ordered_quantity: Decimal | None = None
     covered_quantity: Decimal | None = None
     delivered_quantity: Decimal = Decimal("0")
+    required_quantity: Decimal = Decimal("0")
+    allocated_quantity: Decimal = Decimal("0")
     outstanding_quantity: Decimal = Decimal("0")
     # The server's answer for the caller: may take the BOM snapshot now.
     can_resolve_bom: bool = False

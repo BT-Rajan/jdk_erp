@@ -304,11 +304,11 @@ def fulfil_delivery_instruction(
         for line, movement in zip(instruction.lines, movements)
     )
     _audit_transition(db, request, current_user, DELIVERY_FULFILLED, instruction, f"pending -> fulfilled; {issued}")
-    # Production P1: a requirement whose order line is now delivered in
-    # full has had its demand met.
+    # Production Requirements follow what is still uncovered after this
+    # delivery (ordered - delivered - allocated).
     order = db.get(SalesOrder, instruction.sales_order_id)
     delivered = {line.id: delivery_instruction_service.fulfilled_quantity(db, line.id) for line in order.lines}
-    requirement_changes = production_requirement_service.mark_satisfied(db, order, delivered)
+    requirement_changes = production_requirement_service.recalculate_order(db, order, delivered)
     production_requirements_api.audit_changes(db, request, current_user, requirement_changes, order.order_number)
     context = f"sales_order: {order.order_number}; delivery {instruction.delivery_number}"
     fg_allocations_api.audit_allocation_changes(db, request, current_user, allocation_changes, context)

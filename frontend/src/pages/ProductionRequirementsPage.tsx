@@ -30,6 +30,8 @@ export interface ProductionRequirementRow {
   covered_quantity: string | null
   quantity: string
   delivered_quantity: string
+  required_quantity: string
+  allocated_quantity: string
   outstanding_quantity: string
   required_by_date: string | null
   status: string
@@ -41,13 +43,13 @@ export interface ProductionRequirementRow {
 const STATUS_LABELS: Record<string, string> = {
   bom_required: 'BOM required',
   open: 'Open',
-  fulfilled: 'Fulfilled',
+  satisfied: 'Satisfied',
   cancelled: 'Cancelled',
 }
 const STATUS_TONES: Record<string, BadgeTone> = {
   bom_required: 'warning',
   open: 'info',
-  fulfilled: 'success',
+  satisfied: 'success',
   cancelled: 'neutral',
 }
 
@@ -129,10 +131,9 @@ export function ProductionRequirementsPage() {
     },
     { key: 'customer', label: 'Customer', hideBelow: 'lg', render: (r) => r.customer_name ?? '—' },
     { key: 'product', label: 'Product', render: (r) => r.product_name ?? `Product ${r.product_id}` },
-    { key: 'ordered', label: 'Ordered', align: 'right', hideBelow: 'md', render: (r) => `${qty(r.ordered_quantity)} ${unit(r)}` },
-    { key: 'covered', label: 'Covered at Hand-off', align: 'right', hideBelow: 'md', render: (r) => `${qty(r.covered_quantity)} ${unit(r)}` },
-    { key: 'required', label: 'Shortfall', align: 'right', render: (r) => `${qty(r.quantity)} ${unit(r)}` },
-    { key: 'outstanding', label: 'Outstanding', align: 'right', render: (r) => `${qty(r.outstanding_quantity)} ${unit(r)}` },
+    { key: 'required', label: 'Required', align: 'right', hideBelow: 'md', render: (r) => `${qty(r.required_quantity)} ${unit(r)}` },
+    { key: 'allocated', label: 'Allocated FG', align: 'right', hideBelow: 'md', render: (r) => `${qty(r.allocated_quantity)} ${unit(r)}` },
+    { key: 'outstanding', label: 'To Produce', align: 'right', render: (r) => `${qty(r.outstanding_quantity)} ${unit(r)}` },
     { key: 'required_by', label: 'Required By', hideBelow: 'sm', render: (r) => formatDate(r.required_by_date) },
     { key: 'bom', label: 'BOM', hideBelow: 'sm', render: (r) => (r.bom_id ? 'Snapshot taken' : 'None') },
     {
@@ -163,7 +164,7 @@ export function ProductionRequirementsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Production Requirements"
-        subtitle="Customer demand not covered by stock at hand-off. Demand to be aware of -- not an instruction to produce an exact quantity."
+        subtitle="Customer demand not covered by delivered or allocated FG. Demand to be aware of -- not an instruction to produce an exact quantity."
       />
       <Alert variant="danger">{actionError}</Alert>
       <Card className="space-y-3 p-4 sm:p-6">
