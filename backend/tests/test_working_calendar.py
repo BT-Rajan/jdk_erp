@@ -5,16 +5,15 @@ delivery-window classifier built on it
 
 from datetime import date, datetime, timezone
 
-import pytest
-
 from app.models.audit_event import HOLIDAY_ADDED, SAME_DAY_CUTOFF_UPDATED, AuditEvent
 from app.models.organisation_holiday import OrganisationHoliday
 from app.services.working_calendar_service import (
     MORE_THAN_2_WORKING_DAYS,
+    NOT_SERVABLE,
     SAME_DAY,
     WITHIN_2_WORKING_DAYS,
-    SameDayCutoffPassedError,
     classify_delivery_window,
+    next_working_day,
 )
 
 MONDAY = date(2026, 9, 28)
@@ -48,6 +47,19 @@ def test_working_days_skip_friday_saturday_and_holidays(db_session, organisation
     assert classify(THURSDAY, MONDAY_MORNING_UTC) == WITHIN_2_WORKING_DAYS
 
 
+def test_non_working_required_date_is_not_servable(db_session, organisation):
+    """A Friday, Saturday or holiday is not a normal delivery date --
+    returned as a result (never an error), and never moved to another day."""
+    db_session.add(OrganisationHoliday(organisation_id=organisation.id, holiday_date=TUESDAY, description="Holiday"))
+    db_session.commit()
+    classify = lambda required: classify_delivery_window(db_session, organisation.id, required, now=MONDAY_MORNING_UTC)
+
+    assert classify(date(2026, 10, 2)) == NOT_SERVABLE  # Friday
+    assert classify(date(2026, 10, 3)) == NOT_SERVABLE  # Saturday
+    assert classify(TUESDAY) == NOT_SERVABLE  # holiday
+    assert classify(WEDNESDAY) == WITHIN_2_WORKING_DAYS
+
+
 def test_same_day_uses_kuwait_time_and_the_configured_cutoff(client, db_session, admin_user, organisation):
     # The organisation's own display timezone is UTC here; the decision
     # must still be made in Kuwait time.
@@ -58,10 +70,15 @@ def test_same_day_uses_kuwait_time_and_the_configured_cutoff(client, db_session,
     assert classify(datetime(2026, 9, 28, 10, 59, tzinfo=timezone.utc)) == SAME_DAY
     # Sunday 21:30 UTC is already Monday 00:30 in Kuwait.
     assert classify(datetime(2026, 9, 27, 21, 30, tzinfo=timezone.utc)) == SAME_DAY
-    # 11:01 UTC = 14:01 Kuwait -> past the cut-off: refused, never guessed.
+    # 11:00 UTC = exactly 14:00 Kuwait -> still at the cut-off.
+    assert classify(datetime(2026, 9, 28, 11, 0, tzinfo=timezone.utc)) == SAME_DAY
+    # 11:01 UTC = 14:01 Kuwait -> past the cut-off: no longer same day,
+    # evaluated from the next working day (Tuesday).
     after_cutoff = datetime(2026, 9, 28, 11, 1, tzinfo=timezone.utc)
-    with pytest.raises(SameDayCutoffPassedError):
-        classify(after_cutoff)
+    assert classify(after_cutoff) == WITHIN_2_WORKING_DAYS
+    # "Next working day" skips Friday, Saturday and holidays: Thursday's
+    # next working day is Monday when Sunday is a holiday.
+    assert next_working_day(THURSDAY, {date(2026, 10, 4)}) == date(2026, 10, 5)
 
     response = client.put(
         "/api/organisations/me/working-calendar/cutoff",
