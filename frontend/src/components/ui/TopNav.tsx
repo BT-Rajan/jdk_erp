@@ -7,7 +7,8 @@ import type { NavEntry, NavGroup } from './nav-types'
 
 export interface TopNavProps {
   logo: ReactNode
-  entries: NavEntry[]
+  /** Optional inline menu; omit it when a Sidebar is the app's menu. */
+  entries?: NavEntry[]
   /** Slotted actions -- search trigger, notifications, avatar, etc. This
    * component owns no auth/business state of its own. */
   actions?: ReactNode
@@ -16,7 +17,7 @@ export interface TopNavProps {
 const LEAF_CLASSES =
   'rounded-md px-3 py-2 text-sm font-medium transition-colors text-gold-100/70 hover:text-gold-100 aria-[current=page]:text-gold-300'
 
-export function TopNav({ logo, entries, actions }: TopNavProps) {
+export function TopNav({ logo, entries = [], actions }: TopNavProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-ink-700 bg-ink-950/90 backdrop-blur">
       <div className="mx-auto flex h-16 items-center justify-between gap-4 px-4">
@@ -25,22 +26,24 @@ export function TopNav({ logo, entries, actions }: TopNavProps) {
           {/* Below md, a Sidebar (opened via a hamburger the app places
              in `logo`) is the mobile nav path -- this inline list would
              otherwise force the header wider than the viewport. */}
-          <nav aria-label="Main" className="hidden md:block">
-            <ul className="flex items-center gap-1">
-              {entries.map((entry) => (
-                <li key={entry.label}>
-                  {entry.type === 'leaf' ? (
-                    <NavLink to={entry.to} className={LEAF_CLASSES}>
-                      {entry.icon}
-                      {entry.label}
-                    </NavLink>
-                  ) : (
-                    <NavGroupDropdown entry={entry} />
-                  )}
-                </li>
-              ))}
-            </ul>
-          </nav>
+          {entries.length > 0 && (
+            <nav aria-label="Main" className="hidden md:block">
+              <ul className="flex items-center gap-1">
+                {entries.map((entry) => (
+                  <li key={entry.label}>
+                    {entry.type === 'leaf' ? (
+                      <NavLink to={entry.to} className={LEAF_CLASSES}>
+                        {entry.icon}
+                        {entry.label}
+                      </NavLink>
+                    ) : (
+                      <NavGroupDropdown entry={entry} />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          )}
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
